@@ -1,0 +1,40 @@
+# Python caches
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# IDE / local editor state
+.idea/
+.vscode/
+
+# Build and packaging outputs
+build/
+build_release/
+dist/
+Output/
+*.spec.log
+
+# Runtime output and temporary analysis data
+NewLight_temp/
+temp/
+tmp/
+*.log
+
+# Large raw / exported imaging data
+*.avi
+*.mp4
+*.mov
+*.mkv
+*.tif
+*.tiff
+*.npz
+*.npy
+
+# OS metadata
+Thumbs.db
+.DS_Store
