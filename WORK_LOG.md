@@ -24,3 +24,38 @@
 
 - Main image display must remain fully visible, centered, and correct for non-square or mixed-resolution videos.
 - Display-related behavior should be tested carefully after future preprocessing or ROI interaction changes.
+
+### Packaging Build
+
+- Installed build-time dependencies into the `caiman_latest` conda environment:
+
+  ```bash
+  conda run -n caiman_latest python -m pip install pyinstaller openpyxl
+  ```
+
+- Built the portable folder distribution with:
+
+  ```bash
+  conda run -n caiman_latest cmd /c build_exe.bat
+  ```
+
+- Generated portable app entry points:
+
+  ```text
+  E:\WorkSpace\NewLight_Analysis\build_release\Run_NewLight_Analysis.bat
+  E:\WorkSpace\NewLight_Analysis\build_release\NewLight_Analysis\NewLight_Analysis.exe
+  ```
+
+- Generated the Inno Setup installer with:
+
+  ```bash
+  "D:\Inno Setup 6\ISCC.exe" "E:\WorkSpace\NewLight_Analysis\NewLight_Analysis_setup.iss"
+  ```
+
+- Installer output:
+
+  ```text
+  E:\WorkSpace\NewLight_Analysis\Output\NewLight_Analysis安装程序.exe
+  ```
+
+- Build note: this package was built from the `caiman_latest` environment, so the generated bundle is large because that environment includes heavy scientific and GPU-related dependencies.
