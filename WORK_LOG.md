@@ -59,3 +59,10 @@
   ```
 
 - Build note: this package was built from the `caiman_latest` environment, so the generated bundle is large because that environment includes heavy scientific and GPU-related dependencies.
+
+### Heatmap AVI Controls
+
+- Restored the heatmap AVI maximum display intensity control that mirrors the older `2cafe_analysis` `caxis_range` upper threshold behavior.
+- Added `Max display` to the heatmap AVI dialog. `auto` keeps percentile-based scaling; a numeric value fixes the heatmap/colorbar upper limit.
+- Restored a visible `dF/F` colorbar for heatmap preview and saved AVI frames.
+- Added `Show colorbar` toggle to the heatmap AVI dialog.

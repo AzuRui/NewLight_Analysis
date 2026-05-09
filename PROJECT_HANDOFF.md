@@ -49,6 +49,11 @@ The ROI action row remains below the navigation toolbar:
 
 Frame slider and run log are below that.
 
+The heatmap AVI dialog now includes:
+
+- `Max display`: fixed maximum heatmap intensity, equivalent to the old `2cafe_analysis` c-axis upper threshold. `auto` keeps percentile scaling.
+- `Show colorbar`: toggles the visible `dF/F` colorbar in preview and generated AVI frames.
+
 ## Display Issue Context
 
 The user previously reported that a 500 x 500 movie was not displayed fully, often appearing around 425 x 450 in the visible area after adjustments or preprocessing. The key requirements are:
@@ -99,4 +104,3 @@ For future updates:
    ```
 
 5. Commit source and record updates together when the change is stable.
-

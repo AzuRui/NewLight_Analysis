@@ -810,15 +810,73 @@ def save_heatmap(path: str, heat: np.ndarray, mask: np.ndarray) -> None:
     plt.close(fig)
 
 
-def heatmap_limits(data: np.ndarray, low_percentile: float = 1.0, high_percentile: float = 99.0) -> tuple[float, float]:
+def heatmap_limits(
+    data: np.ndarray,
+    low_percentile: float = 1.0,
+    high_percentile: float = 99.0,
+    max_display: float | None = None,
+) -> tuple[float, float]:
     finite = data[np.isfinite(data)]
     if finite.size == 0:
         return -0.1, 1.0
     vmin = float(np.percentile(finite, low_percentile))
-    vmax = float(np.percentile(finite, high_percentile))
+    if max_display is None:
+        vmax = float(np.percentile(finite, high_percentile))
+    else:
+        vmax = float(max_display)
     if vmax <= vmin:
         vmax = vmin + 1.0
     return vmin, vmax
+
+
+def add_heatmap_colorbar(
+    frame_rgb: np.ndarray,
+    vmin: float,
+    vmax: float,
+    colormap: str = "jet",
+    label: str = "dF/F",
+) -> np.ndarray:
+    frame = np.asarray(frame_rgb, dtype=np.uint8).copy()
+    if frame.ndim != 3 or frame.shape[2] != 3:
+        return frame
+    h, w = frame.shape[:2]
+    if h < 40 or w < 80:
+        return frame
+
+    panel_w = min(max(58, w // 8), max(58, w // 4))
+    x_panel = max(0, w - panel_w)
+    overlay = frame.copy()
+    overlay[:, x_panel:] = 0
+    frame = cv2.addWeighted(overlay, 0.68, frame, 0.32, 0)
+
+    margin = max(6, w // 100)
+    top = max(18, h // 18)
+    bottom = h - max(18, h // 18)
+    bar_h = max(1, bottom - top)
+    bar_w = max(10, min(18, panel_w // 4))
+    bar_x = x_panel + margin
+    bar_y = top
+    cmap = plt.get_cmap(colormap)
+    gradient = np.linspace(1.0, 0.0, bar_h, dtype=np.float32).reshape(bar_h, 1)
+    bar = (cmap(gradient)[:, :, :3] * 255).astype(np.uint8)
+    bar = np.repeat(bar, bar_w, axis=1)
+    frame[bar_y:bar_y + bar_h, bar_x:bar_x + bar_w] = bar
+
+    cv2.rectangle(frame, (bar_x, bar_y), (bar_x + bar_w, bar_y + bar_h), (255, 255, 255), 1, cv2.LINE_AA)
+
+    def fmt(value: float) -> str:
+        value = float(value)
+        if abs(value) >= 100 or (0 < abs(value) < 0.01):
+            return f"{value:.2g}"
+        return f"{value:.3g}"
+
+    text_x = min(w - 4, bar_x + bar_w + 5)
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    cv2.putText(frame, label, (bar_x, max(11, top - 6)), font, 0.35, (255, 255, 255), 1, cv2.LINE_AA)
+    cv2.putText(frame, fmt(vmax), (text_x, min(h - 4, top + 5)), font, 0.35, (255, 255, 255), 1, cv2.LINE_AA)
+    cv2.putText(frame, fmt((vmin + vmax) / 2.0), (text_x, min(h - 4, top + bar_h // 2 + 4)), font, 0.35, (255, 255, 255), 1, cv2.LINE_AA)
+    cv2.putText(frame, fmt(vmin), (text_x, max(10, bottom - 2)), font, 0.35, (255, 255, 255), 1, cv2.LINE_AA)
+    return frame
 
 
 def render_heatmap_frame_rgb(
@@ -829,15 +887,30 @@ def render_heatmap_frame_rgb(
     vmax: float,
     alpha: float = 0.55,
     sigma: float = 1.2,
+    show_colorbar: bool = False,
+    colormap: str = "jet",
 ) -> np.ndarray:
     bg = cv2.cvtColor(to_uint8(raw_frame), cv2.COLOR_GRAY2RGB).astype(np.float32)
     smooth = gaussian_filter(dff_frame.astype(np.float32), sigma=max(0.0, float(sigma)))
-    norm = np.clip((smooth - vmin) / (vmax - vmin), 0, 1)
-    heat_rgb = (plt.get_cmap("jet")(norm)[..., :3] * 255).astype(np.float32)
+    span = max(float(vmax) - float(vmin), 1e-6)
+    norm = np.clip((smooth - vmin) / span, 0, 1)
+    heat_rgb = (plt.get_cmap(colormap)(norm)[..., :3] * 255).astype(np.float32)
     mask3 = mask[..., None].astype(np.float32)
     alpha = float(np.clip(alpha, 0, 1))
     frame = ((1 - alpha * mask3) * bg + (alpha * mask3) * heat_rgb)
-    return np.clip(frame, 0, 255).astype(np.uint8)
+    frame = np.clip(frame, 0, 255).astype(np.uint8)
+    if show_colorbar:
+        frame = add_heatmap_colorbar(frame, vmin, vmax, colormap=colormap)
+    return frame
+
+
+def parse_optional_float(value: object) -> float | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text or text.lower() in {"auto", "none", "nan"}:
+        return None
+    return float(text)
 
 
 def save_heatmap_video(
@@ -850,6 +923,8 @@ def save_heatmap_video(
     sigma: float = 1.2,
     low_percentile: float = 1.0,
     high_percentile: float = 99.0,
+    max_display: float | None = None,
+    show_colorbar: bool = True,
     cancel_event=None,
     progress_callback=None,
 ) -> bool:
@@ -860,13 +935,22 @@ def save_heatmap_video(
     writer = cv2.VideoWriter(path, cv2.VideoWriter_fourcc(*"MJPG"), fps, (w, h), isColor=True)
     if not writer.isOpened():
         raise IOError(f"Cannot create heatmap video: {path}")
-    vmin, vmax = heatmap_limits(dff_movie, low_percentile, high_percentile)
+    vmin, vmax = heatmap_limits(dff_movie, low_percentile, high_percentile, max_display=max_display)
     completed = False
     try:
         for i in range(dff_movie.shape[0]):
             if cancel_event is not None and cancel_event.is_set():
                 break
-            frame_rgb = render_heatmap_frame_rgb(dff_movie[i], raw_movie[i], mask, vmin, vmax, alpha, sigma)
+            frame_rgb = render_heatmap_frame_rgb(
+                dff_movie[i],
+                raw_movie[i],
+                mask,
+                vmin,
+                vmax,
+                alpha,
+                sigma,
+                show_colorbar=show_colorbar,
+            )
             writer.write(cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR))
             if progress_callback is not None:
                 progress_callback(i + 1, dff_movie.shape[0])

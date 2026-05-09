@@ -166,7 +166,9 @@ class HeatmapVideoDialog(tk.Toplevel):
         self.sigma = tk.StringVar(value="1.2")
         self.low = tk.StringVar(value="1")
         self.high = tk.StringVar(value="99")
+        self.max_display = tk.StringVar(value="auto")
         self.roi_only = tk.BooleanVar(value=True)
+        self.show_colorbar = tk.BooleanVar(value=True)
         self.frame = tk.IntVar(value=app.current_frame.get())
         self.progress = tk.DoubleVar(value=0)
         self.status = tk.StringVar(value="Ready")
@@ -198,24 +200,26 @@ class HeatmapVideoDialog(tk.Toplevel):
             ("Smooth sigma", self.sigma),
             ("Low percentile", self.low),
             ("High percentile", self.high),
+            ("Max display", self.max_display),
         ]
         for r, (label, var) in enumerate(rows):
             ttk.Label(panel, text=label).grid(row=r, column=0, sticky="w", pady=3)
             entry = ttk.Entry(panel, textvariable=var, width=12)
             entry.grid(row=r, column=1, sticky="ew", pady=3, padx=(6, 0))
             entry.bind("<KeyRelease>", self.schedule_preview)
-        ttk.Checkbutton(panel, text="ROI only", variable=self.roi_only, command=self.update_preview).grid(row=4, column=0, columnspan=2, sticky="w", pady=6)
-        ttk.Label(panel, text="Preview frame").grid(row=5, column=0, columnspan=2, sticky="w", pady=(10, 2))
+        ttk.Checkbutton(panel, text="Show colorbar", variable=self.show_colorbar, command=self.update_preview).grid(row=5, column=0, columnspan=2, sticky="w", pady=(6, 2))
+        ttk.Checkbutton(panel, text="ROI only", variable=self.roi_only, command=self.update_preview).grid(row=6, column=0, columnspan=2, sticky="w", pady=2)
+        ttk.Label(panel, text="Preview frame").grid(row=7, column=0, columnspan=2, sticky="w", pady=(10, 2))
         self.frame_scale = ttk.Scale(panel, from_=0, to=self.app.state.movie.shape[0] - 1, orient="horizontal", command=self.on_frame_change)
         self.frame_scale.set(self.frame.get())
-        self.frame_scale.grid(row=6, column=0, columnspan=2, sticky="ew")
+        self.frame_scale.grid(row=8, column=0, columnspan=2, sticky="ew")
         self.frame_label = ttk.Label(panel, text="")
-        self.frame_label.grid(row=7, column=0, columnspan=2, sticky="w")
-        ttk.Button(panel, text="Refresh Preview", command=self.update_preview).grid(row=8, column=0, columnspan=2, sticky="ew", pady=(12, 3))
-        ttk.Button(panel, text="Save AVI", command=self.start_save).grid(row=9, column=0, columnspan=2, sticky="ew", pady=3)
-        ttk.Button(panel, text="Cancel Generation", command=self.cancel_generation).grid(row=10, column=0, columnspan=2, sticky="ew", pady=3)
-        ttk.Progressbar(panel, variable=self.progress, maximum=100).grid(row=11, column=0, columnspan=2, sticky="ew", pady=(12, 3))
-        ttk.Label(panel, textvariable=self.status, wraplength=210).grid(row=12, column=0, columnspan=2, sticky="ew")
+        self.frame_label.grid(row=9, column=0, columnspan=2, sticky="w")
+        ttk.Button(panel, text="Refresh Preview", command=self.update_preview).grid(row=10, column=0, columnspan=2, sticky="ew", pady=(12, 3))
+        ttk.Button(panel, text="Save AVI", command=self.start_save).grid(row=11, column=0, columnspan=2, sticky="ew", pady=3)
+        ttk.Button(panel, text="Cancel Generation", command=self.cancel_generation).grid(row=12, column=0, columnspan=2, sticky="ew", pady=3)
+        ttk.Progressbar(panel, variable=self.progress, maximum=100).grid(row=13, column=0, columnspan=2, sticky="ew", pady=(12, 3))
+        ttk.Label(panel, textvariable=self.status, wraplength=210).grid(row=14, column=0, columnspan=2, sticky="ew")
 
     def schedule_preview(self, event=None):
         if self._after_id is not None:
@@ -227,7 +231,8 @@ class HeatmapVideoDialog(tk.Toplevel):
         high = float(self.high.get())
         if high <= low:
             high = low + 1
-        return float(self.alpha.get()), float(self.sigma.get()), low, high
+        max_display = core.parse_optional_float(self.max_display.get())
+        return float(self.alpha.get()), float(self.sigma.get()), low, high, max_display
 
     def current_mask(self):
         return self.app.heatmap_mask(use_roi=self.roi_only.get())
@@ -244,10 +249,19 @@ class HeatmapVideoDialog(tk.Toplevel):
         try:
             frame = min(max(0, self.frame.get()), self.app.state.movie.shape[0] - 1)
             self.frame_label.configure(text=f"Frame {frame + 1}/{self.app.state.movie.shape[0]}")
-            alpha, sigma, low, high = self.params()
+            alpha, sigma, low, high, max_display = self.params()
             mask = self.current_mask()
-            vmin, vmax = core.heatmap_limits(self.dff, low, high)
-            preview = core.render_heatmap_frame_rgb(self.dff[frame], self.app.state.movie[frame], mask, vmin, vmax, alpha, sigma)
+            vmin, vmax = core.heatmap_limits(self.dff, low, high, max_display=max_display)
+            preview = core.render_heatmap_frame_rgb(
+                self.dff[frame],
+                self.app.state.movie[frame],
+                mask,
+                vmin,
+                vmax,
+                alpha,
+                sigma,
+                show_colorbar=self.show_colorbar.get(),
+            )
             self.ax.clear()
             self.ax.set_axis_off()
             self.ax.set_facecolor("#020617")
@@ -265,7 +279,11 @@ class HeatmapVideoDialog(tk.Toplevel):
         if not path:
             return
         self.cancel_event.clear()
-        alpha, sigma, low, high = self.params()
+        try:
+            alpha, sigma, low, high, max_display = self.params()
+        except Exception as exc:
+            messagebox.showerror("Heatmap AVI", f"Invalid heatmap parameters: {exc}")
+            return
         mask = self.current_mask()
         self.progress.set(0)
         self.status.set("Generating AVI...")
@@ -285,6 +303,8 @@ class HeatmapVideoDialog(tk.Toplevel):
                     sigma=sigma,
                     low_percentile=low,
                     high_percentile=high,
+                    max_display=max_display,
+                    show_colorbar=self.show_colorbar.get(),
                     cancel_event=self.cancel_event,
                     progress_callback=progress,
                 )
