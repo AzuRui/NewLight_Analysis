@@ -1,5 +1,14 @@
 # Work Log
 
+## 2026-05-09
+
+### Context Safety And New Chat Handoff
+
+- Added a task-completion context-safety self-check to `PROJECT_HANDOFF.md`.
+- Documented the 80% background/context threshold for proactive handoff refresh.
+- Documented the 70% post-compression distortion threshold for recommending a new chat.
+- Added a new-chat startup checklist that tells the next assistant which project files, git commands, and records to inspect first.
+
 ## 2026-05-08
 
 ### Repository Initialization And Project Records

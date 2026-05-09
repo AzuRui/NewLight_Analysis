@@ -1,6 +1,6 @@
 # NewLight_Analysis Handoff
 
-Last updated: 2026-05-08
+Last updated: 2026-05-09
 
 ## Project
 
@@ -21,6 +21,32 @@ NewLight_Analysis is a Tkinter desktop GUI for two-photon / neurosurgical imagin
 - `run_NewLight_Analysis.bat`: launcher.
 - `build_exe.bat`, `NewLight_Analysis.spec`, `NewLight_Analysis_setup.iss`: packaging.
 - `README.md`, `DESIGN_NOTES.md`, `PACKAGING.md`: user/developer notes.
+
+## New Chat Startup Checklist
+
+When a new chat takes over this project, read this file first. Then inspect these items before making changes:
+
+- `WORK_LOG.md`: latest completed work and decisions.
+- `git status --short --branch`: whether the working tree is clean.
+- `git log --oneline --decorate -5`: recent checkpoints and rollback targets.
+- `NewLight_Analysis.py`: especially GUI state, display canvas, ROI controls, heatmap AVI dialog, and workflow callbacks.
+- `analysis_core.py`: especially movie I/O, dF/F, ROI processing, heatmap rendering, and export functions.
+- `NewLight_Analysis.spec`, `build_exe.bat`, `NewLight_Analysis_setup.iss`: packaging path if the task involves compiling or installer generation.
+
+Recommended new-chat instruction:
+
+```text
+Please continue the NewLight_Analysis project. First read E:\WorkSpace\NewLight_Analysis\PROJECT_HANDOFF.md and E:\WorkSpace\NewLight_Analysis\WORK_LOG.md, then inspect git status/log before changing files.
+```
+
+## Context Safety Policy
+
+At the end of every substantial task, perform a context-safety self-check:
+
+1. If background/context usage is above 80%, update `PROJECT_HANDOFF.md` and `WORK_LOG.md` before starting the next task so the next step can continue from compact, explicit records instead of relying on a long chat.
+2. If context compression is needed, do it after a task finishes, not in the middle of reasoning or while a code change is half-complete.
+3. After compression, if estimated information distortion or loss is above 70%, tell the user to open a new chat and instruct the new chat to read this handoff file first.
+4. If a new chat is opened, the handoff source of truth is this file plus `WORK_LOG.md`, not the memory of the previous conversation.
 
 ## Environment Notes
 
@@ -104,3 +130,4 @@ For future updates:
    ```
 
 5. Commit source and record updates together when the change is stable.
+6. Finish each task with the context-safety self-check described above.
