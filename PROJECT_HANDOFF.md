@@ -79,6 +79,7 @@ The heatmap AVI dialog now includes:
 
 - `Max display`: fixed maximum heatmap intensity, equivalent to the old `2cafe_analysis` c-axis upper threshold. `auto` keeps percentile scaling.
 - `Show colorbar`: toggles the visible `dF/F` colorbar in preview and generated AVI frames. When enabled, the colorbar is rendered in a separate right-side panel appended to the frame so it does not cover the image data.
+- `Heatmap only`: removes the raw grayscale background and renders only the heatmap on black background; ROI masking still applies when `ROI only` is enabled.
 
 ## Display Issue Context
 

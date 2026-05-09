@@ -14,6 +14,12 @@
 - Changed heatmap preview/AVI colorbar rendering from an overlay on the right edge of the image to a separate appended right-side panel.
 - Updated AVI writing to infer output dimensions from the rendered first frame, so videos with a colorbar can be wider without cropping or covering image data.
 
+### Heatmap Only AVI Mode
+
+- Added a `Heatmap only` option to the heatmap AVI dialog.
+- When enabled, preview and exported AVI frames remove the raw grayscale background and render only heatmap color on a black background.
+- `ROI only` continues to mask the heatmap region when both options are enabled.
+
 ## 2026-05-08
 
 ### Repository Initialization And Project Records

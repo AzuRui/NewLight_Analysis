@@ -169,6 +169,7 @@ class HeatmapVideoDialog(tk.Toplevel):
         self.max_display = tk.StringVar(value="auto")
         self.roi_only = tk.BooleanVar(value=True)
         self.show_colorbar = tk.BooleanVar(value=True)
+        self.heatmap_only = tk.BooleanVar(value=False)
         self.frame = tk.IntVar(value=app.current_frame.get())
         self.progress = tk.DoubleVar(value=0)
         self.status = tk.StringVar(value="Ready")
@@ -208,18 +209,19 @@ class HeatmapVideoDialog(tk.Toplevel):
             entry.grid(row=r, column=1, sticky="ew", pady=3, padx=(6, 0))
             entry.bind("<KeyRelease>", self.schedule_preview)
         ttk.Checkbutton(panel, text="Show colorbar", variable=self.show_colorbar, command=self.update_preview).grid(row=5, column=0, columnspan=2, sticky="w", pady=(6, 2))
-        ttk.Checkbutton(panel, text="ROI only", variable=self.roi_only, command=self.update_preview).grid(row=6, column=0, columnspan=2, sticky="w", pady=2)
-        ttk.Label(panel, text="Preview frame").grid(row=7, column=0, columnspan=2, sticky="w", pady=(10, 2))
+        ttk.Checkbutton(panel, text="Heatmap only", variable=self.heatmap_only, command=self.update_preview).grid(row=6, column=0, columnspan=2, sticky="w", pady=2)
+        ttk.Checkbutton(panel, text="ROI only", variable=self.roi_only, command=self.update_preview).grid(row=7, column=0, columnspan=2, sticky="w", pady=2)
+        ttk.Label(panel, text="Preview frame").grid(row=8, column=0, columnspan=2, sticky="w", pady=(10, 2))
         self.frame_scale = ttk.Scale(panel, from_=0, to=self.app.state.movie.shape[0] - 1, orient="horizontal", command=self.on_frame_change)
         self.frame_scale.set(self.frame.get())
-        self.frame_scale.grid(row=8, column=0, columnspan=2, sticky="ew")
+        self.frame_scale.grid(row=9, column=0, columnspan=2, sticky="ew")
         self.frame_label = ttk.Label(panel, text="")
-        self.frame_label.grid(row=9, column=0, columnspan=2, sticky="w")
-        ttk.Button(panel, text="Refresh Preview", command=self.update_preview).grid(row=10, column=0, columnspan=2, sticky="ew", pady=(12, 3))
-        ttk.Button(panel, text="Save AVI", command=self.start_save).grid(row=11, column=0, columnspan=2, sticky="ew", pady=3)
-        ttk.Button(panel, text="Cancel Generation", command=self.cancel_generation).grid(row=12, column=0, columnspan=2, sticky="ew", pady=3)
-        ttk.Progressbar(panel, variable=self.progress, maximum=100).grid(row=13, column=0, columnspan=2, sticky="ew", pady=(12, 3))
-        ttk.Label(panel, textvariable=self.status, wraplength=210).grid(row=14, column=0, columnspan=2, sticky="ew")
+        self.frame_label.grid(row=10, column=0, columnspan=2, sticky="w")
+        ttk.Button(panel, text="Refresh Preview", command=self.update_preview).grid(row=11, column=0, columnspan=2, sticky="ew", pady=(12, 3))
+        ttk.Button(panel, text="Save AVI", command=self.start_save).grid(row=12, column=0, columnspan=2, sticky="ew", pady=3)
+        ttk.Button(panel, text="Cancel Generation", command=self.cancel_generation).grid(row=13, column=0, columnspan=2, sticky="ew", pady=3)
+        ttk.Progressbar(panel, variable=self.progress, maximum=100).grid(row=14, column=0, columnspan=2, sticky="ew", pady=(12, 3))
+        ttk.Label(panel, textvariable=self.status, wraplength=210).grid(row=15, column=0, columnspan=2, sticky="ew")
 
     def schedule_preview(self, event=None):
         if self._after_id is not None:
@@ -261,6 +263,7 @@ class HeatmapVideoDialog(tk.Toplevel):
                 alpha,
                 sigma,
                 show_colorbar=self.show_colorbar.get(),
+                heatmap_only=self.heatmap_only.get(),
             )
             self.ax.clear()
             self.ax.set_axis_off()
@@ -305,6 +308,7 @@ class HeatmapVideoDialog(tk.Toplevel):
                     high_percentile=high,
                     max_display=max_display,
                     show_colorbar=self.show_colorbar.get(),
+                    heatmap_only=self.heatmap_only.get(),
                     cancel_event=self.cancel_event,
                     progress_callback=progress,
                 )

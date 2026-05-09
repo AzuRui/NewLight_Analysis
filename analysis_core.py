@@ -888,6 +888,7 @@ def render_heatmap_frame_rgb(
     alpha: float = 0.55,
     sigma: float = 1.2,
     show_colorbar: bool = False,
+    heatmap_only: bool = False,
     colormap: str = "jet",
 ) -> np.ndarray:
     bg = cv2.cvtColor(to_uint8(raw_frame), cv2.COLOR_GRAY2RGB).astype(np.float32)
@@ -897,7 +898,10 @@ def render_heatmap_frame_rgb(
     heat_rgb = (plt.get_cmap(colormap)(norm)[..., :3] * 255).astype(np.float32)
     mask3 = mask[..., None].astype(np.float32)
     alpha = float(np.clip(alpha, 0, 1))
-    frame = ((1 - alpha * mask3) * bg + (alpha * mask3) * heat_rgb)
+    if heatmap_only:
+        frame = heat_rgb * mask3
+    else:
+        frame = ((1 - alpha * mask3) * bg + (alpha * mask3) * heat_rgb)
     frame = np.clip(frame, 0, 255).astype(np.uint8)
     if show_colorbar:
         frame = add_heatmap_colorbar(frame, vmin, vmax, colormap=colormap)
@@ -925,6 +929,7 @@ def save_heatmap_video(
     high_percentile: float = 99.0,
     max_display: float | None = None,
     show_colorbar: bool = True,
+    heatmap_only: bool = False,
     cancel_event=None,
     progress_callback=None,
 ) -> bool:
@@ -943,6 +948,7 @@ def save_heatmap_video(
         alpha,
         sigma,
         show_colorbar=show_colorbar,
+        heatmap_only=heatmap_only,
     )
     out_h, out_w = first_rgb.shape[:2]
     writer = cv2.VideoWriter(path, cv2.VideoWriter_fourcc(*"MJPG"), fps, (out_w, out_h), isColor=True)
@@ -965,6 +971,7 @@ def save_heatmap_video(
                 alpha,
                 sigma,
                 show_colorbar=show_colorbar,
+                heatmap_only=heatmap_only,
             )
             writer.write(cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR))
             if progress_callback is not None:
