@@ -899,7 +899,9 @@ def render_heatmap_frame_rgb(
     mask3 = mask[..., None].astype(np.float32)
     alpha = float(np.clip(alpha, 0, 1))
     if heatmap_only:
-        frame = heat_rgb * mask3
+        frame = np.full_like(heat_rgb, 255, dtype=np.float32)
+        mask_bool = mask.astype(bool)
+        frame[mask_bool] = heat_rgb[mask_bool]
     else:
         frame = ((1 - alpha * mask3) * bg + (alpha * mask3) * heat_rgb)
     frame = np.clip(frame, 0, 255).astype(np.uint8)

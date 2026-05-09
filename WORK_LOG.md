@@ -17,8 +17,8 @@
 ### Heatmap Only AVI Mode
 
 - Added a `Heatmap only` option to the heatmap AVI dialog.
-- When enabled, preview and exported AVI frames remove the raw grayscale background and render only heatmap color on a black background.
-- `ROI only` continues to mask the heatmap region when both options are enabled.
+- When enabled, preview and exported AVI frames remove the raw grayscale background and render heatmap values on a white background.
+- `ROI only` continues to mask the heatmap region when both options are enabled; ROI-excluded pixels remain white.
 
 ## 2026-05-08
 
