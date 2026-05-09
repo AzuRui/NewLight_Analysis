@@ -9,6 +9,11 @@
 - Documented the 70% post-compression distortion threshold for recommending a new chat.
 - Added a new-chat startup checklist that tells the next assistant which project files, git commands, and records to inspect first.
 
+### Heatmap Colorbar Placement
+
+- Changed heatmap preview/AVI colorbar rendering from an overlay on the right edge of the image to a separate appended right-side panel.
+- Updated AVI writing to infer output dimensions from the rendered first frame, so videos with a colorbar can be wider without cropping or covering image data.
+
 ## 2026-05-08
 
 ### Repository Initialization And Project Records

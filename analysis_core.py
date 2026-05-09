@@ -843,17 +843,17 @@ def add_heatmap_colorbar(
     if h < 40 or w < 80:
         return frame
 
-    panel_w = min(max(58, w // 8), max(58, w // 4))
-    x_panel = max(0, w - panel_w)
-    overlay = frame.copy()
-    overlay[:, x_panel:] = 0
-    frame = cv2.addWeighted(overlay, 0.68, frame, 0.32, 0)
+    panel_w = min(max(72, w // 6), max(72, w // 4))
+    out = np.zeros((h, w + panel_w, 3), dtype=np.uint8)
+    out[:, :w] = frame
+    frame = out
+    x_panel = w
 
-    margin = max(6, w // 100)
+    margin = max(8, panel_w // 10)
     top = max(18, h // 18)
     bottom = h - max(18, h // 18)
     bar_h = max(1, bottom - top)
-    bar_w = max(10, min(18, panel_w // 4))
+    bar_w = max(12, min(20, panel_w // 4))
     bar_x = x_panel + margin
     bar_y = top
     cmap = plt.get_cmap(colormap)
@@ -870,7 +870,7 @@ def add_heatmap_colorbar(
             return f"{value:.2g}"
         return f"{value:.3g}"
 
-    text_x = min(w - 4, bar_x + bar_w + 5)
+    text_x = min(frame.shape[1] - 4, bar_x + bar_w + 6)
     font = cv2.FONT_HERSHEY_SIMPLEX
     cv2.putText(frame, label, (bar_x, max(11, top - 6)), font, 0.35, (255, 255, 255), 1, cv2.LINE_AA)
     cv2.putText(frame, fmt(vmax), (text_x, min(h - 4, top + 5)), font, 0.35, (255, 255, 255), 1, cv2.LINE_AA)
@@ -930,15 +930,30 @@ def save_heatmap_video(
 ) -> bool:
     if dff_movie.ndim != 3 or dff_movie.shape[0] == 0:
         return False
-    h, w = dff_movie.shape[1:]
     fps = float(fs) if fs and fs > 0 else 10.0
-    writer = cv2.VideoWriter(path, cv2.VideoWriter_fourcc(*"MJPG"), fps, (w, h), isColor=True)
+    vmin, vmax = heatmap_limits(dff_movie, low_percentile, high_percentile, max_display=max_display)
+    if cancel_event is not None and cancel_event.is_set():
+        return False
+    first_rgb = render_heatmap_frame_rgb(
+        dff_movie[0],
+        raw_movie[0],
+        mask,
+        vmin,
+        vmax,
+        alpha,
+        sigma,
+        show_colorbar=show_colorbar,
+    )
+    out_h, out_w = first_rgb.shape[:2]
+    writer = cv2.VideoWriter(path, cv2.VideoWriter_fourcc(*"MJPG"), fps, (out_w, out_h), isColor=True)
     if not writer.isOpened():
         raise IOError(f"Cannot create heatmap video: {path}")
-    vmin, vmax = heatmap_limits(dff_movie, low_percentile, high_percentile, max_display=max_display)
     completed = False
     try:
-        for i in range(dff_movie.shape[0]):
+        writer.write(cv2.cvtColor(first_rgb, cv2.COLOR_RGB2BGR))
+        if progress_callback is not None:
+            progress_callback(1, dff_movie.shape[0])
+        for i in range(1, dff_movie.shape[0]):
             if cancel_event is not None and cancel_event.is_set():
                 break
             frame_rgb = render_heatmap_frame_rgb(
