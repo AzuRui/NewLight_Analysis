@@ -1,5 +1,31 @@
 # Work Log
 
+## 2026-05-10
+
+### Portable Application Build
+
+- Rebuilt the portable application from the current `main` branch using the `caiman_latest` conda environment:
+
+  ```bash
+  conda run -n caiman_latest cmd /c build_exe.bat
+  ```
+
+- Pre-build checks passed:
+
+  ```bash
+  python -m py_compile E:\WorkSpace\NewLight_Analysis\NewLight_Analysis.py E:\WorkSpace\NewLight_Analysis\analysis_core.py
+  conda run -n caiman_latest python -c "import PyInstaller, openpyxl; print('build deps ok')"
+  ```
+
+- Generated portable app entry points:
+
+  ```text
+  E:\WorkSpace\NewLight_Analysis\build_release\Run_NewLight_Analysis.bat
+  E:\WorkSpace\NewLight_Analysis\build_release\NewLight_Analysis\NewLight_Analysis.exe
+  ```
+
+- Build note: this run generated the portable application folder only; no Inno Setup installer was rebuilt in this step.
+
 ## 2026-05-09
 
 ### Context Safety And New Chat Handoff
