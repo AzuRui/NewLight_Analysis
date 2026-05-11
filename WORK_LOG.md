@@ -144,3 +144,9 @@
 - Forced the Matplotlib toolbar cursor readout to render in white on the dark theme so the live `x / y` coordinate display stays readable.
 - Updated `Built-in Auto ROI` to present `Min area` and `Max area` explicitly as pixel-area values (`px^2`).
 - When the mouse is hovering on image content, the app now logs both the estimated ROI area range and an equivalent cell diameter so users can convert a rough visual cell-size estimate into area bounds more easily.
+
+### Built-in Auto ROI Sample Fill
+
+- Added a dedicated `Built-in Auto ROI` dialog with a `Use last 2 ROIs` helper.
+- The helper reads the last two drawn ROIs, treats them as size samples, and fills `Min area` / `Max area` from those sample areas.
+- This is meant to replace brittle single-point seed estimates on noisy or ring-like images where the thresholded connected-component size can be misleading.

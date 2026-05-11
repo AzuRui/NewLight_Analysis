@@ -170,6 +170,87 @@ class ParameterDialog(tk.Toplevel):
         self.destroy()
 
 
+class BuiltInAutoROIDialog(tk.Toplevel):
+    def __init__(self, parent, app, title, default_min_area=20, default_max_area=4000):
+        super().__init__(parent)
+        self.title(title)
+        self.configure(bg=THEME["bg"])
+        self.resizable(False, False)
+        self.app = app
+        self.values = None
+        self._default_min_area = max(3, int(default_min_area))
+        self._default_max_area = max(self._default_min_area + 1, int(default_max_area))
+        self.min_area_var = tk.StringVar(value=str(self._default_min_area))
+        self.max_area_var = tk.StringVar(value=str(self._default_max_area))
+        self.status_var = tk.StringVar(value="")
+
+        body = ttk.Frame(self, padding=12)
+        body.grid(row=0, column=0, sticky="nsew")
+        body.columnconfigure(1, weight=1)
+
+        ttk.Label(body, text="Min area (px^2)").grid(row=0, column=0, sticky="w", pady=4)
+        min_entry = ttk.Entry(body, textvariable=self.min_area_var, width=18)
+        min_entry.grid(row=0, column=1, sticky="ew", pady=4, padx=(8, 0))
+
+        ttk.Label(body, text="Max area (px^2)").grid(row=1, column=0, sticky="w", pady=4)
+        ttk.Entry(body, textvariable=self.max_area_var, width=18).grid(row=1, column=1, sticky="ew", pady=4, padx=(8, 0))
+
+        sample_row = ttk.Frame(body)
+        sample_row.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(8, 2))
+        sample_row.columnconfigure(0, weight=1)
+        ttk.Button(sample_row, text="Use last 2 ROIs", command=self.use_current_rois).grid(row=0, column=0, sticky="ew")
+        ttk.Button(sample_row, text="Reset defaults", command=self.reset_defaults).grid(row=0, column=1, sticky="ew", padx=(8, 0))
+
+        ttk.Label(body, textvariable=self.status_var, style="Muted.TLabel", wraplength=300).grid(
+            row=3, column=0, columnspan=2, sticky="ew", pady=(4, 0)
+        )
+
+        buttons = ttk.Frame(body)
+        buttons.grid(row=4, column=0, columnspan=2, sticky="e", pady=(12, 0))
+        ttk.Button(buttons, text="Cancel", command=self.destroy).grid(row=0, column=0, padx=(0, 8))
+        ttk.Button(buttons, text="Apply", command=self._apply).grid(row=0, column=1)
+
+        self.transient(parent)
+        self.grab_set()
+        self.protocol("WM_DELETE_WINDOW", self.destroy)
+        self.bind("<Escape>", lambda _event: self.destroy())
+        self.bind("<Return>", lambda _event: self._apply())
+        self.after(0, min_entry.focus_set)
+        self.wait_window(self)
+
+    def reset_defaults(self):
+        self.min_area_var.set(str(self._default_min_area))
+        self.max_area_var.set(str(self._default_max_area))
+        self.status_var.set("Restored seed-based defaults.")
+
+    def use_current_rois(self):
+        masks = list(getattr(self.app.state, "roi_masks", []))
+        if len(masks) < 2:
+            messagebox.showwarning("Built-in Auto ROI", "Draw at least two sample ROIs first.")
+            return
+        areas = [int(np.count_nonzero(np.asarray(mask, dtype=bool))) for mask in masks[-2:]]
+        areas = [area for area in areas if area > 0]
+        if len(areas) < 2:
+            messagebox.showwarning("Built-in Auto ROI", "The last two ROIs must both have nonzero area.")
+            return
+        sample_min = max(3, int(round(min(areas) * 0.9)))
+        sample_max = max(sample_min + 1, int(round(max(areas) * 1.1)))
+        self.min_area_var.set(str(sample_min))
+        self.max_area_var.set(str(sample_max))
+        self.status_var.set(f"Filled from the last two ROIs: {areas[0]} and {areas[1]} px^2.")
+        self.app.log(f"Built-in auto ROI filled from last two ROIs: {areas[0]} and {areas[1]} px^2 -> {sample_min}-{sample_max} px^2.")
+
+    def _apply(self):
+        try:
+            min_area = max(3, int(float(self.min_area_var.get())))
+            max_area = max(min_area + 1, int(float(self.max_area_var.get())))
+        except Exception:
+            messagebox.showerror("Built-in Auto ROI", "Please enter valid numeric area bounds.")
+            return
+        self.values = {"min_area": min_area, "max_area": max_area}
+        self.destroy()
+
+
 class NeuroSeg3Dialog(tk.Toplevel):
     def __init__(self, parent, title, weights, default_weight="", default_conf=0.002, mask_threshold=0.5, fallback_default=True):
         super().__init__(parent)
@@ -1366,13 +1447,14 @@ class NewLightApp:
                     f"Built-in auto ROI seed ({x:.1f}, {y:.1f}) suggests area {min_area_default}-{max_area_default} px^2 "
                     f"(~{cell_area_est:.0f} px^2, ~{cell_diameter_est:.1f} px diameter)."
                 )
-        vals = self.param_dialog(
+        dlg = BuiltInAutoROIDialog(
+            self.root,
+            self,
             "Built-in Auto ROI",
-            [
-                ("min_area", "Min area (px^2)", min_area_default),
-                ("max_area", "Max area (px^2)", max_area_default),
-            ],
+            default_min_area=min_area_default,
+            default_max_area=max_area_default,
         )
+        vals = dlg.values
         if not vals:
             return
         rois = core.auto_roi_from_image(image, int(vals["min_area"]), int(vals["max_area"]))

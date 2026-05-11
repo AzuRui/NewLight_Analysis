@@ -127,6 +127,8 @@ Requirements already discussed:
 - The toolbar coordinate readout is themed white for readability on the dark background.
 - `Built-in Auto ROI` now seeds its `Min area` / `Max area` defaults from the current mouse pixel position when that point lies over image content; the estimate uses local connected-component area as a rough guide.
 - The built-in auto ROI dialog labels these fields as `px^2`, and the log now reports an approximate cell area and equivalent diameter so a rough visual cell-size estimate can be converted into the area range more directly.
+- `Built-in Auto ROI` also has a `Use last 2 ROIs` helper. It reads the last two drawn ROIs, treats them as size samples, and fills `Min area` / `Max area` from their measured pixel areas.
+- This exists because the single-click seed estimator can be very unstable on noisy, ring-like, or heterogeneous images and often returns odd tiny ranges that create strange ROIs.
 
 ## Git / Record Policy
 
