@@ -2,11 +2,11 @@
 
 ## 2026-05-11
 
-### Display Auto-Fit And Centering
+### Display Resize Binding Fix
 
-- Updated the main image canvas resizing path so the Matplotlib figure now tracks the visible canvas size on window resize/maximize.
-- Adjusted image axes placement to center the displayed image or current zoomed view inside the available canvas while preserving aspect ratio.
-- The display is no longer intended to stay pinned to the old figure size in the upper-left corner when the window grows.
+- Restored TkAgg's native canvas resize handling by moving the app-specific redraw hook to Matplotlib `resize_event`.
+- Kept the main image auto-fit and centering logic on top of the backend resize path, so the display now follows the actual visible canvas instead of only changing the rendered buffer.
+- Documented the resize binding rule in the project handoff to avoid replacing the backend `<Configure>` handler again.
 
 ## 2026-05-10
 

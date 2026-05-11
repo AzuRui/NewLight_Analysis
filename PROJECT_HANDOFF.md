@@ -82,9 +82,10 @@ The heatmap AVI dialog now includes:
 
 ## Display Fitting Behavior
 
-- The main image view is now intended to auto-fit the current visible canvas size while preserving the image aspect ratio.
-- Window resize and maximize should keep the image centered instead of pinning it to the upper-left corner.
-- The image display uses the current view window ratio when zoomed or panned, so the visible area should stay centered and proportionally scaled to the available space.
+- The main image view auto-fits the current visible canvas size while preserving the image aspect ratio.
+- Window resize and maximize keep the image centered instead of pinning it to the upper-left corner.
+- Custom resize logic must not replace TkAgg's own `<Configure>` handler. The canvas now keeps the backend resize binding intact and listens to Matplotlib `resize_event` for redraws.
+- The image display uses the current view window ratio when zoomed or panned, so the visible area stays centered and proportionally scaled to the available space.
 - `Heatmap only`: removes the original grayscale frame background and renders heatmap values on a white background. If `ROI only` is enabled, non-ROI pixels remain white.
 
 ## Display Issue Context

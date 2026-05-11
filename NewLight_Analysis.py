@@ -503,7 +503,7 @@ class NewLightApp:
         self.canvas = FigureCanvasTkAgg(self.fig, master=main)
         self.canvas.get_tk_widget().configure(bg="#020617", highlightthickness=1, highlightbackground=THEME["border"])
         self.canvas.get_tk_widget().grid(row=0, column=0, sticky="nsew")
-        self.canvas.get_tk_widget().bind("<Configure>", self.on_canvas_resize)
+        self.canvas.mpl_connect("resize_event", self.on_canvas_resize)
         self.nav_toolbar = ImageToolbar(self.canvas, main, pack_toolbar=False)
         self.nav_toolbar.configure(background=THEME["panel"])
         for child in self.nav_toolbar.winfo_children():
@@ -546,9 +546,6 @@ class NewLightApp:
         self.canvas.mpl_connect("scroll_event", self.on_scroll)
 
     def on_canvas_resize(self, event):
-        width = max(1, int(event.width))
-        height = max(1, int(event.height))
-        self.fig.set_size_inches(width / self.fig.dpi, height / self.fig.dpi, forward=False)
         if self.state.display_image is not None or self.state.baseline_image is not None:
             self.redraw(preserve_view=True)
         else:
