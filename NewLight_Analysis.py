@@ -154,14 +154,13 @@ class ParameterDialog(tk.Toplevel):
 
 
 class NeuroSeg3Dialog(tk.Toplevel):
-    def __init__(self, parent, title, weights, default_weight="", default_conf=0.05, mask_threshold=0.5, fallback_default=True):
+    def __init__(self, parent, title, weights, default_weight="", default_conf=0.002, mask_threshold=0.5, fallback_default=True):
         super().__init__(parent)
         self.title(title)
         self.configure(bg=THEME["bg"])
         self.resizable(False, False)
         self.values = None
-        self.conf_var = tk.DoubleVar(value=float(default_conf))
-        self.conf_text = tk.StringVar(value=f"{float(default_conf):.2f}")
+        self.conf_var = tk.StringVar(value=f"{float(default_conf):.4f}".rstrip("0").rstrip("."))
         self.weights_var = tk.StringVar(value=default_weight)
         self.fallback_var = tk.BooleanVar(value=bool(fallback_default))
         self._mask_threshold = float(mask_threshold)
@@ -174,22 +173,16 @@ class NeuroSeg3Dialog(tk.Toplevel):
         conf_row = ttk.Frame(body)
         conf_row.grid(row=0, column=1, sticky="ew", pady=4)
         conf_row.columnconfigure(0, weight=1)
-        self.conf_scale = ttk.Scale(conf_row, from_=0.0, to=1.0, orient="horizontal", variable=self.conf_var, command=self._on_conf_change)
-        self.conf_scale.grid(row=0, column=0, sticky="ew")
-        ttk.Label(conf_row, textvariable=self.conf_text, width=6, anchor="e").grid(row=0, column=1, padx=(8, 0))
+        self.conf_entry = ttk.Entry(conf_row, textvariable=self.conf_var, width=14)
+        self.conf_entry.grid(row=0, column=0, sticky="ew")
+        ttk.Label(conf_row, text="e.g. 0.002", style="Muted.TLabel").grid(row=0, column=1, padx=(8, 0))
 
-        preset_row = ttk.Frame(body)
-        preset_row.grid(row=1, column=1, sticky="w", pady=(0, 6))
-        for value in (0.02, 0.05, 0.10, 0.20, 0.35):
-            label = f"{value:.2f}".rstrip("0").rstrip(".")
-            ttk.Button(preset_row, text=label, width=5, command=lambda v=value: self.set_conf(v)).pack(side="left", padx=(0, 4))
+        ttk.Label(body, text="Mask pixel cutoff").grid(row=1, column=0, sticky="w", pady=4)
+        ttk.Label(body, text=f"Fixed at {self._mask_threshold:.2f}", style="Muted.TLabel").grid(row=1, column=1, sticky="w", pady=4)
 
-        ttk.Label(body, text="Mask pixel cutoff").grid(row=2, column=0, sticky="w", pady=4)
-        ttk.Label(body, text=f"Fixed at {self._mask_threshold:.2f}", style="Muted.TLabel").grid(row=2, column=1, sticky="w", pady=4)
-
-        ttk.Label(body, text="Weights .pt").grid(row=3, column=0, sticky="w", pady=4)
+        ttk.Label(body, text="Weights .pt").grid(row=2, column=0, sticky="w", pady=4)
         weight_row = ttk.Frame(body)
-        weight_row.grid(row=3, column=1, sticky="ew", pady=4)
+        weight_row.grid(row=2, column=1, sticky="ew", pady=4)
         weight_row.columnconfigure(0, weight=1)
         if weights:
             combo = ttk.Combobox(weight_row, textvariable=self.weights_var, values=weights)
@@ -206,10 +199,10 @@ class NeuroSeg3Dialog(tk.Toplevel):
             body,
             text="Fallback on zero masks",
             variable=self.fallback_var,
-        ).grid(row=4, column=0, columnspan=2, sticky="w", pady=(8, 4))
+        ).grid(row=3, column=0, columnspan=2, sticky="w", pady=(8, 4))
 
         buttons = ttk.Frame(body)
-        buttons.grid(row=5, column=0, columnspan=2, sticky="e", pady=(12, 0))
+        buttons.grid(row=4, column=0, columnspan=2, sticky="e", pady=(12, 0))
         ttk.Button(buttons, text="Cancel", command=self.destroy).grid(row=0, column=0, padx=(0, 8))
         ttk.Button(buttons, text="Apply", command=self._apply).grid(row=0, column=1)
 
@@ -218,26 +211,12 @@ class NeuroSeg3Dialog(tk.Toplevel):
         self.protocol("WM_DELETE_WINDOW", self.destroy)
         self.bind("<Escape>", lambda _event: self.destroy())
         self.bind("<Return>", lambda _event: self._apply())
-        self.set_conf(default_conf)
         self.after(0, self._focus_default)
         self.wait_window(self)
 
     def _focus_default(self):
-        if hasattr(self, "weights_combo"):
-            self.weights_combo.focus_set()
-        elif hasattr(self, "weights_entry"):
-            self.weights_entry.focus_set()
-
-    def _on_conf_change(self, value):
-        try:
-            self.conf_text.set(f"{max(0.0, min(1.0, float(value))):.2f}")
-        except Exception:
-            self.conf_text.set("0.05")
-
-    def set_conf(self, value):
-        value = max(0.0, min(1.0, float(value)))
-        self.conf_var.set(value)
-        self.conf_text.set(f"{value:.2f}")
+        self.conf_entry.focus_set()
+        self.conf_entry.selection_range(0, "end")
 
     def _sync_weight_var(self, _event=None):
         self.weights_var.set(self.weights_var.get().strip())
@@ -265,8 +244,16 @@ class NeuroSeg3Dialog(tk.Toplevel):
             self.weights_var.set(path)
 
     def _apply(self):
+        try:
+            conf = float(self.conf_var.get())
+        except Exception:
+            messagebox.showerror("NeuroSeg3 ROI", "Detection conf must be a number.")
+            return
+        if not (0.0 <= conf <= 1.0):
+            messagebox.showerror("NeuroSeg3 ROI", "Detection conf must be between 0 and 1.")
+            return
         self.values = {
-            "conf": round(float(self.conf_var.get()), 4),
+            "conf": round(conf, 6),
             "weights": self.weights_var.get(),
             "fallback": bool(self.fallback_var.get()),
             "mask_threshold": self._mask_threshold,
@@ -1355,7 +1342,7 @@ class NewLightApp:
             if "segmentation" in path.lower():
                 default_weight = path
                 break
-        dlg = NeuroSeg3Dialog(self.root, "NeuroSeg3 ROI", weights, default_weight=default_weight)
+        dlg = NeuroSeg3Dialog(self.root, "NeuroSeg3 ROI", weights, default_weight=default_weight, default_conf=0.002)
         vals = dlg.values
         if not vals:
             return

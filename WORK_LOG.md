@@ -2,6 +2,12 @@
 
 ## 2026-05-11
 
+### NeuroSeg3 Confidence Manual Input
+
+- Replaced the NeuroSeg3 detection-confidence slider with a plain numeric input so sub-0.01 values such as `0.002` can be entered directly.
+- Kept the mask pixel cutoff fixed at `0.50` and left the weights chooser / fallback toggle in place.
+- Updated the project notes to reflect that this ROI backend may need unusually low confidence values on the current dataset.
+
 ### NeuroSeg3 ROI Dialog Simplification
 
 - Replaced the plain-text NeuroSeg3 ROI parameter prompt with a dedicated dialog that uses a detection-confidence slider and quick preset buttons.

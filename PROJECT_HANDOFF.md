@@ -121,8 +121,9 @@ Requirements already discussed:
 - `load_roi` currently accepts both `.npz` ROI files and image atlas files.
 - `atlas_roi` directly imports an atlas image.
 - Atlas image parsing is implemented in `analysis_core.process_atlas_image`.
-- NeuroSeg3 ROI now uses a dedicated dialog with a detection-confidence slider, quick presets, a weights path chooser, and a fallback checkbox.
+- NeuroSeg3 ROI now uses a dedicated dialog with manual detection-confidence input, a weights path chooser, and a fallback checkbox.
 - The GUI keeps NeuroSeg3 mask pixel cutoff fixed at `0.50` for routine use; the backend call still accepts a separate mask threshold if that ever needs to be exposed again.
+- Practical NeuroSeg3 confidence values may be much smaller than the usual human-friendly range; `0.002` was observed as a useful starting point for the current dataset.
 
 ## Git / Record Policy
 
