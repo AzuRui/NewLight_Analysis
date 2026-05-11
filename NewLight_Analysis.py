@@ -40,6 +40,13 @@ THEME = {
 class ImageToolbar(NavigationToolbar2Tk):
     toolitems = tuple(item for item in NavigationToolbar2Tk.toolitems if item[0] != "Subplots")
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        try:
+            self._message_label.configure(background=THEME["panel"], foreground="#ffffff")
+        except tk.TclError:
+            pass
+
 
 def apply_dark_theme(root):
     root.configure(bg=THEME["bg"])
@@ -465,6 +472,7 @@ class NewLightApp:
         self.freehand_drawing = False
         self.circle_start = None
         self.inspect_pan_start = None
+        self.last_cursor_image_xy = None
         self.preview_overlay = None
         self.current_frame = tk.IntVar(value=0)
         self.frame_label_var = tk.StringVar(value="Frame 1/1")
@@ -620,6 +628,10 @@ class NewLightApp:
             except tk.TclError:
                 pass
         self.nav_toolbar.update()
+        try:
+            self.nav_toolbar._message_label.configure(background=THEME["panel"], foreground="#ffffff")
+        except tk.TclError:
+            pass
         self.nav_toolbar.grid(row=1, column=0, sticky="ew")
 
         bottom = ttk.Frame(main, style="Toolbar.TFrame")
@@ -1038,6 +1050,8 @@ class NewLightApp:
         self.canvas.draw_idle()
 
     def on_press(self, event):
+        if event.inaxes == self.ax and event.xdata is not None and event.ydata is not None:
+            self.last_cursor_image_xy = (float(event.xdata), float(event.ydata))
         if event.inaxes != self.ax or self.state.display_image is None:
             return
         if self.mode.get() == "inspect" and event.xdata is not None and event.ydata is not None and event.button == 1:
@@ -1057,6 +1071,8 @@ class NewLightApp:
             self.delete_roi_at(event.xdata, event.ydata)
 
     def on_motion(self, event):
+        if event.inaxes == self.ax and event.xdata is not None and event.ydata is not None:
+            self.last_cursor_image_xy = (float(event.xdata), float(event.ydata))
         if event.inaxes != self.ax:
             return
         if self.mode.get() == "inspect" and self.inspect_pan_start and event.xdata is not None and event.ydata is not None:
@@ -1326,10 +1342,18 @@ class NewLightApp:
     def auto_roi(self):
         if not self.require_movie():
             return
-        vals = self.param_dialog("Built-in Auto ROI", [("min_area", "Min area", 20), ("max_area", "Max area", 4000)])
+        image = self.state.display_image if self.state.display_image is not None else self.state.baseline_image
+        min_area_default = 20
+        max_area_default = 4000
+        if image is not None and self.last_cursor_image_xy is not None:
+            estimate = core.estimate_auto_roi_area_range(image, self.last_cursor_image_xy)
+            if estimate is not None:
+                min_area_default, max_area_default = estimate
+                x, y = self.last_cursor_image_xy
+                self.log(f"Built-in auto ROI seed ({x:.1f}, {y:.1f}) suggests area {min_area_default}-{max_area_default}.")
+        vals = self.param_dialog("Built-in Auto ROI", [("min_area", "Min area", min_area_default), ("max_area", "Max area", max_area_default)])
         if not vals:
             return
-        image = self.state.display_image if self.state.display_image is not None else self.state.baseline_image
         rois = core.auto_roi_from_image(image, int(vals["min_area"]), int(vals["max_area"]))
         self.set_rois(rois, "Built-in auto ROI")
 

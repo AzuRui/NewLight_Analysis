@@ -2,6 +2,12 @@
 
 ## 2026-05-11
 
+### Built-in Auto ROI Seed Estimate
+
+- Made the toolbar coordinate readout white for better contrast on the dark canvas background.
+- Added cursor-seeded area estimation to `Built-in Auto ROI` so the current image pixel position can prefill a rough `Min area` / `Max area` suggestion.
+- The area suggestion uses the connected component around the mouse position as a heuristic, then lets the dialog remain editable.
+
 ### NeuroSeg3 Confidence Manual Input
 
 - Replaced the NeuroSeg3 detection-confidence slider with a plain numeric input so sub-0.01 values such as `0.002` can be entered directly.

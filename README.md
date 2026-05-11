@@ -51,7 +51,7 @@ python NewLight_Analysis.py
   - NeuroSeg3 auto ROI backend
   - manual NeuroSeg3 detection confidence input and selectable `.pt` weight path
   - automatic built-in ROI fallback when NeuroSeg3 returns zero masks
-  - built-in auto ROI
+  - built-in auto ROI with cursor-seeded area suggestions
   - atlas/image ROI import
   - center-circle ROI drawing
   - freehand ROI drawing
@@ -89,6 +89,8 @@ This version uses NeuroSeg3 as the preferred ROI backend. NeuroSeg2 is kept as a
 `Detection conf` is YOLO's object-level confidence cutoff. A predicted ROI instance is kept only if the model confidence for that whole instance is above this value. Lower values keep more uncertain ROIs; higher values keep fewer, more confident ROIs. The GUI exposes this as a manual input because this dataset may need small values such as `0.002`.
 
 `Mask pixel cutoff` is the pixel-level threshold applied inside each accepted instance mask. The GUI keeps it fixed at `0.50` so routine NeuroSeg3 ROI creation has one primary tuning control; the backend still accepts an explicit value for advanced debugging.
+
+`Built-in Auto ROI` can use the current mouse pixel position on the image to suggest a rough `Min area` / `Max area` pair before the dialog opens. If the cursor is over a likely cell body, those defaults are usually closer to the right scale than the generic fallback values.
 
 ## Backend Notes
 

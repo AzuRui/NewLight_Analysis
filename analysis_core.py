@@ -390,6 +390,87 @@ def auto_roi_from_image(image: np.ndarray, min_area: int = 20, max_area: int = 4
     return rois
 
 
+def estimate_auto_roi_area_range(
+    image: np.ndarray,
+    seed_xy: tuple[float, float],
+    threshold: float | None = None,
+    min_scale: float = 0.5,
+    max_scale: float = 2.5,
+) -> tuple[int, int] | None:
+    img = gaussian_filter(normalize_image(image), sigma=1.0)
+    if img.ndim != 2:
+        return None
+    h, w = img.shape[:2]
+    try:
+        x, y = float(seed_xy[0]), float(seed_xy[1])
+    except Exception:
+        return None
+    if not np.isfinite(x) or not np.isfinite(y):
+        return None
+    col = int(round(x))
+    row = int(round(y))
+    if row < 0 or row >= h or col < 0 or col >= w:
+        return None
+
+    if threshold is None:
+        try:
+            threshold = float(filters.threshold_otsu(img))
+        except Exception:
+            return None
+
+    mask = img > threshold
+    labels = measure.label(mask)
+    area = None
+    seed_label = labels[row, col]
+    if seed_label > 0:
+        for region in measure.regionprops(labels):
+            if region.label == seed_label:
+                area = float(region.area)
+                break
+
+    if area is None:
+        radius = max(24, min(h, w) // 8)
+        y0 = max(0, row - radius)
+        y1 = min(h, row + radius + 1)
+        x0 = max(0, col - radius)
+        x1 = min(w, col + radius + 1)
+        crop = img[y0:y1, x0:x1]
+        if crop.size == 0:
+            return None
+        try:
+            crop_threshold = float(filters.threshold_otsu(crop))
+        except Exception:
+            crop_threshold = float(threshold)
+        crop_mask = crop > crop_threshold
+        crop_labels = measure.label(crop_mask)
+        crop_regions = measure.regionprops(crop_labels)
+        if not crop_regions:
+            return None
+        local_row = row - y0
+        local_col = col - x0
+        crop_label = crop_labels[local_row, local_col]
+        if crop_label > 0:
+            for region in crop_regions:
+                if region.label == crop_label:
+                    area = float(region.area)
+                    break
+        if area is None:
+            seed = np.array([local_row, local_col], dtype=np.float32)
+            region = min(
+                crop_regions,
+                key=lambda r: float(np.sum((np.asarray(r.centroid, dtype=np.float32) - seed) ** 2)),
+            )
+            area = float(region.area)
+
+    if area is None or area <= 0:
+        return None
+
+    min_area = max(3, int(round(area * min_scale)))
+    max_area = max(min_area + 1, int(round(area * max_scale)))
+    max_area = min(max_area, int(h * w))
+    return min_area, max_area
+
+
 def circle_mask(shape: tuple[int, int], center: tuple[float, float], radius: float) -> np.ndarray:
     y, x = np.ogrid[:shape[0], :shape[1]]
     cx, cy = center
