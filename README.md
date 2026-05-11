@@ -49,7 +49,7 @@ python NewLight_Analysis.py
   - falls back to CPU/NumPy when CuPy is unavailable
 - ROI tools:
   - NeuroSeg3 auto ROI backend
-  - editable NeuroSeg3 detection confidence, mask pixel cutoff, and `.pt` weight path
+  - slider-based NeuroSeg3 detection confidence and selectable `.pt` weight path
   - automatic built-in ROI fallback when NeuroSeg3 returns zero masks
   - built-in auto ROI
   - atlas/image ROI import
@@ -86,9 +86,9 @@ This version uses NeuroSeg3 as the preferred ROI backend. NeuroSeg2 is kept as a
 
 ## NeuroSeg3 Parameters
 
-`Detection conf 0-1` is YOLO's object-level confidence cutoff. A predicted ROI instance is kept only if the model confidence for that whole instance is above this value. Lower values keep more uncertain ROIs; higher values keep fewer, more confident ROIs.
+`Detection conf` is YOLO's object-level confidence cutoff. A predicted ROI instance is kept only if the model confidence for that whole instance is above this value. Lower values keep more uncertain ROIs; higher values keep fewer, more confident ROIs. The GUI exposes this as a slider with quick presets.
 
-`Mask pixel cutoff 0-1` is the pixel-level threshold applied inside each accepted instance mask. A pixel is included in the ROI when its predicted mask probability is above this value. Lower values make masks larger; higher values make masks tighter.
+`Mask pixel cutoff` is the pixel-level threshold applied inside each accepted instance mask. The GUI keeps it fixed at `0.50` so routine NeuroSeg3 ROI creation has one primary tuning control; the backend still accepts an explicit value for advanced debugging.
 
 ## Backend Notes
 

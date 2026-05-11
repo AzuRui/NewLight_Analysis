@@ -153,6 +153,127 @@ class ParameterDialog(tk.Toplevel):
         self.destroy()
 
 
+class NeuroSeg3Dialog(tk.Toplevel):
+    def __init__(self, parent, title, weights, default_weight="", default_conf=0.05, mask_threshold=0.5, fallback_default=True):
+        super().__init__(parent)
+        self.title(title)
+        self.configure(bg=THEME["bg"])
+        self.resizable(False, False)
+        self.values = None
+        self.conf_var = tk.DoubleVar(value=float(default_conf))
+        self.conf_text = tk.StringVar(value=f"{float(default_conf):.2f}")
+        self.weights_var = tk.StringVar(value=default_weight)
+        self.fallback_var = tk.BooleanVar(value=bool(fallback_default))
+        self._mask_threshold = float(mask_threshold)
+
+        body = ttk.Frame(self, padding=12)
+        body.grid(row=0, column=0, sticky="nsew")
+        body.columnconfigure(1, weight=1)
+
+        ttk.Label(body, text="Detection conf").grid(row=0, column=0, sticky="w", pady=4)
+        conf_row = ttk.Frame(body)
+        conf_row.grid(row=0, column=1, sticky="ew", pady=4)
+        conf_row.columnconfigure(0, weight=1)
+        self.conf_scale = ttk.Scale(conf_row, from_=0.0, to=1.0, orient="horizontal", variable=self.conf_var, command=self._on_conf_change)
+        self.conf_scale.grid(row=0, column=0, sticky="ew")
+        ttk.Label(conf_row, textvariable=self.conf_text, width=6, anchor="e").grid(row=0, column=1, padx=(8, 0))
+
+        preset_row = ttk.Frame(body)
+        preset_row.grid(row=1, column=1, sticky="w", pady=(0, 6))
+        for value in (0.02, 0.05, 0.10, 0.20, 0.35):
+            label = f"{value:.2f}".rstrip("0").rstrip(".")
+            ttk.Button(preset_row, text=label, width=5, command=lambda v=value: self.set_conf(v)).pack(side="left", padx=(0, 4))
+
+        ttk.Label(body, text="Mask pixel cutoff").grid(row=2, column=0, sticky="w", pady=4)
+        ttk.Label(body, text=f"Fixed at {self._mask_threshold:.2f}", style="Muted.TLabel").grid(row=2, column=1, sticky="w", pady=4)
+
+        ttk.Label(body, text="Weights .pt").grid(row=3, column=0, sticky="w", pady=4)
+        weight_row = ttk.Frame(body)
+        weight_row.grid(row=3, column=1, sticky="ew", pady=4)
+        weight_row.columnconfigure(0, weight=1)
+        if weights:
+            combo = ttk.Combobox(weight_row, textvariable=self.weights_var, values=weights)
+            combo.grid(row=0, column=0, sticky="ew")
+            combo.bind("<<ComboboxSelected>>", self._sync_weight_var)
+            self.weights_combo = combo
+        else:
+            entry = ttk.Entry(weight_row, textvariable=self.weights_var)
+            entry.grid(row=0, column=0, sticky="ew")
+            self.weights_entry = entry
+        ttk.Button(weight_row, text="Browse", command=self.browse_weights).grid(row=0, column=1, padx=(8, 0))
+
+        ttk.Checkbutton(
+            body,
+            text="Fallback on zero masks",
+            variable=self.fallback_var,
+        ).grid(row=4, column=0, columnspan=2, sticky="w", pady=(8, 4))
+
+        buttons = ttk.Frame(body)
+        buttons.grid(row=5, column=0, columnspan=2, sticky="e", pady=(12, 0))
+        ttk.Button(buttons, text="Cancel", command=self.destroy).grid(row=0, column=0, padx=(0, 8))
+        ttk.Button(buttons, text="Apply", command=self._apply).grid(row=0, column=1)
+
+        self.transient(parent)
+        self.grab_set()
+        self.protocol("WM_DELETE_WINDOW", self.destroy)
+        self.bind("<Escape>", lambda _event: self.destroy())
+        self.bind("<Return>", lambda _event: self._apply())
+        self.set_conf(default_conf)
+        self.after(0, self._focus_default)
+        self.wait_window(self)
+
+    def _focus_default(self):
+        if hasattr(self, "weights_combo"):
+            self.weights_combo.focus_set()
+        elif hasattr(self, "weights_entry"):
+            self.weights_entry.focus_set()
+
+    def _on_conf_change(self, value):
+        try:
+            self.conf_text.set(f"{max(0.0, min(1.0, float(value))):.2f}")
+        except Exception:
+            self.conf_text.set("0.05")
+
+    def set_conf(self, value):
+        value = max(0.0, min(1.0, float(value)))
+        self.conf_var.set(value)
+        self.conf_text.set(f"{value:.2f}")
+
+    def _sync_weight_var(self, _event=None):
+        self.weights_var.set(self.weights_var.get().strip())
+
+    def browse_weights(self):
+        initialdir = None
+        current = self.weights_var.get().strip()
+        if current:
+            current_path = Path(current).expanduser()
+            if current_path.parent.exists():
+                initialdir = str(current_path.parent)
+        if initialdir is None:
+            weights_dir = core.NEUROSEG3_DIR / "weights"
+            if weights_dir.exists():
+                initialdir = str(weights_dir)
+        options = {
+            "parent": self,
+            "title": "Select NeuroSeg3 weights",
+            "filetypes": [("PyTorch weights", "*.pt"), ("All files", "*.*")],
+        }
+        if initialdir:
+            options["initialdir"] = initialdir
+        path = filedialog.askopenfilename(**options)
+        if path:
+            self.weights_var.set(path)
+
+    def _apply(self):
+        self.values = {
+            "conf": round(float(self.conf_var.get()), 4),
+            "weights": self.weights_var.get(),
+            "fallback": bool(self.fallback_var.get()),
+            "mask_threshold": self._mask_threshold,
+        }
+        self.destroy()
+
+
 class HeatmapVideoDialog(tk.Toplevel):
     def __init__(self, app):
         super().__init__(app.root)
@@ -1234,23 +1355,16 @@ class NewLightApp:
             if "segmentation" in path.lower():
                 default_weight = path
                 break
-        vals = self.param_dialog(
-            "NeuroSeg3 ROI",
-            [
-                ("conf", "Detection conf 0-1", 0.05),
-                ("mask_threshold", "Mask pixel cutoff 0-1", 0.5),
-                ("weights", "Weights .pt", default_weight),
-                ("fallback", "Fallback if zero (yes/no)", "yes"),
-            ],
-        )
+        dlg = NeuroSeg3Dialog(self.root, "NeuroSeg3 ROI", weights, default_weight=default_weight)
+        vals = dlg.values
         if not vals:
             return
         image = self.state.display_image if self.state.display_image is not None else self.state.baseline_image
         out_dir = Path(self.state.source_path).with_suffix("").parent / "NewLight_temp"
         conf = float(vals["conf"])
-        mask_threshold = float(vals["mask_threshold"])
+        mask_threshold = float(vals.get("mask_threshold", 0.5))
         weights_path = vals["weights"].strip() or None
-        fallback = vals["fallback"].strip().lower() in {"y", "yes", "true", "1", "是"}
+        fallback = bool(vals["fallback"])
         self.run_worker(
             "NeuroSeg3 ROI",
             lambda: core.run_neuroseg3(image, str(out_dir), weights=weights_path, conf=conf, mask_threshold=mask_threshold),

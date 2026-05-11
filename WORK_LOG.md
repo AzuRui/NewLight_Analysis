@@ -2,6 +2,12 @@
 
 ## 2026-05-11
 
+### NeuroSeg3 ROI Dialog Simplification
+
+- Replaced the plain-text NeuroSeg3 ROI parameter prompt with a dedicated dialog that uses a detection-confidence slider and quick preset buttons.
+- Kept the mask pixel cutoff fixed at `0.50` in the GUI so users only tune the primary model confidence during ordinary ROI runs.
+- Added a weight-path chooser and a checkbox-style fallback toggle to make the workflow less error-prone than the original yes/no text entry.
+
 ### Display Resize Binding Fix
 
 - Restored TkAgg's native canvas resize handling by moving the app-specific redraw hook to Matplotlib `resize_event`.
