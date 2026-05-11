@@ -42,10 +42,20 @@ class ImageToolbar(NavigationToolbar2Tk):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        self._style_message_label()
+
+    def _style_message_label(self):
+        label = getattr(self, "_message_label", None)
+        if label is None:
+            return
         try:
-            self._message_label.configure(background=THEME["panel"], foreground="#ffffff")
+            label.configure(background=THEME["panel"], foreground="#ffffff", fg="#ffffff", bg=THEME["panel"])
         except tk.TclError:
             pass
+
+    def set_message(self, s):
+        super().set_message(s)
+        self._style_message_label()
 
 
 def apply_dark_theme(root):
@@ -1350,8 +1360,19 @@ class NewLightApp:
             if estimate is not None:
                 min_area_default, max_area_default = estimate
                 x, y = self.last_cursor_image_xy
-                self.log(f"Built-in auto ROI seed ({x:.1f}, {y:.1f}) suggests area {min_area_default}-{max_area_default}.")
-        vals = self.param_dialog("Built-in Auto ROI", [("min_area", "Min area", min_area_default), ("max_area", "Max area", max_area_default)])
+                cell_area_est = (min_area_default / 0.5 + max_area_default / 2.5) / 2.0
+                cell_diameter_est = 2.0 * float(np.sqrt(cell_area_est / np.pi))
+                self.log(
+                    f"Built-in auto ROI seed ({x:.1f}, {y:.1f}) suggests area {min_area_default}-{max_area_default} px^2 "
+                    f"(~{cell_area_est:.0f} px^2, ~{cell_diameter_est:.1f} px diameter)."
+                )
+        vals = self.param_dialog(
+            "Built-in Auto ROI",
+            [
+                ("min_area", "Min area (px^2)", min_area_default),
+                ("max_area", "Max area (px^2)", max_area_default),
+            ],
+        )
         if not vals:
             return
         rois = core.auto_roi_from_image(image, int(vals["min_area"]), int(vals["max_area"]))

@@ -138,3 +138,9 @@
 - Added `Max display` to the heatmap AVI dialog. `auto` keeps percentile-based scaling; a numeric value fixes the heatmap/colorbar upper limit.
 - Restored a visible `dF/F` colorbar for heatmap preview and saved AVI frames.
 - Added `Show colorbar` toggle to the heatmap AVI dialog.
+
+### Cursor Readout / Built-in Auto ROI
+
+- Forced the Matplotlib toolbar cursor readout to render in white on the dark theme so the live `x / y` coordinate display stays readable.
+- Updated `Built-in Auto ROI` to present `Min area` and `Max area` explicitly as pixel-area values (`px^2`).
+- When the mouse is hovering on image content, the app now logs both the estimated ROI area range and an equivalent cell diameter so users can convert a rough visual cell-size estimate into area bounds more easily.
