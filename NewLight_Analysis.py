@@ -546,6 +546,9 @@ class NewLightApp:
         self.canvas.mpl_connect("scroll_event", self.on_scroll)
 
     def on_canvas_resize(self, event):
+        width = max(1, int(event.width))
+        height = max(1, int(event.height))
+        self.fig.set_size_inches(width / self.fig.dpi, height / self.fig.dpi, forward=False)
         if self.state.display_image is not None or self.state.baseline_image is not None:
             self.redraw(preserve_view=True)
         else:
@@ -836,6 +839,16 @@ class NewLightApp:
         height = canvas_ratio / image_ratio
         return [0, (1.0 - height) / 2.0, 1, height]
 
+    def _view_axes_shape(self, image_shape, view_limits=None):
+        if view_limits is None:
+            return image_shape
+        xlim, ylim = view_limits
+        width = abs(float(xlim[1]) - float(xlim[0]))
+        height = abs(float(ylim[1]) - float(ylim[0]))
+        if width <= 0 or height <= 0:
+            return image_shape
+        return (height, width)
+
     def _sanitize_view_limits(self, view_limits, image_shape):
         if view_limits is None or image_shape is None:
             return None
@@ -877,9 +890,10 @@ class NewLightApp:
         self.ax.set_xlim(*view_limits[0])
         self.ax.set_ylim(*view_limits[1])
 
-    def _apply_image_axes(self, image_shape):
+    def _apply_image_axes(self, image_shape, view_limits=None):
         self.fig.subplots_adjust(left=0, right=1, top=1, bottom=0, wspace=0, hspace=0)
-        self.ax.set_position([0, 0, 1, 1])
+        self.ax.set_position(self._image_axes_position(self._view_axes_shape(image_shape, view_limits)), which="both")
+        self.ax.set_anchor("C")
 
     def redraw(self, extra=None, preserve_view=True):
         if preserve_view and self._view_limits is not None and not self._view_is_fit:
@@ -900,17 +914,17 @@ class NewLightApp:
             overlay = core.draw_roi_overlay(img, self.state.roi_masks, self.state.roi_names)
             self._view_lock = True
             try:
-                self._apply_image_axes(img.shape)
-                self.ax.imshow(img, cmap="gray", interpolation="nearest", origin="upper", aspect="equal")
+                self._apply_image_axes(img.shape, view_limits)
+                self.ax.imshow(img, cmap="gray", interpolation="nearest", origin="upper", aspect="auto")
                 if self.state.roi_masks:
-                    self.ax.imshow(overlay, alpha=0.55, interpolation="nearest", origin="upper", aspect="equal")
-                self.ax.set_aspect("equal", adjustable="box")
+                    self.ax.imshow(overlay, alpha=0.55, interpolation="nearest", origin="upper", aspect="auto")
+                self.ax.set_aspect("auto")
                 self.ax.set_xlim(*view_limits[0])
                 self.ax.set_ylim(*view_limits[1])
             finally:
                 self._view_lock = False
         if extra is not None:
-            self.ax.imshow(extra, alpha=0.55, interpolation="nearest", origin="upper", aspect="equal")
+            self.ax.imshow(extra, alpha=0.55, interpolation="nearest", origin="upper", aspect="auto")
         if self.current_polygon:
             xs, ys = zip(*self.current_polygon)
             self.ax.plot(xs, ys, color="cyan", linewidth=1.5)

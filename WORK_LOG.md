@@ -1,5 +1,13 @@
 # Work Log
 
+## 2026-05-11
+
+### Display Auto-Fit And Centering
+
+- Updated the main image canvas resizing path so the Matplotlib figure now tracks the visible canvas size on window resize/maximize.
+- Adjusted image axes placement to center the displayed image or current zoomed view inside the available canvas while preserving aspect ratio.
+- The display is no longer intended to stay pinned to the old figure size in the upper-left corner when the window grows.
+
 ## 2026-05-10
 
 ### Portable Application Build
