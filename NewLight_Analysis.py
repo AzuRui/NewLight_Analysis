@@ -893,7 +893,14 @@ class NeuroAlignWizard(tk.Toplevel):
             path = outdir / "cluster_on_affine_preview.png"
             if not path.exists():
                 self.create_cluster_preview(outdir)
-            return path if path.exists() else outdir / "subject_inner_boundaries.png"
+            if path.exists():
+                return path
+            if self.current_result.get("stage") == "outer":
+                for name in ("outer_fit_preview.png", "outer_registration_overlay.png", "subject_outer_mask.png"):
+                    fallback = outdir / name
+                    if fallback.exists():
+                        return fallback
+            return None
         return outdir / "final_warp_overlay.png"
 
     def preview_mean_image(self, shape_hw):
@@ -981,6 +988,8 @@ class NeuroAlignWizard(tk.Toplevel):
         path = self.preview_path()
         if path is None:
             self.preview_canvas.create_text(20, 20, anchor="nw", text="Click Rebuild to generate this preview.", fill=THEME["text"], font=("Segoe UI", 12))
+            if self.current_stage == "cluster":
+                self.preview_caption.set("Step 2 preview is not built yet. Click Rebuild to generate clustering output.")
             return
         if not Path(path).exists():
             self.preview_canvas.create_text(20, 20, anchor="nw", text=f"Preview not found:\n{path}", fill=THEME["text"], font=("Segoe UI", 12))
@@ -998,6 +1007,8 @@ class NeuroAlignWizard(tk.Toplevel):
             "cluster": "Clustering preview: Leiden clusters with affine atlas boundary overlay, mean image hidden.",
             "final": "Final atlas preview: warped atlas over subject image.",
         }
+        if self.current_stage == "cluster" and self.current_result and self.current_result.get("stage") == "outer" and path.name.startswith("outer_"):
+            captions["cluster"] = "Step 1 outer fit preview shown until clustering preview is rebuilt."
         self.preview_caption.set(captions[self.current_stage])
 
     def next_stage(self):

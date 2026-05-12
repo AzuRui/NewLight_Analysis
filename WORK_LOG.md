@@ -205,3 +205,9 @@
 - The wizard now replaces blank values from older saved settings with current defaults so stale local settings cannot keep Step 2 empty.
 - Rebuilding Step 1 clears stale downstream cluster/final outputs, and rebuilding Step 2 clears stale final outputs, so old files no longer make a partial rebuild look like a full pipeline run.
 - Verified Python compilation, Tk wizard construction, cluster default values, and `caiman_latest` worker import/help.
+
+### NeuroAlign Step 2 Preview Fallback
+
+- Fixed the Step 2 preview fallback so it no longer searches for `subject_inner_boundaries.png` before clustering has been rebuilt.
+- When Step 2 opens immediately after Step 1, the wizard now reuses generated Step 1 previews such as `outer_fit_preview.png` until the user clicks `Rebuild` for clustering.
+- If no clustering preview exists yet, the caption now says to rebuild Step 2 instead of showing a misleading missing-file path.
