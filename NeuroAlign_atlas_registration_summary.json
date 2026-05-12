@@ -1,0 +1,200 @@
+{
+  "project": "NeuroAlign",
+  "created_at": "2026-05-12",
+  "source_dir": "E:/WorkSpace/2cafe_analysis/NeuroAlign",
+  "target_dir": "E:/WorkSpace/NewLight_Analysis",
+  "summary_type": "atlas_build_and_registration_handoff",
+  "source_relationship": {
+    "atlas_builder_output": "atlas_regions_raw.json",
+    "registration_input": "atlas_regions_raw.json"
+  },
+  "build_atlas_from_lines_autocomplete": {
+    "path": "E:/WorkSpace/2cafe_analysis/NeuroAlign/build_atlas_from_lines_autocomplete.py",
+    "goal": "从黑底白线的标准脑图谱图像中提取封闭区域，生成 atlas_regions_raw.json 和配套预览图。",
+    "input_requirements": [
+      "黑色背景",
+      "白色区域边界线",
+      "尽量不要带文字或额外标注",
+      "边界线尽量闭合、连续、清晰"
+    ],
+    "main_pipeline": [
+      "extract_line_mask",
+      "auto_complete_line_mask",
+      "barrier_mask 膨胀",
+      "enclosed_regions_from_barrier",
+      "build_regions_from_inside",
+      "assign_region_ids",
+      "build_brain_outer_polygon",
+      "build_midline_polyline",
+      "保存 mask / 预览图 / atlas JSON"
+    ],
+    "cli_defaults": {
+      "line_threshold": 180,
+      "line_close_radius": 0,
+      "detect_dark_lines": false,
+      "auto_gap_close_radius": 1,
+      "auto_gap_bridge_dist": 8,
+      "auto_gap_bridge_thickness": 1,
+      "remove_small_line_objects": 0,
+      "barrier_radius": 1,
+      "min_region_area": 300,
+      "simplify_epsilon_ratio": 0.001,
+      "midline_tol": 8,
+      "midline_sample_count": 32,
+      "midline_search_half_width": 28
+    },
+    "outputs": [
+      "brain_line_mask.png",
+      "brain_line_mask_completed.png",
+      "barrier_mask.png",
+      "inside_mask.png",
+      "brain_mask.png",
+      "atlas_preview_ids_colored.png",
+      "atlas_preview_filled.png",
+      "atlas_regions_raw.json",
+      "region_name_mapping_template.json",
+      "atlas_regions_named.json (optional)"
+    ],
+    "atlas_json_schema": {
+      "top_level_keys": [
+        "image_width",
+        "image_height",
+        "midline_x",
+        "brain_outer_polygon",
+        "midline_polyline",
+        "regions"
+      ],
+      "region_keys": [
+        "id",
+        "name",
+        "hemisphere",
+        "centroid",
+        "bbox",
+        "area",
+        "polygon"
+      ]
+    },
+    "accuracy_notes": [
+      "这一步对 line_threshold、barrier_radius、gap bridging 最敏感。",
+      "白线有断点时会导致区域碎裂；屏障过厚时会把相邻脑区粘住。",
+      "atlas 原图越干净、越高对比，后面的注册越稳定。"
+    ]
+  },
+  "atlas_registration_merged_bilateral_midline": {
+    "path": "E:/WorkSpace/2cafe_analysis/NeuroAlign/atlas_registration_merged_bilateral_midline.py",
+    "goal": "把标准图谱配准到实际脑区，流程是外轮廓粗配准 -> 中缝约束 -> 内边界匹配 -> TPS 局部形变 -> 自动重试/择优输出。",
+    "main_pipeline": [
+      "build_subject_data",
+      "auto_brain_mask",
+      "Leiden superpixel label map",
+      "outer affine atlas fit",
+      "subject midline profile estimation",
+      "bilateral midline anchors",
+      "adaptive inner boundary candidate search",
+      "TPS 候选评估",
+      "auto-rerun 选最优尝试",
+      "最终输出 affine 或 TPS 结果"
+    ],
+    "effective_defaults": {
+      "brain_mask_percentile": 52,
+      "functional_unit_mm": 1.1,
+      "compactness": 8.5,
+      "resolution": 0.42,
+      "outer_resample_n": 144,
+      "outer_anchor_count": 16,
+      "outer_anchor_weight": 1,
+      "midline_anchor_count": 12,
+      "midline_anchor_weight": 2,
+      "inner_max_pairs_per_hemi": 180,
+      "max_ctrl_shift_px": 10.0,
+      "min_inner_ctrl_for_tps": 8,
+      "tps_smooth": 24.0,
+      "tps_smooth_candidates": "60,40,24,16,12",
+      "auto_rerun_max_attempts": 5,
+      "adaptive_search_dist_min": 6.0,
+      "adaptive_search_dist_max": 40.0,
+      "adaptive_search_quantile_min": 0.45,
+      "adaptive_search_quantile_max": 0.98,
+      "final_score_inner_weight": 0.56,
+      "final_score_iou_weight": 0.24,
+      "final_score_outer_weight": 0.12,
+      "final_score_pair_weight": 0.08,
+      "final_score_deform_weight": 0.0,
+      "midline_use_double_boundary": true,
+      "mask_candidate_percentiles": "58,64,70,76,82"
+    },
+    "key_outputs": [
+      "affine_atlas_regions.json",
+      "warped_atlas_regions.json",
+      "affine_atlas_label_map.npy",
+      "warped_atlas_label_map.npy",
+      "registration_summary.json",
+      "runtime_stats.json",
+      "subject_midline_profile.json",
+      "selected_attempt_config.json",
+      "attempt_results.json",
+      "control_points_outer.csv",
+      "control_points_inner.csv",
+      "control_points_all.csv",
+      "subject_outer_mask.png",
+      "subject_inner_boundaries.png",
+      "outer_registration_overlay.png",
+      "final_warp_overlay.png",
+      "final_warp_segmentation_overlay.png",
+      "control_points_overlay.png",
+      "midline_profile_overlay.png",
+      "warped_atlas_mask.png",
+      "warped_atlas_pretty_boundaries.png",
+      "score_triangle.png",
+      "score_components.json",
+      "report.html"
+    ],
+    "readme_recommended_trial_cfg": {
+      "brain_mask_percentile": 72,
+      "midline_anchor_count": 14,
+      "midline_anchor_weight": 8,
+      "outer_anchor_weight": 0.5,
+      "tps_smooth": 3,
+      "tps_smooth_candidates": "12,8,5,3,1",
+      "min_inner_ctrl_for_tps": 4,
+      "max_ctrl_shift_px": 24,
+      "auto_rerun_max_attempts": 8,
+      "auto_rerun_force_min_inner": 5,
+      "adaptive_search_quantile_min": 0.60,
+      "adaptive_search_quantile_max": 0.95,
+      "final_score_inner_weight": 0.55,
+      "final_score_iou_weight": 0.10,
+      "final_score_outer_weight": 0.08
+    },
+    "accuracy_notes": [
+      "README 里推荐的强局部形变区间，比当前脚本默认值更激进；如果不手动覆盖，TPS 往往太硬。",
+      "当前代码默认的 midline_anchor_weight、outer_anchor_weight、tps_smooth 和 max_ctrl_shift_px，都比 README 的建议更保守。",
+      "subject_mask 和 midline_profile 的质量会直接决定后续 inner anchors 是否稳定。"
+    ]
+  },
+  "readme_alignment": {
+    "matches": [
+      "README 里强调的优先级顺序是：外轮廓粗配准 -> 中缝约束 -> 内边界匹配 -> TPS，这与代码主流程一致。",
+      "代码已经实现了 midline profile、双边界 midline anchors、auto-rerun 和 score report，和 README 的整体方向一致。"
+    ],
+    "mismatches_or_risks": [
+      "build_atlas_from_lines_autocomplete.py 顶部说明仍写着旧命令 `python build_atlas_from_lines_final.py`，这是过期文案。",
+      "atlas_registration_merged_bilateral_midline.py 的实际默认值比 README 的推荐试验值保守得多，尤其是 brain mask percentile、midline 权重、TPS smooth 和 max_ctrl_shift_px。",
+      "如果一直用默认配置，很可能不会进入 README 所说的强局部弯曲区间。"
+    ]
+  },
+  "suggested_first_try_order": [
+    "先不要改算法，直接按 README 推荐 trial cfg 覆盖默认值。",
+    "先看 subject_outer_mask.png、subject_inner_boundaries.png、midline_profile_overlay.png，确认 mask 和中缝没跑偏。",
+    "如果内边界太松，先把 tps_smooth 降到 3~8，并把 max_ctrl_shift_px 提到 24 左右。",
+    "如果 mask 吞背景或中缝，先把 brain_mask_percentile 提到 72 左右。",
+    "如果 midline 影响不明显，把 midline_anchor_count 提到 14 左右，midline_anchor_weight 提到 8，outer_anchor_weight 降到 0.5。",
+    "如果仍不稳，再把 auto_rerun_max_attempts 提高到 8，并检查 selected_attempt_config.json / attempt_results.json。"
+  ],
+  "practical_debug_checks": [
+    "看 registration_summary.json 里的 delivered_mode、final_warp_score、affine_warp_score、n_inner_ctrl。",
+    "看 subject_midline_profile.json 里的 reliability、valid_ratio、width_mean_px。",
+    "看 final_warp_segmentation_overlay.png 是否出现脑区整体偏移、局部过弯或 midline 左右不对称。",
+    "看 control_points_all.csv 里 midline / inner / outer 控制点是否集中在少数局部区域。"
+  ]
+}

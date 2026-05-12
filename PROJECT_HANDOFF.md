@@ -129,6 +129,9 @@ Requirements already discussed:
 - The built-in auto ROI dialog labels these fields as `px^2`, and the log now reports an approximate cell area and equivalent diameter so a rough visual cell-size estimate can be converted into the area range more directly.
 - `Built-in Auto ROI` also has a `Use last 2 ROIs` helper. It reads the last two drawn ROIs, treats them as size samples, and fills `Min area` / `Max area` from their measured pixel areas.
 - This exists because the single-click seed estimator can be very unstable on noisy, ring-like, or heterogeneous images and often returns odd tiny ranges that create strange ROIs.
+- `NeuroAlign_atlas_registration_summary.json` now lives in the `NewLight_Analysis` repo root. It summarizes the atlas-builder output contract, the registration pipeline, the effective defaults, the README-recommended trial config, and the first tuning steps to try.
+- The merged registration script's defaults are more conservative than the README's strongest recommendation, so the summary explicitly calls out the knobs that matter most: `brain_mask_percentile`, `midline_anchor_count`, `midline_anchor_weight`, `outer_anchor_weight`, `tps_smooth`, `min_inner_ctrl_for_tps`, `max_ctrl_shift_px`, and `adaptive_search_quantile_*`.
+- The atlas-builder docstring still mentions the old `build_atlas_from_lines_final.py` run command; it should be updated when the file is touched next.
 
 ## Git / Record Policy
 

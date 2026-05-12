@@ -150,3 +150,9 @@
 - Added a dedicated `Built-in Auto ROI` dialog with a `Use last 2 ROIs` helper.
 - The helper reads the last two drawn ROIs, treats them as size samples, and fills `Min area` / `Max area` from those sample areas.
 - This is meant to replace brittle single-point seed estimates on noisy or ring-like images where the thresholded connected-component size can be misleading.
+
+### NeuroAlign Atlas Notes
+
+- Added `NeuroAlign_atlas_registration_summary.json` in the repo root as a handoff note for `build_atlas_from_lines_autocomplete.py` and `atlas_registration_merged_bilateral_midline.py`.
+- The summary records the effective registration defaults, the README-recommended trial config, and the first tuning order to try for better accuracy.
+- It also notes a stale docstring command in the atlas builder (`build_atlas_from_lines_final.py`) so the entry-point text can be cleaned up later.
