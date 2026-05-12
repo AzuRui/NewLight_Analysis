@@ -155,6 +155,7 @@ Requirements already discussed:
 - Step 2 cluster parameters now have explicit GUI defaults from `neuroalign_recommended_cfg`: `functional_unit_mm`, `resolution`, `compactness`, `min_n_segments`, `max_n_segments`, `min_cluster_size_superpixels`, `sparsity_percentile`, `symmetry_reward`, `distance_decay_scale`, and `inner_max_pairs_per_hemi`.
 - Blank values from old `NewLight_user_settings.json` snapshots are replaced with current defaults when the wizard opens.
 - Step 2 preview fallback now uses Step 1 outputs such as `outer_fit_preview.png` or `outer_registration_overlay.png`; it no longer probes for `subject_inner_boundaries.png` before clustering has been rebuilt.
+- Step 3 preview fallback now uses Step 2 `cluster_on_affine_preview.png` before final rebuild; if that is unavailable it falls back to Step 1 previews instead of reporting missing `final_warp_overlay.png`.
 
 ## Git / Record Policy
 

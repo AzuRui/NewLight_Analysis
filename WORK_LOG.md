@@ -211,3 +211,9 @@
 - Fixed the Step 2 preview fallback so it no longer searches for `subject_inner_boundaries.png` before clustering has been rebuilt.
 - When Step 2 opens immediately after Step 1, the wizard now reuses generated Step 1 previews such as `outer_fit_preview.png` until the user clicks `Rebuild` for clustering.
 - If no clustering preview exists yet, the caption now says to rebuild Step 2 instead of showing a misleading missing-file path.
+
+### NeuroAlign Step 3 Preview Fallback
+
+- Fixed the Step 3 preview fallback so it no longer reports missing `final_warp_overlay.png` before the final stage has been rebuilt.
+- When Step 3 opens immediately after Step 2, the wizard now shows `cluster_on_affine_preview.png` until the user clicks `Rebuild` for final atlas generation.
+- If Step 2 output is also unavailable, Step 3 falls back to Step 1 previews such as `outer_fit_preview.png`.
