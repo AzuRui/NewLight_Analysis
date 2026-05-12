@@ -94,15 +94,32 @@ def atlas_builder_defaults() -> dict:
 def neuroalign_recommended_cfg() -> dict:
     fallback = {
         "brain_mask_percentile": 72,
+        "mask_min_area_frac": 0.06,
+        "mask_max_area_frac": 0.78,
+        "mask_max_center_fill_frac": 0.45,
+        "outer_resample_n": 128,
+        "outer_anchor_count": 16,
         "midline_anchor_count": 14,
         "midline_anchor_weight": 8,
         "outer_anchor_weight": 0.5,
+        "functional_unit_mm": 1.20,
+        "compactness": 9.0,
+        "resolution": 0.38,
+        "min_n_segments": 320,
+        "max_n_segments": 3600,
+        "min_cluster_size_superpixels": 12,
+        "sparsity_percentile": 94.0,
+        "symmetry_reward": 0.30,
+        "distance_decay_scale": 0.50,
+        "inner_max_pairs_per_hemi": 180,
         "tps_smooth": 3,
         "tps_smooth_candidates": "12,8,5,3,1",
         "min_inner_ctrl_for_tps": 4,
         "max_ctrl_shift_px": 24,
         "auto_rerun_max_attempts": 8,
         "auto_rerun_force_min_inner": 5,
+        "adaptive_search_dist_min": 6.0,
+        "adaptive_search_dist_max": 40.0,
         "adaptive_search_quantile_min": 0.60,
         "adaptive_search_quantile_max": 0.95,
         "final_score_inner_weight": 0.55,
@@ -605,26 +622,42 @@ class NeuroAlignWizard(tk.Toplevel):
         self.video_var = tk.StringVar(value=defaults.get("video", ""))
         self.atlas_json_var = tk.StringVar(value=defaults.get("atlas_json", ""))
         self.outdir_var = tk.StringVar(value=defaults.get("outdir", default_neuroalign_outdir("neuroalign")))
-        self.cfg_vars = {
-            key: tk.StringVar(value=str(cfg.get(key, neuroalign_recommended_cfg().get(key, ""))))
-            for key in [
-                "brain_mask_percentile",
-                "midline_anchor_count",
-                "midline_anchor_weight",
-                "outer_anchor_weight",
-                "tps_smooth",
-                "max_ctrl_shift_px",
-                "min_inner_ctrl_for_tps",
-                "auto_rerun_max_attempts",
-                "resolution",
-                "compactness",
-                "min_n_segments",
-                "max_n_segments",
-                "inner_max_pairs_per_hemi",
-                "adaptive_search_quantile_min",
-                "adaptive_search_quantile_max",
-            ]
-        }
+        recommended_cfg = neuroalign_recommended_cfg()
+        cfg_keys = [
+            "brain_mask_percentile",
+            "mask_min_area_frac",
+            "mask_max_area_frac",
+            "mask_max_center_fill_frac",
+            "outer_resample_n",
+            "outer_anchor_count",
+            "midline_anchor_count",
+            "midline_anchor_weight",
+            "outer_anchor_weight",
+            "functional_unit_mm",
+            "resolution",
+            "compactness",
+            "min_n_segments",
+            "max_n_segments",
+            "min_cluster_size_superpixels",
+            "sparsity_percentile",
+            "symmetry_reward",
+            "distance_decay_scale",
+            "inner_max_pairs_per_hemi",
+            "tps_smooth",
+            "max_ctrl_shift_px",
+            "min_inner_ctrl_for_tps",
+            "auto_rerun_max_attempts",
+            "adaptive_search_dist_min",
+            "adaptive_search_dist_max",
+            "adaptive_search_quantile_min",
+            "adaptive_search_quantile_max",
+        ]
+        self.cfg_vars = {}
+        for key in cfg_keys:
+            value = cfg.get(key, recommended_cfg.get(key, ""))
+            if value is None or str(value).strip() == "":
+                value = recommended_cfg.get(key, "")
+            self.cfg_vars[key] = tk.StringVar(value=str(value))
 
         body = ttk.Frame(self, padding=10)
         body.pack(fill="both", expand=True)
@@ -709,22 +742,34 @@ class NeuroAlignWizard(tk.Toplevel):
         if self.current_stage == "outer":
             return [
                 ("brain_mask_percentile", "Brain mask percentile"),
-                ("midline_anchor_count", "Midline anchors"),
-                ("midline_anchor_weight", "Midline weight"),
+                ("mask_min_area_frac", "Mask min area frac"),
+                ("mask_max_area_frac", "Mask max area frac"),
+                ("mask_max_center_fill_frac", "Max center fill frac"),
+                ("outer_resample_n", "Outer resample pts"),
+                ("outer_anchor_count", "Outer anchors"),
                 ("outer_anchor_weight", "Outer weight"),
-                ("max_ctrl_shift_px", "Max ctrl shift px"),
             ]
         if self.current_stage == "cluster":
             return [
+                ("functional_unit_mm", "Functional unit mm"),
                 ("resolution", "Cluster resolution"),
                 ("compactness", "SLIC compactness"),
                 ("min_n_segments", "Min segments"),
                 ("max_n_segments", "Max segments"),
+                ("min_cluster_size_superpixels", "Min cluster size"),
+                ("sparsity_percentile", "Sparsity percentile"),
+                ("symmetry_reward", "Symmetry reward"),
+                ("distance_decay_scale", "Distance decay"),
                 ("inner_max_pairs_per_hemi", "Inner pairs / hemi"),
             ]
         return [
+            ("midline_anchor_count", "Midline anchors"),
+            ("midline_anchor_weight", "Midline weight"),
+            ("max_ctrl_shift_px", "Max ctrl shift px"),
             ("tps_smooth", "TPS smooth"),
             ("min_inner_ctrl_for_tps", "Min inner ctrl"),
+            ("adaptive_search_dist_min", "Search dist min"),
+            ("adaptive_search_dist_max", "Search dist max"),
             ("adaptive_search_quantile_min", "Search quantile min"),
             ("adaptive_search_quantile_max", "Search quantile max"),
             ("auto_rerun_max_attempts", "Auto rerun attempts"),
@@ -747,7 +792,17 @@ class NeuroAlignWizard(tk.Toplevel):
             raw = var.get().strip()
             if raw == "":
                 continue
-            if key in {"midline_anchor_count", "min_inner_ctrl_for_tps", "auto_rerun_max_attempts", "min_n_segments", "max_n_segments", "inner_max_pairs_per_hemi"}:
+            if key in {
+                "outer_resample_n",
+                "outer_anchor_count",
+                "midline_anchor_count",
+                "min_inner_ctrl_for_tps",
+                "auto_rerun_max_attempts",
+                "min_n_segments",
+                "max_n_segments",
+                "min_cluster_size_superpixels",
+                "inner_max_pairs_per_hemi",
+            }:
                 cfg[key] = int(float(raw))
             else:
                 cfg[key] = float(raw)
@@ -783,14 +838,15 @@ class NeuroAlignWizard(tk.Toplevel):
             return
         self.app.user_settings["neuroalign"] = vals
         save_user_settings(self.app.user_settings)
+        stage = self.current_stage
         self.running = True
         self.rebuild_button.configure(state="disabled")
-        self.preview_caption.set("Running NeuroAlign rebuild...")
-        self.log(f"Rebuild started for {self.current_stage}.")
+        self.preview_caption.set(f"Running NeuroAlign {stage} stage...")
+        self.log(f"Rebuild started for {stage}.")
 
         def target():
             try:
-                result = self.app.run_neuroalign_backend(vals)
+                result = self.app.run_neuroalign_backend(vals, stage=stage)
                 try:
                     self.after(0, lambda result=result: self.rebuild_done(result, None))
                 except tk.TclError:
@@ -814,8 +870,11 @@ class NeuroAlignWizard(tk.Toplevel):
         self.current_result = result
         self.last_run_log = str(result.get("log", "")).strip()
         outdir = Path(result["outdir"])
-        self.create_outer_preview(outdir)
-        self.create_cluster_preview(outdir)
+        result_stage = result.get("stage", self.current_stage)
+        if result_stage == "outer":
+            self.create_outer_preview(outdir)
+        elif result_stage == "cluster":
+            self.create_cluster_preview(outdir)
         self.log(f"Rebuild finished: {result.get('outdir')}")
         if self.last_run_log:
             self.log(self.last_run_log[-1200:])
@@ -952,8 +1011,8 @@ class NeuroAlignWizard(tk.Toplevel):
         self.render_stage()
 
     def accept(self):
-        if not self.current_result:
-            messagebox.showwarning("NeuroAlign", "Please run Rebuild before using the result.")
+        if not self.current_result or not self.current_result.get("warped_json"):
+            messagebox.showwarning("NeuroAlign", "Please run the final step before using the result.")
             return
         self.values = self.current_result
         self.destroy()
@@ -2192,8 +2251,8 @@ class NewLightApp:
         if wizard.values:
             self._finish_neuroalign(wizard.values)
 
-    def run_neuroalign_backend(self, vals):
-        script = NEUROALIGN_DIR / "atlas_registration_merged_bilateral_midline.py"
+    def run_neuroalign_backend(self, vals, stage="final"):
+        script = APP_DIR / "neuroalign_step_worker.py"
         outdir = Path(vals["outdir"])
         cfg_path = outdir / "neuroalign_config.json"
         outdir.mkdir(parents=True, exist_ok=True)
@@ -2209,19 +2268,17 @@ class NewLightApp:
             json.dump(bundle, f, ensure_ascii=False, indent=2)
         log = run_backend_script(
             script,
-            [
-                "--config", str(cfg_path),
-                "--video", vals["video"],
-                "--atlas_json", vals["atlas_json"],
-                "--outdir", str(outdir),
-            ],
-            cwd=NEUROALIGN_DIR,
+            ["--stage", stage, "--config", str(cfg_path)],
+            cwd=APP_DIR,
             timeout=None,
         )
+        result = {"outdir": str(outdir), "config": str(cfg_path), "stage": stage, "log": log}
         warped_json = outdir / "warped_atlas_regions.json"
-        if not warped_json.exists():
+        if stage == "final" and not warped_json.exists():
             raise RuntimeError("NeuroAlign finished but did not create warped_atlas_regions.json")
-        return {"warped_json": str(warped_json), "outdir": str(outdir), "config": str(cfg_path), "log": log}
+        if warped_json.exists():
+            result["warped_json"] = str(warped_json)
+        return result
 
     def _finish_neuroalign(self, result):
         self.last_neuroalign_output_dir = result["outdir"]

@@ -193,3 +193,15 @@
 - Added a custom outer fitting preview `outer_fit_preview.png` with the current mean/projection image rendered at 30% opacity, plus subject outer contour, affine atlas outer contour, and atlas midline.
 - Added a custom clustering preview `cluster_on_affine_preview.png` that overlays Leiden clusters with the affine atlas boundary and intentionally hides the mean image.
 - Exposed more stage-specific tuning controls for mask/outer/midline fit, clustering, and final TPS/adaptive search.
+
+### NeuroAlign True Step Worker
+
+- Added `neuroalign_step_worker.py` so NeuroAlign rebuilds are truly staged instead of running the full registration pipeline for every preview.
+- Step 1 / `outer` now runs video preprocessing, subject mask extraction, outer affine fitting, and saves cached intermediates such as `preprocessed_video.npy`, `mean_img.npy`, `subject_mask.npy`, `affine_atlas_regions.json`, and `affine_atlas_label_map.npy`.
+- Step 2 / `cluster` now reuses the cached preprocessed video and subject mask, computes only the Leiden label map, and saves `leiden_label_map.npy` plus clustering preview inputs.
+- Step 3 / `final` now reuses the cached label map and subject mask, then runs only inner matching / TPS / final atlas export.
+- The GUI now calls the step worker with `--stage outer`, `--stage cluster`, or `--stage final` depending on the active wizard page.
+- Added missing defaults for clustering parameters so Step 2 no longer opens with blank parameter fields.
+- The wizard now replaces blank values from older saved settings with current defaults so stale local settings cannot keep Step 2 empty.
+- Rebuilding Step 1 clears stale downstream cluster/final outputs, and rebuilding Step 2 clears stale final outputs, so old files no longer make a partial rebuild look like a full pipeline run.
+- Verified Python compilation, Tk wizard construction, cluster default values, and `caiman_latest` worker import/help.
