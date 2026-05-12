@@ -21,6 +21,7 @@ Output/
 
 # Runtime output and temporary analysis data
 NewLight_temp/
+NeuroAlign_runs/
 temp/
 tmp/
 *.log

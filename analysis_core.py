@@ -704,6 +704,51 @@ def process_atlas_image(path: str, frame_shape: tuple[int, int], min_area: int =
     return rois, names
 
 
+def process_atlas_json(path: str, frame_shape: tuple[int, int], min_area: int = 50) -> tuple[list[np.ndarray], list[str]]:
+    with open(path, "r", encoding="utf-8") as f:
+        atlas = json.load(f)
+    regions = atlas.get("regions", [])
+    if not isinstance(regions, list) or not regions:
+        raise ValueError("Atlas JSON has no regions")
+
+    frame_h, frame_w = frame_shape[:2]
+    src_w = int(atlas.get("image_width", frame_w) or frame_w)
+    src_h = int(atlas.get("image_height", frame_h) or frame_h)
+    scale_x = frame_w / max(src_w, 1)
+    scale_y = frame_h / max(src_h, 1)
+
+    region_items = []
+    for idx, region in enumerate(regions, start=1):
+        polygon = region.get("polygon")
+        if not polygon:
+            continue
+        pts = np.asarray(polygon, dtype=np.float32)
+        if pts.ndim != 2 or pts.shape[0] < 3:
+            continue
+        pts = np.column_stack([pts[:, 0] * scale_x, pts[:, 1] * scale_y])
+        mask = np.zeros((frame_h, frame_w), dtype=np.uint8)
+        cv2.fillPoly(mask, [np.round(pts).astype(np.int32)], 1)
+        if int(mask.sum()) < int(min_area):
+            continue
+        ys, xs = np.where(mask > 0)
+        if len(xs) == 0:
+            continue
+        centroid_x = float(np.mean(xs))
+        centroid_y = float(np.mean(ys))
+        name = region.get("name")
+        if name is None or str(name).strip() == "":
+            name = f"AtlasROI{idx}"
+        region_items.append((centroid_y, centroid_x, mask.astype(bool), str(name)))
+
+    if not region_items:
+        raise ValueError("No valid ROIs found in atlas JSON")
+
+    region_items.sort(key=lambda item: (item[0], item[1]))
+    rois = [item[2] for item in region_items]
+    names = [item[3] for item in region_items]
+    return rois, names
+
+
 def export_results(
     output_dir: str,
     name: str,
@@ -1067,7 +1112,19 @@ def save_heatmap_video(
 
 def run_conda_worker(env_name: str, script: str, args: list[str], cwd: str | None = None, timeout: int | None = None) -> subprocess.CompletedProcess:
     cmd = ["conda", "run", "-n", env_name, "python", script] + args
-    return subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, timeout=timeout)
+    env = os.environ.copy()
+    env.setdefault("PYTHONIOENCODING", "utf-8")
+    env.setdefault("PYTHONUTF8", "1")
+    return subprocess.run(
+        cmd,
+        cwd=cwd,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=timeout,
+        env=env,
+    )
 
 
 def run_neuroseg3(input_image: np.ndarray, output_dir: str, weights: str | None = None, conf: float = 0.25, mask_threshold: float = 0.5) -> tuple[list[np.ndarray], str]:

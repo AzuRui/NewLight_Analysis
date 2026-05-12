@@ -156,3 +156,23 @@
 - Added `NeuroAlign_atlas_registration_summary.json` in the repo root as a handoff note for `build_atlas_from_lines_autocomplete.py` and `atlas_registration_merged_bilateral_midline.py`.
 - The summary records the effective registration defaults, the README-recommended trial config, and the first tuning order to try for better accuracy.
 - It also notes a stale docstring command in the atlas builder (`build_atlas_from_lines_final.py`) so the entry-point text can be cleaned up later.
+
+### NeuroAlign ROI Integration
+
+- Added ROI-panel buttons for `Atlas Reference Builder` and `NeuroAlign`, placed below the two automatic ROI buttons.
+- Added focused parameter dialogs for both workflows, each with a `Help` button that opens a user-friendly NeuroAlign parameter guide.
+- Added `NeuroAlign_atlas_registration_help.txt` because the previous JSON handoff was useful for developers but too dense for end users.
+- Added atlas JSON loading via `analysis_core.process_atlas_json`, so generated or warped atlas JSON files can become current ROIs directly.
+- Updated `Load ROI .npz` to `Load ROI / Atlas` because the loader now accepts `.npz`, atlas image files, and atlas JSON files.
+- NeuroAlign runs through the `caiman_latest` backend environment; installed `python-igraph` and `leidenalg` there for the Leiden graph clustering step.
+- Added `NeuroAlign_runs/` to `.gitignore` for generated registration outputs.
+- Updated the shared conda worker runner to force UTF-8 text capture so NeuroAlign's Chinese/status output does not trip Windows GBK encoding.
+
+### NeuroAlign ROI Integration Validation
+
+- Continued the interrupted integration pass and rechecked the final GUI/backend contract before committing.
+- Verified `NewLight_Analysis.py` and `analysis_core.py` compile with `python -m py_compile`.
+- Verified `analysis_core.process_atlas_json` imports `2cafe_analysis/NeuroAlign/atlas_regions_raw.json` into 26 ROI masks at a 500 x 500 target shape.
+- Verified the `caiman_latest` backend can import `cv2`, `numpy`, `scipy`, `skimage`, `matplotlib`, `sklearn`, `igraph`, and `leidenalg`.
+- Smoke-tested main Tk GUI construction after adding the new ROI controls.
+- Ran the Atlas Reference Builder through the same backend wrapper and confirmed it created `NeuroAlign_runs/test_builder_final/atlas_regions_raw.json`.

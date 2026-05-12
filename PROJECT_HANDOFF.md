@@ -132,6 +132,15 @@ Requirements already discussed:
 - `NeuroAlign_atlas_registration_summary.json` now lives in the `NewLight_Analysis` repo root. It summarizes the atlas-builder output contract, the registration pipeline, the effective defaults, the README-recommended trial config, and the first tuning steps to try.
 - The merged registration script's defaults are more conservative than the README's strongest recommendation, so the summary explicitly calls out the knobs that matter most: `brain_mask_percentile`, `midline_anchor_count`, `midline_anchor_weight`, `outer_anchor_weight`, `tps_smooth`, `min_inner_ctrl_for_tps`, `max_ctrl_shift_px`, and `adaptive_search_quantile_*`.
 - The atlas-builder docstring still mentions the old `build_atlas_from_lines_final.py` run command; it should be updated when the file is touched next.
+- The ROI tab now includes `Atlas Reference Builder` and `NeuroAlign` below `NeuroSeg3 Auto ROI` and `Built-in Auto ROI`.
+- `Atlas Reference Builder` calls `2cafe_analysis/NeuroAlign/build_atlas_from_lines_autocomplete.py`, saves `atlas_regions_raw.json`, remembers that path, and tries to import it as a preview ROI set.
+- `NeuroAlign` calls `2cafe_analysis/NeuroAlign/atlas_registration_merged_bilateral_midline.py` through the `caiman_latest` backend environment, then imports `warped_atlas_regions.json` as the current ROI set.
+- `NeuroAlign_atlas_registration_help.txt` is the end-user help text opened by the new Help buttons; keep the JSON summary as developer handoff context.
+- `analysis_core.process_atlas_json` converts atlas-region JSON polygons into ROI masks resized to the current frame shape.
+- Installed `python-igraph` and `leidenalg` into `caiman_latest`; without them NeuroAlign cannot compute Leiden label maps from video.
+- `NeuroAlign_runs/` is ignored by git because it contains generated registration outputs.
+- `analysis_core.run_conda_worker` now forces UTF-8 capture to avoid Windows GBK crashes from backend output text.
+- Last validation for this integration passed: Python compile, atlas JSON to 26 ROI masks at 500 x 500, NeuroAlign backend imports, Tk GUI construction, and an Atlas Reference Builder run that created `NeuroAlign_runs/test_builder_final/atlas_regions_raw.json`.
 
 ## Git / Record Policy
 

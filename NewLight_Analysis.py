@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import queue
 import random
@@ -35,6 +36,121 @@ THEME = {
     "border": "#25405f",
     "entry": "#081525",
 }
+
+APP_DIR = Path(__file__).resolve().parent
+NEUROALIGN_DIR = core.WORKSPACE / "2cafe_analysis" / "NeuroAlign"
+NEUROALIGN_ENV = "caiman_latest"
+NEUROALIGN_HELP_PATH = APP_DIR / "NeuroAlign_atlas_registration_help.txt"
+NEUROALIGN_SUMMARY_PATH = APP_DIR / "NeuroAlign_atlas_registration_summary.json"
+NEUROALIGN_RUNS_DIR = APP_DIR / "NeuroAlign_runs"
+
+
+def load_neuroalign_summary() -> dict:
+    if not NEUROALIGN_SUMMARY_PATH.exists():
+        return {}
+    try:
+        with open(NEUROALIGN_SUMMARY_PATH, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def atlas_builder_defaults() -> dict:
+    fallback = {
+        "line_threshold": 180,
+        "auto_gap_bridge_dist": 8,
+        "barrier_radius": 1,
+        "min_region_area": 300,
+        "detect_dark_lines": False,
+    }
+    summary = load_neuroalign_summary()
+    cfg = summary.get("build_atlas_from_lines_autocomplete", {}).get("cli_defaults", {})
+    out = dict(fallback)
+    out.update({k: cfg[k] for k in out if k in cfg})
+    return out
+
+
+def neuroalign_recommended_cfg() -> dict:
+    fallback = {
+        "brain_mask_percentile": 72,
+        "midline_anchor_count": 14,
+        "midline_anchor_weight": 8,
+        "outer_anchor_weight": 0.5,
+        "tps_smooth": 3,
+        "tps_smooth_candidates": "12,8,5,3,1",
+        "min_inner_ctrl_for_tps": 4,
+        "max_ctrl_shift_px": 24,
+        "auto_rerun_max_attempts": 8,
+        "auto_rerun_force_min_inner": 5,
+        "adaptive_search_quantile_min": 0.60,
+        "adaptive_search_quantile_max": 0.95,
+        "final_score_inner_weight": 0.55,
+        "final_score_iou_weight": 0.10,
+        "final_score_outer_weight": 0.08,
+    }
+    summary = load_neuroalign_summary()
+    cfg = summary.get("atlas_registration_merged_bilateral_midline", {}).get("readme_recommended_trial_cfg", {})
+    out = dict(fallback)
+    out.update({k: cfg[k] for k in out if k in cfg})
+    return out
+
+
+def default_neuroalign_outdir(prefix: str) -> str:
+    stamp = time.strftime("%Y%m%d_%H%M%S")
+    return str(NEUROALIGN_RUNS_DIR / f"{prefix}_{stamp}")
+
+
+def load_neuroalign_help_text() -> str:
+    if NEUROALIGN_HELP_PATH.exists():
+        try:
+            return NEUROALIGN_HELP_PATH.read_text(encoding="utf-8")
+        except Exception:
+            pass
+    return (
+        "NeuroAlign help is not available.\n\n"
+        "Please check NeuroAlign_atlas_registration_summary.json in the NewLight_Analysis directory."
+    )
+
+
+def run_backend_script(script_path: Path, args: list[str], cwd: Path | None = None, timeout: int | None = None) -> str:
+    proc = core.run_conda_worker(
+        NEUROALIGN_ENV,
+        str(script_path),
+        [str(arg) for arg in args],
+        cwd=str(cwd) if cwd else None,
+        timeout=timeout,
+    )
+    log = (proc.stdout or "") + ("\n" + proc.stderr if proc.stderr else "")
+    if proc.returncode != 0:
+        if (
+            "No module named 'igraph'" in log
+            or "No module named 'leidenalg'" in log
+            or "igraph is required" in log
+            or "leidenalg is required" in log
+        ):
+            log = (
+                log.strip()
+                + "\n\nNeuroAlign backend is missing graph clustering packages. "
+                + f"Install them in the `{NEUROALIGN_ENV}` environment, then retry."
+            )
+        raise RuntimeError(log.strip() or f"{script_path.name} failed with exit code {proc.returncode}")
+    return log.strip()
+
+
+def check_neuroalign_registration_backend() -> None:
+    proc = core.run_conda_worker(
+        NEUROALIGN_ENV,
+        "-c",
+        ["import cv2, numpy, scipy, skimage, matplotlib, sklearn, igraph, leidenalg; print('NeuroAlign backend OK')"],
+        cwd=str(NEUROALIGN_DIR) if NEUROALIGN_DIR.exists() else None,
+        timeout=60,
+    )
+    if proc.returncode != 0:
+        log = (proc.stdout or "") + ("\n" + proc.stderr if proc.stderr else "")
+        raise RuntimeError(
+            log.strip()
+            + f"\n\nNeuroAlign registration needs `python-igraph` and `leidenalg` in the `{NEUROALIGN_ENV}` environment."
+        )
 
 
 class ImageToolbar(NavigationToolbar2Tk):
@@ -167,6 +283,265 @@ class ParameterDialog(tk.Toplevel):
 
     def _apply(self):
         self.values = {k: e.get() for k, e in self.entries.items()}
+        self.destroy()
+
+
+class TextDisplayDialog(tk.Toplevel):
+    def __init__(self, parent, title, text, width=92, height=34):
+        super().__init__(parent)
+        self.title(title)
+        self.configure(bg=THEME["bg"])
+        self.geometry("880x680")
+        self.minsize(680, 480)
+        body = ttk.Frame(self, padding=12)
+        body.pack(fill="both", expand=True)
+        body.rowconfigure(0, weight=1)
+        body.columnconfigure(0, weight=1)
+
+        text_widget = tk.Text(body, width=width, height=height, wrap="word")
+        text_widget.configure(
+            bg=THEME["entry"],
+            fg=THEME["text"],
+            insertbackground=THEME["accent"],
+            relief="flat",
+            highlightthickness=1,
+            highlightbackground=THEME["border"],
+            padx=10,
+            pady=8,
+        )
+        scrollbar = ttk.Scrollbar(body, orient="vertical", command=text_widget.yview)
+        text_widget.configure(yscrollcommand=scrollbar.set)
+        text_widget.grid(row=0, column=0, sticky="nsew")
+        scrollbar.grid(row=0, column=1, sticky="ns")
+        text_widget.insert("1.0", text)
+        text_widget.configure(state="disabled")
+
+        buttons = ttk.Frame(body)
+        buttons.grid(row=1, column=0, columnspan=2, sticky="e", pady=(10, 0))
+        ttk.Button(buttons, text="Close", command=self.destroy).grid(row=0, column=0)
+        self.transient(parent)
+
+
+class AtlasReferenceBuilderDialog(tk.Toplevel):
+    def __init__(self, parent, app, default_image="", default_outdir=""):
+        super().__init__(parent)
+        self.title("Atlas Reference Builder")
+        self.configure(bg=THEME["bg"])
+        self.resizable(False, False)
+        self.app = app
+        self.values = None
+        defaults = atlas_builder_defaults()
+        self.image_var = tk.StringVar(value=default_image)
+        self.outdir_var = tk.StringVar(value=default_outdir or default_neuroalign_outdir("atlas_reference"))
+        self.line_threshold_var = tk.StringVar(value=str(defaults["line_threshold"]))
+        self.bridge_dist_var = tk.StringVar(value=str(defaults["auto_gap_bridge_dist"]))
+        self.barrier_radius_var = tk.StringVar(value=str(defaults["barrier_radius"]))
+        self.min_region_area_var = tk.StringVar(value=str(defaults["min_region_area"]))
+        self.detect_dark_lines_var = tk.BooleanVar(value=bool(defaults["detect_dark_lines"]))
+
+        body = ttk.Frame(self, padding=12)
+        body.grid(row=0, column=0, sticky="nsew")
+        body.columnconfigure(1, weight=1)
+
+        image_entry = self._path_row(body, 0, "Atlas line image", self.image_var, self.browse_image)
+        self._path_row(body, 1, "Output dir", self.outdir_var, self.browse_outdir)
+
+        fields = [
+            ("Line threshold", self.line_threshold_var),
+            ("Bridge gap px", self.bridge_dist_var),
+            ("Barrier radius", self.barrier_radius_var),
+            ("Min region area", self.min_region_area_var),
+        ]
+        for idx, (label, var) in enumerate(fields, start=2):
+            ttk.Label(body, text=label).grid(row=idx, column=0, sticky="w", pady=4)
+            ttk.Entry(body, textvariable=var, width=16).grid(row=idx, column=1, sticky="ew", pady=4, padx=(8, 0))
+
+        ttk.Checkbutton(body, text="Detect dark lines", variable=self.detect_dark_lines_var).grid(
+            row=6, column=0, columnspan=2, sticky="w", pady=(8, 2)
+        )
+
+        buttons = ttk.Frame(body)
+        buttons.grid(row=7, column=0, columnspan=2, sticky="e", pady=(12, 0))
+        ttk.Button(buttons, text="Help", command=self.show_help).grid(row=0, column=0, padx=(0, 8))
+        ttk.Button(buttons, text="Cancel", command=self.destroy).grid(row=0, column=1, padx=(0, 8))
+        ttk.Button(buttons, text="Run", command=self._apply).grid(row=0, column=2)
+
+        self.transient(parent)
+        self.grab_set()
+        self.protocol("WM_DELETE_WINDOW", self.destroy)
+        self.bind("<Escape>", lambda _event: self.destroy())
+        self.bind("<Return>", lambda _event: self._apply())
+        self.after(0, image_entry.focus_set)
+        self.wait_window(self)
+
+    def _path_row(self, body, row, label, var, browse_command):
+        ttk.Label(body, text=label).grid(row=row, column=0, sticky="w", pady=4)
+        path_row = ttk.Frame(body)
+        path_row.grid(row=row, column=1, sticky="ew", pady=4, padx=(8, 0))
+        path_row.columnconfigure(0, weight=1)
+        entry = ttk.Entry(path_row, textvariable=var, width=46)
+        entry.grid(row=0, column=0, sticky="ew")
+        ttk.Button(path_row, text="Browse", command=browse_command).grid(row=0, column=1, padx=(8, 0))
+        return entry
+
+    def browse_image(self):
+        path = filedialog.askopenfilename(
+            title="Select atlas line image",
+            filetypes=[("Image files", "*.png *.jpg *.jpeg *.bmp *.tif *.tiff"), ("All files", "*.*")],
+        )
+        if path:
+            self.image_var.set(path)
+
+    def browse_outdir(self):
+        path = filedialog.askdirectory(title="Select output directory")
+        if path:
+            self.outdir_var.set(path)
+
+    def show_help(self):
+        TextDisplayDialog(self, "NeuroAlign Help", load_neuroalign_help_text())
+
+    def _apply(self):
+        try:
+            image = Path(self.image_var.get().strip())
+            outdir = Path(self.outdir_var.get().strip())
+            if not image.exists():
+                raise ValueError("Atlas line image does not exist.")
+            if not str(outdir):
+                raise ValueError("Output dir is required.")
+            self.values = {
+                "image": str(image),
+                "outdir": str(outdir),
+                "line_threshold": int(float(self.line_threshold_var.get())),
+                "auto_gap_bridge_dist": int(float(self.bridge_dist_var.get())),
+                "barrier_radius": int(float(self.barrier_radius_var.get())),
+                "min_region_area": int(float(self.min_region_area_var.get())),
+                "detect_dark_lines": bool(self.detect_dark_lines_var.get()),
+            }
+        except Exception as exc:
+            messagebox.showerror("Atlas Reference Builder", str(exc))
+            return
+        self.destroy()
+
+
+class NeuroAlignDialog(tk.Toplevel):
+    def __init__(self, parent, app, default_video="", default_atlas_json="", default_outdir=""):
+        super().__init__(parent)
+        self.title("NeuroAlign")
+        self.configure(bg=THEME["bg"])
+        self.resizable(False, False)
+        self.app = app
+        self.values = None
+        cfg = neuroalign_recommended_cfg()
+        self.video_var = tk.StringVar(value=default_video)
+        self.atlas_json_var = tk.StringVar(value=default_atlas_json)
+        self.outdir_var = tk.StringVar(value=default_outdir or default_neuroalign_outdir("neuroalign"))
+        self.cfg_vars = {
+            "brain_mask_percentile": tk.StringVar(value=str(cfg["brain_mask_percentile"])),
+            "midline_anchor_count": tk.StringVar(value=str(cfg["midline_anchor_count"])),
+            "midline_anchor_weight": tk.StringVar(value=str(cfg["midline_anchor_weight"])),
+            "outer_anchor_weight": tk.StringVar(value=str(cfg["outer_anchor_weight"])),
+            "tps_smooth": tk.StringVar(value=str(cfg["tps_smooth"])),
+            "max_ctrl_shift_px": tk.StringVar(value=str(cfg["max_ctrl_shift_px"])),
+            "min_inner_ctrl_for_tps": tk.StringVar(value=str(cfg["min_inner_ctrl_for_tps"])),
+            "auto_rerun_max_attempts": tk.StringVar(value=str(cfg["auto_rerun_max_attempts"])),
+        }
+
+        body = ttk.Frame(self, padding=12)
+        body.grid(row=0, column=0, sticky="nsew")
+        body.columnconfigure(1, weight=1)
+
+        video_entry = self._path_row(body, 0, "Video", self.video_var, self.browse_video)
+        self._path_row(body, 1, "Atlas JSON", self.atlas_json_var, self.browse_atlas_json)
+        self._path_row(body, 2, "Output dir", self.outdir_var, self.browse_outdir)
+
+        labels = [
+            ("brain_mask_percentile", "Brain mask percentile"),
+            ("midline_anchor_count", "Midline anchors"),
+            ("midline_anchor_weight", "Midline weight"),
+            ("outer_anchor_weight", "Outer weight"),
+            ("tps_smooth", "TPS smooth"),
+            ("max_ctrl_shift_px", "Max ctrl shift px"),
+            ("min_inner_ctrl_for_tps", "Min inner ctrl"),
+            ("auto_rerun_max_attempts", "Auto rerun attempts"),
+        ]
+        for idx, (key, label) in enumerate(labels, start=3):
+            ttk.Label(body, text=label).grid(row=idx, column=0, sticky="w", pady=3)
+            ttk.Entry(body, textvariable=self.cfg_vars[key], width=16).grid(
+                row=idx, column=1, sticky="ew", padx=(8, 0), pady=3
+            )
+
+        buttons = ttk.Frame(body)
+        buttons.grid(row=11, column=0, columnspan=2, sticky="e", pady=(12, 0))
+        ttk.Button(buttons, text="Help", command=self.show_help).grid(row=0, column=0, padx=(0, 8))
+        ttk.Button(buttons, text="Cancel", command=self.destroy).grid(row=0, column=1, padx=(0, 8))
+        ttk.Button(buttons, text="Run", command=self._apply).grid(row=0, column=2)
+
+        self.transient(parent)
+        self.grab_set()
+        self.protocol("WM_DELETE_WINDOW", self.destroy)
+        self.bind("<Escape>", lambda _event: self.destroy())
+        self.bind("<Return>", lambda _event: self._apply())
+        self.after(0, video_entry.focus_set)
+        self.wait_window(self)
+
+    def _path_row(self, body, row, label, var, browse_command):
+        ttk.Label(body, text=label).grid(row=row, column=0, sticky="w", pady=4)
+        path_row = ttk.Frame(body)
+        path_row.grid(row=row, column=1, sticky="ew", pady=4, padx=(8, 0))
+        path_row.columnconfigure(0, weight=1)
+        entry = ttk.Entry(path_row, textvariable=var, width=46)
+        entry.grid(row=0, column=0, sticky="ew")
+        ttk.Button(path_row, text="Browse", command=browse_command).grid(row=0, column=1, padx=(8, 0))
+        return entry
+
+    def browse_video(self):
+        path = filedialog.askopenfilename(
+            title="Select subject video",
+            filetypes=[("Video files", "*.avi *.mp4"), ("All files", "*.*")],
+        )
+        if path:
+            self.video_var.set(path)
+
+    def browse_atlas_json(self):
+        path = filedialog.askopenfilename(
+            title="Select atlas JSON",
+            filetypes=[("Atlas JSON", "*.json"), ("All files", "*.*")],
+        )
+        if path:
+            self.atlas_json_var.set(path)
+
+    def browse_outdir(self):
+        path = filedialog.askdirectory(title="Select output directory")
+        if path:
+            self.outdir_var.set(path)
+
+    def show_help(self):
+        TextDisplayDialog(self, "NeuroAlign Help", load_neuroalign_help_text())
+
+    def _apply(self):
+        try:
+            video = Path(self.video_var.get().strip())
+            atlas_json = Path(self.atlas_json_var.get().strip())
+            outdir = Path(self.outdir_var.get().strip())
+            if not video.exists():
+                raise ValueError("Video path does not exist.")
+            if not atlas_json.exists():
+                raise ValueError("Atlas JSON does not exist.")
+            cfg = neuroalign_recommended_cfg()
+            for key, var in self.cfg_vars.items():
+                value = float(var.get())
+                if key in {"midline_anchor_count", "min_inner_ctrl_for_tps", "auto_rerun_max_attempts"}:
+                    value = int(value)
+                cfg[key] = value
+            self.values = {
+                "video": str(video),
+                "atlas_json": str(atlas_json),
+                "outdir": str(outdir),
+                "cfg": cfg,
+            }
+        except Exception as exc:
+            messagebox.showerror("NeuroAlign", str(exc))
+            return
         self.destroy()
 
 
@@ -584,6 +959,8 @@ class NewLightApp:
         self._view_is_fit = True
         self._view_lock = False
         self._setting_frame_scale = False
+        self.last_atlas_reference_json = ""
+        self.last_neuroalign_output_dir = ""
         self._build_ui()
         self._poll_worker()
         self.root.after(600, self.check_cuda_status_quick)
@@ -672,10 +1049,12 @@ class NewLightApp:
         roi_box.grid(row=0, column=0, sticky="ew", pady=6)
         ttk.Button(roi_box, text="NeuroSeg3 Auto ROI", command=self.neuroseg3_roi).grid(row=0, column=0, sticky="ew", pady=2)
         ttk.Button(roi_box, text="Built-in Auto ROI", command=self.auto_roi).grid(row=1, column=0, sticky="ew", pady=2)
-        ttk.Button(roi_box, text="Atlas Image ROI", command=self.atlas_roi).grid(row=2, column=0, sticky="ew", pady=2)
-        ttk.Button(roi_box, text="Load ROI .npz", command=self.load_roi).grid(row=3, column=0, sticky="ew", pady=2)
-        ttk.Button(roi_box, text="Save ROI .npz", command=self.save_roi).grid(row=4, column=0, sticky="ew", pady=2)
-        ttk.Button(roi_box, text="Clear ROIs", command=self.clear_rois).grid(row=5, column=0, sticky="ew", pady=2)
+        ttk.Button(roi_box, text="Atlas Reference Builder", command=self.atlas_reference_builder).grid(row=2, column=0, sticky="ew", pady=2)
+        ttk.Button(roi_box, text="NeuroAlign", command=self.neuroalign).grid(row=3, column=0, sticky="ew", pady=2)
+        ttk.Button(roi_box, text="Atlas Image ROI", command=self.atlas_roi).grid(row=4, column=0, sticky="ew", pady=2)
+        ttk.Button(roi_box, text="Load ROI / Atlas", command=self.load_roi).grid(row=5, column=0, sticky="ew", pady=2)
+        ttk.Button(roi_box, text="Save ROI .npz", command=self.save_roi).grid(row=6, column=0, sticky="ew", pady=2)
+        ttk.Button(roi_box, text="Clear ROIs", command=self.clear_rois).grid(row=7, column=0, sticky="ew", pady=2)
 
         analysis_box = ttk.LabelFrame(analysis_tab, text="Analysis", padding=8)
         analysis_box.grid(row=0, column=0, sticky="ew", pady=6)
@@ -1266,8 +1645,9 @@ class NewLightApp:
             return
         path = filedialog.askopenfilename(
             filetypes=[
-                ("ROI or atlas", "*.npz *.png *.jpg *.jpeg *.bmp *.tif *.tiff"),
+                ("ROI or atlas", "*.npz *.json *.png *.jpg *.jpeg *.bmp *.tif *.tiff"),
                 ("ROI npz", "*.npz"),
+                ("Atlas JSON", "*.json"),
                 ("Atlas image", "*.png *.jpg *.jpeg *.bmp *.tif *.tiff"),
                 ("All files", "*.*"),
             ]
@@ -1281,6 +1661,12 @@ class NewLightApp:
                     masks = [m.astype(bool) for m in data["masks"]]
                     names = list(data["names"]) if "names" in data else None
                 self.set_rois(masks, "Loaded ROI file", names=names)
+            elif ext == ".json":
+                vals = self.param_dialog("Atlas JSON ROI", [("min_area", "Min area", 50)])
+                if not vals:
+                    return
+                rois, names = core.process_atlas_json(path, self.state.baseline_image.shape, int(vals["min_area"]))
+                self.set_rois(rois, "Loaded atlas JSON", names=names)
             elif ext in {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff"}:
                 vals = self.param_dialog("Atlas Image ROI", [("min_area", "Min area", 50)])
                 if not vals:
@@ -1308,6 +1694,96 @@ class NewLightApp:
             self.set_rois(rois, "Atlas ROI", names=names)
         except Exception as exc:
             messagebox.showerror("Atlas ROI failed", str(exc))
+
+    def atlas_reference_builder(self):
+        if not NEUROALIGN_DIR.exists():
+            messagebox.showerror("Atlas Reference Builder", f"NeuroAlign folder not found:\n{NEUROALIGN_DIR}")
+            return
+        dlg = AtlasReferenceBuilderDialog(self.root, self)
+        vals = dlg.values
+        if not vals:
+            return
+        script = NEUROALIGN_DIR / "build_atlas_from_lines_autocomplete.py"
+
+        def run():
+            outdir = Path(vals["outdir"])
+            args = [
+                "--image", vals["image"],
+                "--outdir", str(outdir),
+                "--line_threshold", str(vals["line_threshold"]),
+                "--auto_gap_bridge_dist", str(vals["auto_gap_bridge_dist"]),
+                "--barrier_radius", str(vals["barrier_radius"]),
+                "--min_region_area", str(vals["min_region_area"]),
+            ]
+            if vals["detect_dark_lines"]:
+                args.append("--detect_dark_lines")
+            log = run_backend_script(script, args, cwd=NEUROALIGN_DIR, timeout=600)
+            atlas_json = outdir / "atlas_regions_raw.json"
+            if not atlas_json.exists():
+                raise RuntimeError("Atlas builder finished but did not create atlas_regions_raw.json")
+            return {"atlas_json": str(atlas_json), "outdir": str(outdir), "log": log}
+
+        self.run_worker("Atlas Reference Builder", run, self._finish_atlas_reference_builder)
+
+    def _finish_atlas_reference_builder(self, result):
+        self.last_atlas_reference_json = result["atlas_json"]
+        self.log(f"Atlas Reference Builder saved: {result['atlas_json']}")
+        try:
+            rois, names = core.process_atlas_json(result["atlas_json"], self.state.baseline_image.shape, 50)
+            self.set_rois(rois, "Atlas reference preview", names=names)
+        except Exception as exc:
+            self.log(f"Atlas reference built, but preview import failed: {exc}")
+        log = str(result.get("log", "")).strip()
+        if log:
+            self.log(log[-800:])
+
+    def neuroalign(self):
+        if not self.require_movie():
+            return
+        if not NEUROALIGN_DIR.exists():
+            messagebox.showerror("NeuroAlign", f"NeuroAlign folder not found:\n{NEUROALIGN_DIR}")
+            return
+        default_video = self.state.source_path if self.state.source_path else ""
+        default_atlas = self.last_atlas_reference_json
+        if not default_atlas:
+            candidate = NEUROALIGN_DIR / "atlas_regions_raw.json"
+            default_atlas = str(candidate) if candidate.exists() else ""
+        dlg = NeuroAlignDialog(self.root, self, default_video=default_video, default_atlas_json=default_atlas)
+        vals = dlg.values
+        if not vals:
+            return
+        script = NEUROALIGN_DIR / "atlas_registration_merged_bilateral_midline.py"
+
+        def run():
+            outdir = Path(vals["outdir"])
+            cfg_path = outdir / "neuroalign_config.json"
+            outdir.mkdir(parents=True, exist_ok=True)
+            check_neuroalign_registration_backend()
+            bundle = {
+                "preset": "balanced",
+                "video": vals["video"],
+                "atlas_json": vals["atlas_json"],
+                "outdir": str(outdir),
+                "cfg": vals["cfg"],
+            }
+            with open(cfg_path, "w", encoding="utf-8") as f:
+                json.dump(bundle, f, ensure_ascii=False, indent=2)
+            log = run_backend_script(script, ["--config", str(cfg_path)], cwd=NEUROALIGN_DIR, timeout=None)
+            warped_json = outdir / "warped_atlas_regions.json"
+            if not warped_json.exists():
+                raise RuntimeError("NeuroAlign finished but did not create warped_atlas_regions.json")
+            return {"warped_json": str(warped_json), "outdir": str(outdir), "config": str(cfg_path), "log": log}
+
+        self.run_worker("NeuroAlign", run, self._finish_neuroalign)
+
+    def _finish_neuroalign(self, result):
+        self.last_neuroalign_output_dir = result["outdir"]
+        rois, names = core.process_atlas_json(result["warped_json"], self.state.baseline_image.shape, 50)
+        self.set_rois(rois, "NeuroAlign", names=names)
+        self.log(f"NeuroAlign loaded warped atlas ROIs: {result['warped_json']}")
+        log = str(result.get("log", "")).strip()
+        if log:
+            self.log(log[-800:])
 
     def save_roi(self):
         if not self.state.roi_masks:

@@ -4,6 +4,7 @@
   "source_dir": "E:/WorkSpace/2cafe_analysis/NeuroAlign",
   "target_dir": "E:/WorkSpace/NewLight_Analysis",
   "summary_type": "atlas_build_and_registration_handoff",
+  "user_friendly_help_file": "E:/WorkSpace/NewLight_Analysis/NeuroAlign_atlas_registration_help.txt",
   "source_relationship": {
     "atlas_builder_output": "atlas_regions_raw.json",
     "registration_input": "atlas_regions_raw.json"
