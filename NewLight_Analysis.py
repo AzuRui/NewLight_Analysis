@@ -18,6 +18,7 @@ matplotlib.use("TkAgg")
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
 from matplotlib.figure import Figure
 import numpy as np
+from PIL import Image, ImageTk
 
 import analysis_core as core
 
@@ -43,6 +44,26 @@ NEUROALIGN_ENV = "caiman_latest"
 NEUROALIGN_HELP_PATH = APP_DIR / "NeuroAlign_atlas_registration_help.txt"
 NEUROALIGN_SUMMARY_PATH = APP_DIR / "NeuroAlign_atlas_registration_summary.json"
 NEUROALIGN_RUNS_DIR = APP_DIR / "NeuroAlign_runs"
+USER_SETTINGS_PATH = APP_DIR / "NewLight_user_settings.json"
+
+
+def load_user_settings() -> dict:
+    if not USER_SETTINGS_PATH.exists():
+        return {}
+    try:
+        with open(USER_SETTINGS_PATH, "r", encoding="utf-8") as f:
+            obj = json.load(f)
+        return obj if isinstance(obj, dict) else {}
+    except Exception:
+        return {}
+
+
+def save_user_settings(settings: dict) -> None:
+    try:
+        with open(USER_SETTINGS_PATH, "w", encoding="utf-8") as f:
+            json.dump(settings, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
 
 
 def load_neuroalign_summary() -> dict:
@@ -187,6 +208,7 @@ def apply_dark_theme(root):
     style.configure("TLabel", background=THEME["bg"], foreground=THEME["text"])
     style.configure("Muted.TLabel", background=THEME["panel"], foreground=THEME["muted"])
     style.configure("Status.TLabel", background=THEME["panel"], foreground=THEME["success"])
+    style.configure("Accent.TLabel", background=THEME["bg"], foreground=THEME["accent"], font=("Segoe UI Semibold", 11))
     style.configure("TLabelframe", background=THEME["panel"], foreground=THEME["text"], bordercolor=THEME["border"], relief="solid")
     style.configure("TLabelframe.Label", background=THEME["panel"], foreground=THEME["accent"], font=("Segoe UI Semibold", 10))
     style.configure("TButton", background=THEME["panel_2"], foreground=THEME["text"], bordercolor=THEME["border"], focusthickness=1, focuscolor=THEME["accent"], padding=(10, 5))
@@ -331,13 +353,14 @@ class AtlasReferenceBuilderDialog(tk.Toplevel):
         self.app = app
         self.values = None
         defaults = atlas_builder_defaults()
-        self.image_var = tk.StringVar(value=default_image)
-        self.outdir_var = tk.StringVar(value=default_outdir or default_neuroalign_outdir("atlas_reference"))
-        self.line_threshold_var = tk.StringVar(value=str(defaults["line_threshold"]))
-        self.bridge_dist_var = tk.StringVar(value=str(defaults["auto_gap_bridge_dist"]))
-        self.barrier_radius_var = tk.StringVar(value=str(defaults["barrier_radius"]))
-        self.min_region_area_var = tk.StringVar(value=str(defaults["min_region_area"]))
-        self.detect_dark_lines_var = tk.BooleanVar(value=bool(defaults["detect_dark_lines"]))
+        saved = getattr(app, "user_settings", {}).get("atlas_reference_builder", {})
+        self.image_var = tk.StringVar(value=saved.get("image") or default_image)
+        self.outdir_var = tk.StringVar(value=saved.get("outdir") or default_outdir or default_neuroalign_outdir("atlas_reference"))
+        self.line_threshold_var = tk.StringVar(value=str(saved.get("line_threshold", defaults["line_threshold"])))
+        self.bridge_dist_var = tk.StringVar(value=str(saved.get("auto_gap_bridge_dist", defaults["auto_gap_bridge_dist"])))
+        self.barrier_radius_var = tk.StringVar(value=str(saved.get("barrier_radius", defaults["barrier_radius"])))
+        self.min_region_area_var = tk.StringVar(value=str(saved.get("min_region_area", defaults["min_region_area"])))
+        self.detect_dark_lines_var = tk.BooleanVar(value=bool(saved.get("detect_dark_lines", defaults["detect_dark_lines"])))
 
         body = ttk.Frame(self, padding=12)
         body.grid(row=0, column=0, sticky="nsew")
@@ -421,6 +444,22 @@ class AtlasReferenceBuilderDialog(tk.Toplevel):
             messagebox.showerror("Atlas Reference Builder", str(exc))
             return
         self.destroy()
+
+    def destroy(self):
+        try:
+            self.app.user_settings["atlas_reference_builder"] = {
+                "image": self.image_var.get().strip(),
+                "outdir": self.outdir_var.get().strip(),
+                "line_threshold": self.line_threshold_var.get().strip(),
+                "auto_gap_bridge_dist": self.bridge_dist_var.get().strip(),
+                "barrier_radius": self.barrier_radius_var.get().strip(),
+                "min_region_area": self.min_region_area_var.get().strip(),
+                "detect_dark_lines": bool(self.detect_dark_lines_var.get()),
+            }
+            save_user_settings(self.app.user_settings)
+        except Exception:
+            pass
+        super().destroy()
 
 
 class NeuroAlignDialog(tk.Toplevel):
@@ -542,6 +581,381 @@ class NeuroAlignDialog(tk.Toplevel):
         except Exception as exc:
             messagebox.showerror("NeuroAlign", str(exc))
             return
+        self.destroy()
+
+
+class NeuroAlignWizard(tk.Toplevel):
+    STAGES = ("outer", "cluster", "final")
+
+    def __init__(self, parent, app, defaults: dict):
+        super().__init__(parent)
+        self.app = app
+        self.values = None
+        self.title("NeuroAlign")
+        self.configure(bg=THEME["bg"])
+        self.geometry("1180x820")
+        self.minsize(960, 680)
+        self.current_stage = "outer"
+        self.current_result = None
+        self.preview_image_ref = None
+        self.last_run_log = ""
+        self.running = False
+
+        cfg = dict(defaults.get("cfg") or neuroalign_recommended_cfg())
+        self.video_var = tk.StringVar(value=defaults.get("video", ""))
+        self.atlas_json_var = tk.StringVar(value=defaults.get("atlas_json", ""))
+        self.outdir_var = tk.StringVar(value=defaults.get("outdir", default_neuroalign_outdir("neuroalign")))
+        self.cfg_vars = {
+            key: tk.StringVar(value=str(cfg.get(key, neuroalign_recommended_cfg().get(key, ""))))
+            for key in [
+                "brain_mask_percentile",
+                "midline_anchor_count",
+                "midline_anchor_weight",
+                "outer_anchor_weight",
+                "tps_smooth",
+                "max_ctrl_shift_px",
+                "min_inner_ctrl_for_tps",
+                "auto_rerun_max_attempts",
+                "resolution",
+                "compactness",
+                "min_n_segments",
+                "max_n_segments",
+                "inner_max_pairs_per_hemi",
+                "adaptive_search_quantile_min",
+                "adaptive_search_quantile_max",
+            ]
+        }
+
+        body = ttk.Frame(self, padding=10)
+        body.pack(fill="both", expand=True)
+        body.columnconfigure(0, minsize=330)
+        body.columnconfigure(1, weight=1)
+        body.rowconfigure(0, weight=1)
+
+        left = ttk.Frame(body)
+        left.grid(row=0, column=0, sticky="nsew", padx=(0, 10))
+        left.columnconfigure(0, weight=1)
+        self.stage_var = tk.StringVar()
+        ttk.Label(left, textvariable=self.stage_var, style="Accent.TLabel").grid(row=0, column=0, sticky="ew", pady=(0, 8))
+
+        self.input_frame = ttk.LabelFrame(left, text="Inputs", padding=8)
+        self.input_frame.grid(row=1, column=0, sticky="ew", pady=(0, 8))
+        self.input_frame.columnconfigure(1, weight=1)
+        self._path_row(self.input_frame, 0, "Video", self.video_var, self.browse_video)
+        self._path_row(self.input_frame, 1, "Atlas JSON", self.atlas_json_var, self.browse_atlas_json)
+        self._path_row(self.input_frame, 2, "Output dir", self.outdir_var, self.browse_outdir)
+
+        self.param_frame = ttk.LabelFrame(left, text="Parameters", padding=8)
+        self.param_frame.grid(row=2, column=0, sticky="nsew")
+        self.param_frame.columnconfigure(1, weight=1)
+        left.rowconfigure(2, weight=1)
+
+        buttons = ttk.Frame(left)
+        buttons.grid(row=3, column=0, sticky="ew", pady=(8, 0))
+        buttons.columnconfigure((0, 1, 2), weight=1)
+        ttk.Button(buttons, text="Help", command=self.show_help).grid(row=0, column=0, sticky="ew", padx=(0, 4))
+        self.rebuild_button = ttk.Button(buttons, text="Rebuild", command=self.rebuild)
+        self.rebuild_button.grid(row=0, column=1, sticky="ew", padx=4)
+        self.next_button = ttk.Button(buttons, text="Next", command=self.next_stage)
+        self.next_button.grid(row=0, column=2, sticky="ew", padx=(4, 0))
+        ttk.Button(buttons, text="Cancel", command=self.destroy).grid(row=1, column=0, sticky="ew", pady=(6, 0), padx=(0, 4))
+        ttk.Button(buttons, text="Use Result", command=self.accept).grid(row=1, column=1, columnspan=2, sticky="ew", pady=(6, 0), padx=(4, 0))
+
+        right = ttk.Frame(body)
+        right.grid(row=0, column=1, sticky="nsew")
+        right.rowconfigure(0, weight=1)
+        right.columnconfigure(0, weight=1)
+        self.preview_canvas = tk.Canvas(right, bg="#020617", highlightthickness=1, highlightbackground=THEME["border"])
+        self.preview_canvas.grid(row=0, column=0, sticky="nsew")
+        self.preview_caption = tk.StringVar(value="Click Rebuild to generate preview.")
+        ttk.Label(right, textvariable=self.preview_caption, style="Muted.TLabel").grid(row=1, column=0, sticky="ew", pady=(8, 0))
+        self.log_text = tk.Text(right, height=6, wrap="word")
+        self.log_text.configure(bg=THEME["entry"], fg=THEME["text"], insertbackground=THEME["accent"], relief="flat", highlightthickness=1, highlightbackground=THEME["border"])
+        self.log_text.grid(row=2, column=0, sticky="ew", pady=(8, 0))
+
+        self.preview_canvas.bind("<Configure>", lambda _event: self.refresh_preview())
+        self.transient(parent)
+        self.protocol("WM_DELETE_WINDOW", self.destroy)
+        self.bind("<Escape>", lambda _event: self.destroy())
+        self.render_stage()
+
+    def _path_row(self, parent, row, label, var, command):
+        ttk.Label(parent, text=label).grid(row=row, column=0, sticky="w", pady=3)
+        holder = ttk.Frame(parent)
+        holder.grid(row=row, column=1, sticky="ew", pady=3, padx=(6, 0))
+        holder.columnconfigure(0, weight=1)
+        ttk.Entry(holder, textvariable=var, width=32).grid(row=0, column=0, sticky="ew")
+        ttk.Button(holder, text="Browse", command=command).grid(row=0, column=1, padx=(6, 0))
+
+    def browse_video(self):
+        path = filedialog.askopenfilename(title="Select subject video", filetypes=[("Video files", "*.avi *.mp4 *.mov *.mkv"), ("All files", "*.*")])
+        if path:
+            self.video_var.set(path)
+
+    def browse_atlas_json(self):
+        path = filedialog.askopenfilename(title="Select atlas JSON", filetypes=[("Atlas JSON", "*.json"), ("All files", "*.*")])
+        if path:
+            self.atlas_json_var.set(path)
+
+    def browse_outdir(self):
+        path = filedialog.askdirectory(title="Select output directory")
+        if path:
+            self.outdir_var.set(path)
+
+    def show_help(self):
+        TextDisplayDialog(self, "NeuroAlign Help", load_neuroalign_help_text())
+
+    def stage_fields(self):
+        if self.current_stage == "outer":
+            return [
+                ("brain_mask_percentile", "Brain mask percentile"),
+                ("midline_anchor_count", "Midline anchors"),
+                ("midline_anchor_weight", "Midline weight"),
+                ("outer_anchor_weight", "Outer weight"),
+                ("max_ctrl_shift_px", "Max ctrl shift px"),
+            ]
+        if self.current_stage == "cluster":
+            return [
+                ("resolution", "Cluster resolution"),
+                ("compactness", "SLIC compactness"),
+                ("min_n_segments", "Min segments"),
+                ("max_n_segments", "Max segments"),
+                ("inner_max_pairs_per_hemi", "Inner pairs / hemi"),
+            ]
+        return [
+            ("tps_smooth", "TPS smooth"),
+            ("min_inner_ctrl_for_tps", "Min inner ctrl"),
+            ("adaptive_search_quantile_min", "Search quantile min"),
+            ("adaptive_search_quantile_max", "Search quantile max"),
+            ("auto_rerun_max_attempts", "Auto rerun attempts"),
+        ]
+
+    def render_stage(self):
+        for child in self.param_frame.winfo_children():
+            child.destroy()
+        stage_name = {"outer": "Step 1 / 3: Outer contour preview", "cluster": "Step 2 / 3: Clustering preview", "final": "Step 3 / 3: Final atlas preview"}[self.current_stage]
+        self.stage_var.set(stage_name)
+        for row, (key, label) in enumerate(self.stage_fields()):
+            ttk.Label(self.param_frame, text=label).grid(row=row, column=0, sticky="w", pady=3)
+            ttk.Entry(self.param_frame, textvariable=self.cfg_vars[key], width=14).grid(row=row, column=1, sticky="ew", padx=(8, 0), pady=3)
+        self.next_button.configure(text="Finish" if self.current_stage == "final" else "Next")
+        self.refresh_preview()
+
+    def current_config(self):
+        cfg = neuroalign_recommended_cfg()
+        for key, var in self.cfg_vars.items():
+            raw = var.get().strip()
+            if raw == "":
+                continue
+            if key in {"midline_anchor_count", "min_inner_ctrl_for_tps", "auto_rerun_max_attempts", "min_n_segments", "max_n_segments", "inner_max_pairs_per_hemi"}:
+                cfg[key] = int(float(raw))
+            else:
+                cfg[key] = float(raw)
+        return cfg
+
+    def collect_values(self):
+        video = Path(self.video_var.get().strip())
+        atlas_json = Path(self.atlas_json_var.get().strip())
+        outdir = Path(self.outdir_var.get().strip())
+        if not video.exists():
+            raise ValueError("Video path does not exist.")
+        if not atlas_json.exists():
+            raise ValueError("Atlas JSON does not exist.")
+        return {"video": str(video), "atlas_json": str(atlas_json), "outdir": str(outdir), "cfg": self.current_config()}
+
+    def save_settings_snapshot(self):
+        vals = self.collect_values()
+        self.app.user_settings["neuroalign"] = vals
+        save_user_settings(self.app.user_settings)
+
+    def log(self, text):
+        stamp = time.strftime("%H:%M:%S")
+        self.log_text.insert("end", f"[{stamp}] {text}\n")
+        self.log_text.see("end")
+
+    def rebuild(self):
+        if self.running:
+            return
+        try:
+            vals = self.collect_values()
+        except Exception as exc:
+            messagebox.showerror("NeuroAlign", str(exc))
+            return
+        self.app.user_settings["neuroalign"] = vals
+        save_user_settings(self.app.user_settings)
+        self.running = True
+        self.rebuild_button.configure(state="disabled")
+        self.preview_caption.set("Running NeuroAlign rebuild...")
+        self.log(f"Rebuild started for {self.current_stage}.")
+
+        def target():
+            try:
+                result = self.app.run_neuroalign_backend(vals)
+                try:
+                    self.after(0, lambda result=result: self.rebuild_done(result, None))
+                except tk.TclError:
+                    pass
+            except Exception as exc:
+                try:
+                    self.after(0, lambda exc=exc: self.rebuild_done(None, exc))
+                except tk.TclError:
+                    pass
+
+        threading.Thread(target=target, daemon=True).start()
+
+    def rebuild_done(self, result, exc):
+        self.running = False
+        self.rebuild_button.configure(state="normal")
+        if exc:
+            self.log(f"Worker failed: {exc}")
+            messagebox.showerror("NeuroAlign", self.app.worker_error_summary(str(exc)))
+            self.preview_caption.set("Rebuild failed. See log.")
+            return
+        self.current_result = result
+        self.last_run_log = str(result.get("log", "")).strip()
+        outdir = Path(result["outdir"])
+        self.create_outer_preview(outdir)
+        self.create_cluster_preview(outdir)
+        self.log(f"Rebuild finished: {result.get('outdir')}")
+        if self.last_run_log:
+            self.log(self.last_run_log[-1200:])
+        self.refresh_preview()
+
+    def preview_path(self):
+        if not self.current_result:
+            return None
+        outdir = Path(self.current_result["outdir"])
+        if self.current_stage == "outer":
+            for name in ("outer_fit_preview.png", "outer_registration_overlay.png", "subject_outer_mask.png", "midline_profile_overlay.png"):
+                path = outdir / name
+                if path.exists():
+                    return path
+        if self.current_stage == "cluster":
+            path = outdir / "cluster_on_affine_preview.png"
+            if not path.exists():
+                self.create_cluster_preview(outdir)
+            return path if path.exists() else outdir / "subject_inner_boundaries.png"
+        return outdir / "final_warp_overlay.png"
+
+    def preview_mean_image(self, shape_hw):
+        img = self.app.state.display_image if self.app.state.display_image is not None else self.app.state.baseline_image
+        if img is None and self.app.state.movie is not None:
+            img = np.mean(self.app.state.movie, axis=0)
+        if img is None:
+            return None
+        img = np.asarray(img, dtype=np.float32)
+        if img.ndim == 3:
+            img = np.mean(img, axis=2)
+        if tuple(img.shape[:2]) != tuple(shape_hw):
+            img = core.cv2.resize(img, (int(shape_hw[1]), int(shape_hw[0])), interpolation=core.cv2.INTER_AREA)
+        return img
+
+    def create_outer_preview(self, outdir: Path):
+        mask_path = outdir / "subject_mask.npy"
+        affine_json_path = outdir / "affine_atlas_regions.json"
+        if not mask_path.exists() or not affine_json_path.exists():
+            return
+        subject_mask = np.load(mask_path).astype(np.uint8)
+        with open(affine_json_path, "r", encoding="utf-8") as f:
+            atlas = json.load(f)
+        mean_img = self.preview_mean_image(subject_mask.shape)
+        fig = Figure(figsize=(8, 8), dpi=160)
+        ax = fig.add_subplot(111)
+        ax.set_facecolor("#020617")
+        ax.set_axis_off()
+        if mean_img is not None:
+            vmin, vmax = np.percentile(mean_img, [2, 98])
+            ax.imshow(mean_img, cmap="gray", vmin=vmin, vmax=vmax, alpha=0.30, interpolation="bilinear")
+        contours, _ = core.cv2.findContours(subject_mask, core.cv2.RETR_EXTERNAL, core.cv2.CHAIN_APPROX_NONE)
+        for contour in contours:
+            pts = contour[:, 0, :]
+            ax.plot(pts[:, 0], pts[:, 1], color="#38bdf8", linewidth=1.0)
+        outer = np.asarray(atlas.get("brain_outer_polygon", []), dtype=np.float32)
+        if outer.ndim == 2 and len(outer) >= 3:
+            ax.plot(np.r_[outer[:, 0], outer[0, 0]], np.r_[outer[:, 1], outer[0, 1]], color="#fb7185", linewidth=1.4)
+        midline = np.asarray(atlas.get("midline_polyline", []), dtype=np.float32)
+        if midline.ndim == 2 and len(midline) >= 2:
+            ax.plot(midline[:, 0], midline[:, 1], color="#a3e635", linewidth=1.2)
+        ax.set_xlim(-0.5, subject_mask.shape[1] - 0.5)
+        ax.set_ylim(subject_mask.shape[0] - 0.5, -0.5)
+        fig.tight_layout(pad=0)
+        fig.savefig(outdir / "outer_fit_preview.png", bbox_inches="tight", pad_inches=0)
+        fig.clear()
+
+    def create_cluster_preview(self, outdir: Path):
+        label_map_path = outdir / "leiden_label_map.npy"
+        affine_path = outdir / "affine_atlas_label_map.npy"
+        if not label_map_path.exists():
+            return
+        label_map = np.load(label_map_path)
+        affine = np.load(affine_path) if affine_path.exists() else None
+        fig = Figure(figsize=(8, 8), dpi=160)
+        ax = fig.add_subplot(111)
+        ax.set_axis_off()
+        ax.imshow(np.ma.masked_where(label_map == 0, label_map), cmap="tab20b", interpolation="nearest")
+        if affine is not None:
+            from skimage.segmentation import find_boundaries
+            boundary = find_boundaries(affine, mode="outer") & (affine > 0)
+            ax.contour(boundary.astype(np.uint8), levels=[0.5], colors="white", linewidths=0.35)
+        fig.tight_layout(pad=0)
+        fig.savefig(outdir / "cluster_on_affine_preview.png", bbox_inches="tight", pad_inches=0)
+        fig.clear()
+
+    def raw_settings_snapshot(self):
+        self.app.user_settings["neuroalign"] = {
+            "video": self.video_var.get().strip(),
+            "atlas_json": self.atlas_json_var.get().strip(),
+            "outdir": self.outdir_var.get().strip(),
+            "cfg": {key: var.get().strip() for key, var in self.cfg_vars.items()},
+        }
+        save_user_settings(self.app.user_settings)
+
+    def destroy(self):
+        try:
+            self.raw_settings_snapshot()
+        except Exception:
+            pass
+        super().destroy()
+
+    def refresh_preview(self):
+        self.preview_canvas.delete("all")
+        path = self.preview_path()
+        if path is None:
+            self.preview_canvas.create_text(20, 20, anchor="nw", text="Click Rebuild to generate this preview.", fill=THEME["text"], font=("Segoe UI", 12))
+            return
+        if not Path(path).exists():
+            self.preview_canvas.create_text(20, 20, anchor="nw", text=f"Preview not found:\n{path}", fill=THEME["text"], font=("Segoe UI", 12))
+            return
+        cw = max(1, self.preview_canvas.winfo_width())
+        ch = max(1, self.preview_canvas.winfo_height())
+        img = Image.open(path).convert("RGB")
+        scale = min(cw / img.width, ch / img.height, 1.0)
+        size = (max(1, int(img.width * scale)), max(1, int(img.height * scale)))
+        img = img.resize(size, Image.Resampling.LANCZOS)
+        self.preview_image_ref = ImageTk.PhotoImage(img)
+        self.preview_canvas.create_image(cw // 2, ch // 2, image=self.preview_image_ref, anchor="center")
+        captions = {
+            "outer": "Outer contour preview: affine atlas outline over mean image.",
+            "cluster": "Clustering preview: Leiden clusters with affine atlas boundary overlay, mean image hidden.",
+            "final": "Final atlas preview: warped atlas over subject image.",
+        }
+        self.preview_caption.set(captions[self.current_stage])
+
+    def next_stage(self):
+        if self.current_stage == "outer":
+            self.current_stage = "cluster"
+        elif self.current_stage == "cluster":
+            self.current_stage = "final"
+        else:
+            self.accept()
+            return
+        self.render_stage()
+
+    def accept(self):
+        if not self.current_result:
+            messagebox.showwarning("NeuroAlign", "Please run Rebuild before using the result.")
+            return
+        self.values = self.current_result
         self.destroy()
 
 
@@ -959,6 +1373,7 @@ class NewLightApp:
         self._view_is_fit = True
         self._view_lock = False
         self._setting_frame_scale = False
+        self.user_settings = load_user_settings()
         self.last_atlas_reference_json = ""
         self.last_neuroalign_output_dir = ""
         self._build_ui()
@@ -1221,8 +1636,23 @@ class NewLightApp:
         stamp = time.strftime("%H:%M:%S")
         self.log_text.insert("end", f"[{stamp}] {text}\n")
         self.log_text.see("end")
-        self.status.set(text)
+        self.status.set(self.status_summary(text))
         self.root.update_idletasks()
+
+    def status_summary(self, text, max_chars=140):
+        line = str(text).strip().splitlines()[0] if str(text).strip() else ""
+        if len(line) > max_chars:
+            return line[: max_chars - 3].rstrip() + "..."
+        return line
+
+    def worker_error_summary(self, text):
+        lines = [line.strip() for line in str(text).splitlines() if line.strip()]
+        if not lines:
+            return "Worker failed. See Run Log for details."
+        for line in reversed(lines):
+            if line.startswith(("FileNotFoundError", "ValueError", "RuntimeError", "PermissionError")):
+                return self.status_summary(line, max_chars=420) + "\n\nFull details are in Run Log."
+        return self.status_summary(lines[-1], max_chars=420) + "\n\nFull details are in Run Log."
 
     def acceleration(self):
         return self.acceleration_var.get()
@@ -1703,6 +2133,8 @@ class NewLightApp:
         vals = dlg.values
         if not vals:
             return
+        self.user_settings["atlas_reference_builder"] = vals
+        save_user_settings(self.user_settings)
         script = NEUROALIGN_DIR / "build_atlas_from_lines_autocomplete.py"
 
         def run():
@@ -1748,33 +2180,48 @@ class NewLightApp:
         if not default_atlas:
             candidate = NEUROALIGN_DIR / "atlas_regions_raw.json"
             default_atlas = str(candidate) if candidate.exists() else ""
-        dlg = NeuroAlignDialog(self.root, self, default_video=default_video, default_atlas_json=default_atlas)
-        vals = dlg.values
-        if not vals:
-            return
+        saved = self.user_settings.get("neuroalign", {})
+        defaults = {
+            "video": saved.get("video") or default_video,
+            "atlas_json": saved.get("atlas_json") or default_atlas,
+            "outdir": saved.get("outdir") or default_neuroalign_outdir("neuroalign"),
+            "cfg": saved.get("cfg", neuroalign_recommended_cfg()),
+        }
+        wizard = NeuroAlignWizard(self.root, self, defaults)
+        self.root.wait_window(wizard)
+        if wizard.values:
+            self._finish_neuroalign(wizard.values)
+
+    def run_neuroalign_backend(self, vals):
         script = NEUROALIGN_DIR / "atlas_registration_merged_bilateral_midline.py"
-
-        def run():
-            outdir = Path(vals["outdir"])
-            cfg_path = outdir / "neuroalign_config.json"
-            outdir.mkdir(parents=True, exist_ok=True)
-            check_neuroalign_registration_backend()
-            bundle = {
-                "preset": "balanced",
-                "video": vals["video"],
-                "atlas_json": vals["atlas_json"],
-                "outdir": str(outdir),
-                "cfg": vals["cfg"],
-            }
-            with open(cfg_path, "w", encoding="utf-8") as f:
-                json.dump(bundle, f, ensure_ascii=False, indent=2)
-            log = run_backend_script(script, ["--config", str(cfg_path)], cwd=NEUROALIGN_DIR, timeout=None)
-            warped_json = outdir / "warped_atlas_regions.json"
-            if not warped_json.exists():
-                raise RuntimeError("NeuroAlign finished but did not create warped_atlas_regions.json")
-            return {"warped_json": str(warped_json), "outdir": str(outdir), "config": str(cfg_path), "log": log}
-
-        self.run_worker("NeuroAlign", run, self._finish_neuroalign)
+        outdir = Path(vals["outdir"])
+        cfg_path = outdir / "neuroalign_config.json"
+        outdir.mkdir(parents=True, exist_ok=True)
+        check_neuroalign_registration_backend()
+        bundle = {
+            "preset": "balanced",
+            "video": vals["video"],
+            "atlas_json": vals["atlas_json"],
+            "outdir": str(outdir),
+            "cfg": vals["cfg"],
+        }
+        with open(cfg_path, "w", encoding="utf-8") as f:
+            json.dump(bundle, f, ensure_ascii=False, indent=2)
+        log = run_backend_script(
+            script,
+            [
+                "--config", str(cfg_path),
+                "--video", vals["video"],
+                "--atlas_json", vals["atlas_json"],
+                "--outdir", str(outdir),
+            ],
+            cwd=NEUROALIGN_DIR,
+            timeout=None,
+        )
+        warped_json = outdir / "warped_atlas_regions.json"
+        if not warped_json.exists():
+            raise RuntimeError("NeuroAlign finished but did not create warped_atlas_regions.json")
+        return {"warped_json": str(warped_json), "outdir": str(outdir), "config": str(cfg_path), "log": log}
 
     def _finish_neuroalign(self, result):
         self.last_neuroalign_output_dir = result["outdir"]
@@ -2014,7 +2461,7 @@ class NewLightApp:
             while True:
                 callback, result, exc = self.worker_queue.get_nowait()
                 if exc:
-                    messagebox.showerror("Worker failed", str(exc))
+                    messagebox.showerror("Worker failed", self.worker_error_summary(str(exc)))
                     self.log(f"Worker failed: {exc}")
                 elif callback:
                     callback(result)

@@ -22,6 +22,7 @@ Output/
 # Runtime output and temporary analysis data
 NewLight_temp/
 NeuroAlign_runs/
+NewLight_user_settings.json
 temp/
 tmp/
 *.log

@@ -141,6 +141,12 @@ Requirements already discussed:
 - `NeuroAlign_runs/` is ignored by git because it contains generated registration outputs.
 - `analysis_core.run_conda_worker` now forces UTF-8 capture to avoid Windows GBK crashes from backend output text.
 - Last validation for this integration passed: Python compile, atlas JSON to 26 ROI masks at 500 x 500, NeuroAlign backend imports, Tk GUI construction, and an Atlas Reference Builder run that created `NeuroAlign_runs/test_builder_final/atlas_regions_raw.json`.
+- NeuroAlign launch must pass `--atlas_json` explicitly. The registration script's parser has a non-None default of `output/atlas_regions_raw.json`, so relying only on the generated config bundle can make it ignore the selected atlas file.
+- Long worker errors should stay in `Run Log`; the main status label is intentionally reduced to a one-line summary to avoid visually overflowing into the image display area.
+- NeuroAlign now opens a three-step preview wizard instead of the old one-shot dialog. The steps are outer contour, clustering, and final atlas. `Rebuild` reruns the backend with current parameters; `Use Result` imports `warped_atlas_regions.json` into the main ROI overlay.
+- The wizard writes user choices to ignored local file `NewLight_user_settings.json`, so reopening the button restores the last closed parameters instead of resetting to defaults.
+- The outer preview is custom-rendered as `outer_fit_preview.png` with the current mean/projection image at 30% opacity plus subject/atlas contour and midline overlays.
+- The clustering preview is custom-rendered as `cluster_on_affine_preview.png`, using Leiden labels plus affine atlas boundaries without the mean image.
 
 ## Git / Record Policy
 

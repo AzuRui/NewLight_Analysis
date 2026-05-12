@@ -67,6 +67,17 @@ Atlas JSON:
 Output dir:
   Folder for the full registration report and all intermediate files.
 
+Preview workflow:
+  Step 1 shows outer contour fitting. Rebuild after changing mask / midline /
+  outer-contour parameters. The mean image is shown at low opacity so the
+  contour fit is easier to judge.
+
+  Step 2 shows the Leiden clustering result over the affine atlas boundary.
+  The mean image is hidden in this step so cluster boundaries are easier to see.
+
+  Step 3 shows the final warped atlas. Use Result imports that warped atlas
+  into the main video window as the active ROI set.
+
 Brain mask percentile:
   Controls how conservative the subject brain mask is.
   Raise it when the mask includes background or fills the midline.
