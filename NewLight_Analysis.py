@@ -1532,9 +1532,8 @@ class NewLightApp:
 
         view_box = ttk.LabelFrame(flow_tab, text="View", padding=8)
         view_box.grid(row=1, column=0, sticky="ew", pady=6)
-        for i, (text, value) in enumerate([("Mean", "mean"), ("Max", "max"), ("Std", "std"), ("Corr", "corr")]):
+        for i, (text, value) in enumerate([("Mean", "mean"), ("Max", "max"), ("Std", "std")]):
             ttk.Radiobutton(view_box, text=text, variable=self.projection_mode, value=value, command=self.refresh_projection).grid(row=i // 2, column=i % 2, sticky="w")
-        ttk.Button(view_box, text="Show dF/F Heatmap", command=self.show_dff_heatmap).grid(row=2, column=0, columnspan=2, sticky="ew", pady=(6, 0))
 
         protocol_box = ttk.LabelFrame(flow_tab, text="Protocol", padding=8)
         protocol_box.grid(row=2, column=0, sticky="ew", pady=6)

@@ -223,3 +223,20 @@
 - Added a `Back` button to the NeuroAlign wizard. It is disabled on Step 1 and moves Step 3 -> Step 2 or Step 2 -> Step 1.
 - Suppressed `FutureWarning` output inside `neuroalign_step_worker.py` so skimage deprecation messages no longer clutter the Run Log.
 - Added GUI-side backend log cleanup for known OpenCL vendor `temp.txt` noise and FutureWarning blocks while preserving real error lines.
+
+### NeuroAlign Midline-Locked Outer Affine
+
+- Investigated the case where `midline_profile_overlay.png` correctly identified the bilateral fissure, but the Step 1 red atlas contour still appeared slanted or off-midline.
+- Found that the old outer affine stage only received one averaged subject midline x value; the full detected midline/fissure profile did not stay active during the contour-refinement loop.
+- Added a NewLight-side runtime patch in `neuroalign_step_worker.py` that replaces NeuroAlign's outer affine estimator with a weighted fit using landmark, contour, and detected midline anchor points.
+- The new fit reports contour error, midline error, rotation, shear, and midline-anchor count in the Run Log, making Step 1 easier to debug.
+- Kept the rejected preview-TPS experiment out of the final code path because it over-deformed internal atlas polygons and would be misleading in the Step 1 preview.
+- Validation on `NeuroAlign_runs/neuroalign_20260513_105405` Step 1: `mean contour error = 13.672 px`, `midline error = 3.998 px`, `rotation = -0.95 deg`, `shear = 0.000`, `midline anchors = 12`.
+
+### View Panel Cleanup
+
+- Removed the `Corr` projection option from the Data tab `View` panel.
+- Removed the `Show dF/F Heatmap` button from the same `View` panel.
+- Kept the underlying correlation / heatmap code and Analysis-tab heatmap AVI workflow intact.
+- Verified with `python -m py_compile NewLight_Analysis.py analysis_core.py neuroalign_step_worker.py`.
+- Smoke-tested Tk GUI construction and confirmed `Corr` / `Show dF/F Heatmap` are no longer present in widget text.

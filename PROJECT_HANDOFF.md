@@ -1,6 +1,6 @@
 # NewLight_Analysis Handoff
 
-Last updated: 2026-05-09
+Last updated: 2026-05-13
 
 ## Project
 
@@ -43,7 +43,7 @@ Please continue the NewLight_Analysis project. First read E:\WorkSpace\NewLight_
 
 At the end of every substantial task, perform a context-safety self-check:
 
-1. If background/context usage is above 80%, update `PROJECT_HANDOFF.md` and `WORK_LOG.md` before starting the next task so the next step can continue from compact, explicit records instead of relying on a long chat.
+1. If background/context usage is above 70%, update `PROJECT_HANDOFF.md` and `WORK_LOG.md` before starting the next task so the next step can continue from compact, explicit records instead of relying on a long chat.
 2. If context compression is needed, do it after a task finishes, not in the middle of reasoning or while a code change is half-complete.
 3. After compression, if estimated information distortion or loss is above 70%, tell the user to open a new chat and instruct the new chat to read this handoff file first.
 4. If a new chat is opened, the handoff source of truth is this file plus `WORK_LOG.md`, not the memory of the previous conversation.
@@ -74,6 +74,8 @@ The ROI action row remains below the navigation toolbar:
 - status text
 
 Frame slider and run log are below that.
+
+The Data tab `View` panel now only exposes `Mean`, `Max`, and `Std` projection modes. The older `Corr` projection entry and `Show dF/F Heatmap` button were removed from this panel; correlation and heatmap export code still exists elsewhere for Analysis/export workflows.
 
 The heatmap AVI dialog now includes:
 
@@ -158,6 +160,9 @@ Requirements already discussed:
 - Step 3 preview fallback now uses Step 2 `cluster_on_affine_preview.png` before final rebuild; if that is unavailable it falls back to Step 1 previews instead of reporting missing `final_warp_overlay.png`.
 - NeuroAlign wizard has a `Back` button for Step 3 -> Step 2 and Step 2 -> Step 1 navigation.
 - `neuroalign_step_worker.py` suppresses `FutureWarning` output, and `NewLight_Analysis.clean_backend_log` removes known OpenCL vendor `temp.txt` noise while preserving real errors.
+- The Step 1 outer-affine fit is patched at runtime by `neuroalign_step_worker.install_midline_locked_outer_affine`. This keeps detected midline anchors active during affine refinement instead of using only a single averaged midline x value, and logs contour error, midline error, rotation, shear, and anchor count.
+- On the 2026-05-13 test run `NeuroAlign_runs/neuroalign_20260513_105405`, the updated Step 1 reported `mean contour error = 13.672 px`, `midline error = 3.998 px`, `rotation = -0.95 deg`, `shear = 0.000`, `midline anchors = 12`.
+- A preview-only TPS idea was tested and rejected because it over-deformed atlas polygons; keep Step 1 preview tied to the stable affine result unless a more constrained local preview warp is designed later.
 
 ## Git / Record Policy
 
