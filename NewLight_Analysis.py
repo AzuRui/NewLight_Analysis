@@ -150,6 +150,25 @@ def load_neuroalign_help_text() -> str:
     )
 
 
+def clean_backend_log(text: str) -> str:
+    cleaned = []
+    skip_next = False
+    for line in str(text).splitlines():
+        stripped = line.strip()
+        if skip_next:
+            skip_next = False
+            continue
+        if "FutureWarning:" in line:
+            skip_next = True
+            continue
+        if "OpenCL" in line and "vendors" in line and "temp.txt" in line:
+            continue
+        if stripped in {"Access is denied.", "The system cannot find the file specified."}:
+            continue
+        cleaned.append(line)
+    return "\n".join(cleaned).strip()
+
+
 def run_backend_script(script_path: Path, args: list[str], cwd: Path | None = None, timeout: int | None = None) -> str:
     proc = core.run_conda_worker(
         NEUROALIGN_ENV,
@@ -158,7 +177,7 @@ def run_backend_script(script_path: Path, args: list[str], cwd: Path | None = No
         cwd=str(cwd) if cwd else None,
         timeout=timeout,
     )
-    log = (proc.stdout or "") + ("\n" + proc.stderr if proc.stderr else "")
+    log = clean_backend_log((proc.stdout or "") + ("\n" + proc.stderr if proc.stderr else ""))
     if proc.returncode != 0:
         if (
             "No module named 'igraph'" in log
@@ -685,14 +704,16 @@ class NeuroAlignWizard(tk.Toplevel):
 
         buttons = ttk.Frame(left)
         buttons.grid(row=3, column=0, sticky="ew", pady=(8, 0))
-        buttons.columnconfigure((0, 1, 2), weight=1)
+        buttons.columnconfigure((0, 1, 2, 3), weight=1)
         ttk.Button(buttons, text="Help", command=self.show_help).grid(row=0, column=0, sticky="ew", padx=(0, 4))
+        self.back_button = ttk.Button(buttons, text="Back", command=self.prev_stage)
+        self.back_button.grid(row=0, column=1, sticky="ew", padx=4)
         self.rebuild_button = ttk.Button(buttons, text="Rebuild", command=self.rebuild)
-        self.rebuild_button.grid(row=0, column=1, sticky="ew", padx=4)
+        self.rebuild_button.grid(row=0, column=2, sticky="ew", padx=4)
         self.next_button = ttk.Button(buttons, text="Next", command=self.next_stage)
-        self.next_button.grid(row=0, column=2, sticky="ew", padx=(4, 0))
+        self.next_button.grid(row=0, column=3, sticky="ew", padx=(4, 0))
         ttk.Button(buttons, text="Cancel", command=self.destroy).grid(row=1, column=0, sticky="ew", pady=(6, 0), padx=(0, 4))
-        ttk.Button(buttons, text="Use Result", command=self.accept).grid(row=1, column=1, columnspan=2, sticky="ew", pady=(6, 0), padx=(4, 0))
+        ttk.Button(buttons, text="Use Result", command=self.accept).grid(row=1, column=1, columnspan=3, sticky="ew", pady=(6, 0), padx=(4, 0))
 
         right = ttk.Frame(body)
         right.grid(row=0, column=1, sticky="nsew")
@@ -783,6 +804,7 @@ class NeuroAlignWizard(tk.Toplevel):
         for row, (key, label) in enumerate(self.stage_fields()):
             ttk.Label(self.param_frame, text=label).grid(row=row, column=0, sticky="w", pady=3)
             ttk.Entry(self.param_frame, textvariable=self.cfg_vars[key], width=14).grid(row=row, column=1, sticky="ew", padx=(8, 0), pady=3)
+        self.back_button.configure(state="disabled" if self.current_stage == "outer" else "normal")
         self.next_button.configure(text="Finish" if self.current_stage == "final" else "Next")
         self.refresh_preview()
 
@@ -1028,6 +1050,15 @@ class NeuroAlignWizard(tk.Toplevel):
         elif self.current_stage == "final" and path.name.startswith("outer_"):
             captions["final"] = "Earlier-stage preview shown until final atlas preview is rebuilt."
         self.preview_caption.set(captions[self.current_stage])
+
+    def prev_stage(self):
+        if self.current_stage == "final":
+            self.current_stage = "cluster"
+        elif self.current_stage == "cluster":
+            self.current_stage = "outer"
+        else:
+            return
+        self.render_stage()
 
     def next_stage(self):
         if self.current_stage == "outer":

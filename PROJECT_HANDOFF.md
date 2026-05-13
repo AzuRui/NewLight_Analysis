@@ -156,6 +156,8 @@ Requirements already discussed:
 - Blank values from old `NewLight_user_settings.json` snapshots are replaced with current defaults when the wizard opens.
 - Step 2 preview fallback now uses Step 1 outputs such as `outer_fit_preview.png` or `outer_registration_overlay.png`; it no longer probes for `subject_inner_boundaries.png` before clustering has been rebuilt.
 - Step 3 preview fallback now uses Step 2 `cluster_on_affine_preview.png` before final rebuild; if that is unavailable it falls back to Step 1 previews instead of reporting missing `final_warp_overlay.png`.
+- NeuroAlign wizard has a `Back` button for Step 3 -> Step 2 and Step 2 -> Step 1 navigation.
+- `neuroalign_step_worker.py` suppresses `FutureWarning` output, and `NewLight_Analysis.clean_backend_log` removes known OpenCL vendor `temp.txt` noise while preserving real errors.
 
 ## Git / Record Policy
 

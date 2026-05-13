@@ -3,11 +3,13 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import warnings
 from argparse import Namespace
 from pathlib import Path
 
 import numpy as np
 
+warnings.filterwarnings("ignore", category=FutureWarning)
 
 APP_DIR = Path(__file__).resolve().parent
 WORKSPACE = APP_DIR.parent

@@ -217,3 +217,9 @@
 - Fixed the Step 3 preview fallback so it no longer reports missing `final_warp_overlay.png` before the final stage has been rebuilt.
 - When Step 3 opens immediately after Step 2, the wizard now shows `cluster_on_affine_preview.png` until the user clicks `Rebuild` for final atlas generation.
 - If Step 2 output is also unavailable, Step 3 falls back to Step 1 previews such as `outer_fit_preview.png`.
+
+### NeuroAlign Wizard Navigation / Log Cleanup
+
+- Added a `Back` button to the NeuroAlign wizard. It is disabled on Step 1 and moves Step 3 -> Step 2 or Step 2 -> Step 1.
+- Suppressed `FutureWarning` output inside `neuroalign_step_worker.py` so skimage deprecation messages no longer clutter the Run Log.
+- Added GUI-side backend log cleanup for known OpenCL vendor `temp.txt` noise and FutureWarning blocks while preserving real error lines.
