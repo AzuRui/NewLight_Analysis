@@ -1498,8 +1498,7 @@ class NewLightApp:
         self.deepcad_denoised_movie = None
         self.deepcad_cache_movie_id = None
         self.deepcad_projection_cache = {}
-        self.deepcad_original_movie = None
-        self.deepcad_preview_active = False
+        self.deepcad_last_preview_weight = None
         self.deepcad_running = False
         self.deepcad_running_token = None
         self.deepcad_last_error = ""
@@ -1560,6 +1559,7 @@ class NewLightApp:
         ttk.Label(weight_box, text="Weight").grid(row=0, column=0, sticky="w", padx=(0, 4))
         weight_entry = ttk.Entry(weight_box, textvariable=self.deepcad_weight_var, width=6)
         weight_entry.grid(row=0, column=1, sticky="ew")
+        weight_entry.bind("<KeyRelease>", lambda _event: self.on_deepcad_weight_edited())
         weight_entry.bind("<Return>", lambda _event: self.on_deepcad_weight_changed())
         weight_entry.bind("<FocusOut>", lambda _event: self.on_deepcad_weight_changed())
 
@@ -1811,7 +1811,6 @@ class NewLightApp:
             pass
 
     def on_close(self):
-        self.restore_deepcad_original(redraw=False)
         self.cleanup_session_temp()
         self.root.destroy()
 
@@ -1836,15 +1835,15 @@ class NewLightApp:
         return (
             self.deepcad_denoised_movie is not None
             and self.state.movie is not None
-            and self.deepcad_cache_movie_id == self.deepcad_source_movie_id()
-            and self.deepcad_denoised_movie.shape == self.deepcad_source_movie().shape
+            and self.deepcad_cache_movie_id == id(self.state.movie)
+            and self.deepcad_denoised_movie.shape == self.state.movie.shape
         )
 
     def clear_deepcad_cache(self):
-        self.clear_deepcad_preview_state()
         self.deepcad_denoised_movie = None
         self.deepcad_cache_movie_id = None
         self.deepcad_projection_cache = {}
+        self.deepcad_last_preview_weight = None
         self.deepcad_running = False
         self.deepcad_running_token = None
         self.deepcad_last_error = ""
@@ -1853,78 +1852,37 @@ class NewLightApp:
     def on_deepcad_toggle(self):
         if self.deepcad_enabled_var.get():
             self.deepcad_last_error = ""
-            if self.deepcad_cache_is_current():
-                self.apply_deepcad_preview_movie()
-                return
             self.ensure_deepcad_cache_async()
         else:
             self.deepcad_request_token += 1
             self.deepcad_running = False
             self.deepcad_running_token = None
-            self.restore_deepcad_original(redraw=False)
         self.redraw(preserve_view=True)
+
+    def on_deepcad_weight_edited(self):
+        try:
+            weight = float(self.deepcad_weight_var.get())
+        except ValueError:
+            return
+        weight = max(0.0, min(1.0, weight))
+        if self.deepcad_last_preview_weight is None or abs(weight - self.deepcad_last_preview_weight) > 1e-6:
+            self.deepcad_last_preview_weight = weight
+            self.redraw(preserve_view=True)
 
     def on_deepcad_weight_changed(self):
         self.deepcad_weight()
-        if self.deepcad_preview_active and self.deepcad_cache_is_current():
-            self.apply_deepcad_preview_movie()
-        else:
-            self.redraw(preserve_view=True)
-
-    def deepcad_source_movie(self):
-        return self.deepcad_original_movie if self.deepcad_original_movie is not None else self.state.movie
-
-    def deepcad_source_movie_id(self):
-        return id(self.deepcad_source_movie())
+        self.redraw(preserve_view=True)
 
     def deepcad_temp_dir(self):
         return self.temp_work_dir("DeepCAD-RT")
-
-    def restore_deepcad_original(self, redraw=True):
-        if self.deepcad_preview_active and self.deepcad_original_movie is not None:
-            self.state.movie = self.deepcad_original_movie
-            self.deepcad_preview_active = False
-            self.state.baseline_image = core.baseline_from_seconds(
-                self.state.movie,
-                self.state.fs,
-                self.state.baseline_start_s,
-                self.state.baseline_duration_s,
-            )
-            self.update_frame_controls()
-            if redraw:
-                self.refresh_projection(preserve_view=True)
-        self.deepcad_original_movie = None
-
-    def clear_deepcad_preview_state(self):
-        self.deepcad_original_movie = None
-        self.deepcad_preview_active = False
-
-    def apply_deepcad_preview_movie(self):
-        if not self.deepcad_enabled_var.get() or not self.deepcad_cache_is_current():
-            return
-        if not self.deepcad_preview_active:
-            self.deepcad_original_movie = self.state.movie
-        weight = self.deepcad_weight()
-        self.state.movie = core.blend_movies(self.deepcad_original_movie, self.deepcad_denoised_movie, weight)
-        self.deepcad_preview_active = True
-        self.state.baseline_image = core.baseline_from_seconds(
-            self.state.movie,
-            self.state.fs,
-            self.state.baseline_start_s,
-            self.state.baseline_duration_s,
-        )
-        self.deepcad_projection_cache = {}
-        self.update_frame_controls()
-        self.refresh_projection(preserve_view=True)
 
     def ensure_deepcad_cache_async(self):
         if not self.deepcad_enabled_var.get() or not self.require_movie():
             return
         if self.deepcad_cache_is_current() or self.deepcad_running or self.deepcad_last_error:
             return
-        source_movie = self.deepcad_source_movie()
-        movie = np.asarray(source_movie, dtype=np.float32).copy()
-        movie_id = id(source_movie)
+        movie = np.asarray(self.state.movie, dtype=np.float32).copy()
+        movie_id = id(self.state.movie)
         self.deepcad_request_token += 1
         token = self.deepcad_request_token
         out_dir = self.deepcad_temp_dir()
@@ -1947,7 +1905,7 @@ class NewLightApp:
         token = payload.get("token")
         current = (
             token == self.deepcad_request_token
-            and payload.get("movie_id") == self.deepcad_source_movie_id()
+            and payload.get("movie_id") == id(self.state.movie)
         )
         if self.deepcad_running_token == token:
             self.deepcad_running = False
@@ -1963,17 +1921,16 @@ class NewLightApp:
         self.deepcad_denoised_movie = payload["movie"]
         self.deepcad_cache_movie_id = id(self.state.movie)
         self.deepcad_projection_cache = {}
+        self.deepcad_last_preview_weight = self.deepcad_weight()
         self.log("DeepCAD-RT preview cache ready.")
         log = str(payload.get("log", "")).strip()
         if log:
             self.log(log[-800:])
-        self.apply_deepcad_preview_movie()
+        self.redraw(preserve_view=True)
 
     def display_image_for_render(self):
         img = self.state.display_image if self.state.display_image is not None else self.state.baseline_image
         if img is None or not self.deepcad_enabled_var.get() or not self.deepcad_cache_is_current():
-            return img
-        if self.deepcad_preview_active:
             return img
         weight = self.deepcad_weight()
         source = getattr(self, "display_source", ("custom", None))
@@ -2017,8 +1974,7 @@ class NewLightApp:
 
     def push_history(self, label):
         if self.state.movie is not None:
-            movie = self.deepcad_source_movie() if self.deepcad_preview_active else self.state.movie
-            self.state.history.append((label, movie.copy()))
+            self.state.history.append((label, self.state.movie.copy()))
             if len(self.state.history) > 12:
                 self.state.history.pop(0)
 
@@ -2067,7 +2023,6 @@ class NewLightApp:
         if not path:
             return
         try:
-            self.restore_deepcad_original(redraw=False)
             movie, fs = core.load_movie(path)
             self.state = core.AnalysisState(movie=movie, fs=fs, source_path=path)
             self.clear_deepcad_cache()
@@ -2611,14 +2566,13 @@ class NewLightApp:
             self.log(f"Saved movie: {path}")
             return
         weight = self.deepcad_weight()
-        source_movie = self.deepcad_source_movie()
         if self.deepcad_cache_is_current():
-            movie = core.blend_movies(source_movie, self.deepcad_denoised_movie, weight)
+            movie = core.blend_movies(self.state.movie, self.deepcad_denoised_movie, weight)
             self.save_movie_to_path(movie, path)
             self.log(f"Saved DeepCAD-RT blended movie: {path}")
             return
 
-        movie = np.asarray(source_movie, dtype=np.float32).copy()
+        movie = np.asarray(self.state.movie, dtype=np.float32).copy()
         save_fs = self.state.fs
         out_dir = self.deepcad_temp_dir()
         self.log("Running DeepCAD-RT before saving movie...")
@@ -2642,10 +2596,8 @@ class NewLightApp:
             return
         if payload.get("movie") is not None and self.state.movie is not None:
             self.deepcad_denoised_movie = payload["movie"]
-            self.deepcad_cache_movie_id = self.deepcad_source_movie_id()
+            self.deepcad_cache_movie_id = id(self.state.movie)
             self.deepcad_projection_cache = {}
-            if self.deepcad_enabled_var.get():
-                self.apply_deepcad_preview_movie()
         self.log(f"Saved DeepCAD-RT blended movie: {payload['path']}")
         log = str(payload.get("log", "")).strip()
         if log:
@@ -2661,7 +2613,6 @@ class NewLightApp:
         try:
             self.apply_protocol(update_baseline=False)
             self.push_history(label)
-            self.restore_deepcad_original(redraw=False)
             self.state.movie = func(self.state.movie)
             self.clear_deepcad_cache()
             self.state.baseline_image = core.baseline_from_seconds(
@@ -2832,9 +2783,8 @@ class NewLightApp:
             mode = "rigid"
         out_dir = self.temp_work_dir("CaImAn")
         self.push_history("CaImAn Motion")
-        source_movie = np.asarray(self.deepcad_source_movie(), dtype=np.float32).copy()
-        self.restore_deepcad_original(redraw=False)
-        self.run_worker("CaImAn Motion", lambda: core.run_caiman_motion(source_movie, str(out_dir), mode=mode), self._finish_caiman_motion)
+        movie = np.asarray(self.state.movie, dtype=np.float32).copy()
+        self.run_worker("CaImAn Motion", lambda: core.run_caiman_motion(movie, str(out_dir), mode=mode), self._finish_caiman_motion)
 
     def _finish_caiman_motion(self, result):
         movie, log = result

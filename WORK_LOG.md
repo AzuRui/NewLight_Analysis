@@ -283,8 +283,8 @@
 
 - Added a per-run session temp directory created under the OS temp folder and deleted on app close.
 - Moved DeepCAD-RT preview/save intermediates, NeuroSeg3 worker inputs/masks, and CaImAn worker TIFFs into that session temp directory instead of writing `NewLight_temp` beside the source movie.
-- Changed DeepCAD-RT preview behavior so enabling the toggle runs denoising into temp storage, then temporarily replaces the current working movie with the raw/denoised blend. Turning the toggle off restores the original movie.
+- DeepCAD-RT preview remains a display/save overlay only. It no longer temporarily replaces `state.movie`, because large movies made that approach too heavy and it confused later preprocessing.
 - Kept formal output tied to Data -> `Save Current Movie`: without that button, DeepCAD preview files remain temporary and are cleaned up with the app session.
-- Weight changes now re-blend the temporary DeepCAD preview movie from the original movie and cached denoised movie without rerunning DeepCAD or double-blending the display.
-- Persistent preprocessing operations restore the original movie before applying so DeepCAD's temporary preview does not accidentally become a committed preprocessing input.
-- Verified Python compilation, session temp cleanup on close, and a small GUI smoke test for DeepCAD preview apply / Weight reblend / restore.
+- Weight edits are now monitored while typing; if the value changes, the current view redraws immediately without rerunning DeepCAD.
+- Current preprocessing buttons are still destructive/stacking operations on `state.movie`: `Save Current Movie` saves the processed current movie, and multiple preprocessing operations do stack in order. A future non-destructive pipeline/config refactor should convert these into recorded operations that are reapplied for preview and full-movie export.
+- Verified Python compilation, session temp cleanup on close, and a small GUI smoke test for DeepCAD display overlay / Weight redraw / save blending.
