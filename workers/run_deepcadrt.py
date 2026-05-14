@@ -76,6 +76,26 @@ def resolve_model_location(deepcad_dir: Path, model: Optional[str]) -> tuple[Pat
     )
 
 
+def infer_required_fmap(model_dir: Path) -> int | None:
+    model_files = sorted(model_dir.glob("*.pth"))
+    if not model_files:
+        return None
+    try:
+        import torch
+
+        state = torch.load(model_files[-1], map_location="cpu")
+        first = state.get("Generator.encoders.0.basic_module.SingleConv1.conv.weight")
+        if first is None and isinstance(state, dict) and "state_dict" in state:
+            first = state["state_dict"].get("Generator.encoders.0.basic_module.SingleConv1.conv.weight")
+        if first is None or len(first.shape) < 1:
+            return None
+        # DeepCAD-RT's DoubleConv halves the first encoder channel count,
+        # so a checkpoint with first conv out_channels=16 needs f_maps=32.
+        return max(1, int(first.shape[0]) * 2)
+    except Exception:
+        return None
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run DeepCAD-RT denoising for NewLight Analysis.")
     parser.add_argument("--input", required=True)
@@ -116,6 +136,8 @@ def main() -> int:
     patch_t = max(4, min(int(args.patch_t), int(t)))
 
     pth_dir, model_name, model_dir = resolve_model_location(deepcad_dir, args.model.strip() or None)
+    inferred_fmap = infer_required_fmap(model_dir)
+    fmap = inferred_fmap if inferred_fmap else int(args.fmap)
 
     with tempfile.TemporaryDirectory(prefix="newlight_deepcadrt_worker_") as tmp:
         tmp_dir = Path(tmp)
@@ -137,7 +159,7 @@ def main() -> int:
             "pth_dir": str(pth_dir),
             "denoise_model": model_name,
             "output_dir": "results",
-            "fmap": int(args.fmap),
+            "fmap": int(fmap),
             "GPU": str(args.gpu),
             "num_workers": int(args.num_workers),
             "visualize_images_per_epoch": False,
@@ -145,7 +167,7 @@ def main() -> int:
         print(f"DeepCAD-RT model: {model_name}")
         print(f"DeepCAD-RT model folder: {model_dir}")
         print(f"DeepCAD-RT input shape: {movie.shape}")
-        print(f"DeepCAD-RT patch_xy={patch_xy}, patch_t={patch_t}, overlap={args.overlap}")
+        print(f"DeepCAD-RT patch_xy={patch_xy}, patch_t={patch_t}, overlap={args.overlap}, fmap={fmap}")
         old_cwd = Path.cwd()
         os.chdir(tmp_dir)
         try:
