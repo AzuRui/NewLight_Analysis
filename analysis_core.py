@@ -209,6 +209,53 @@ def save_movie_tiff(movie: np.ndarray, path: str) -> None:
     tifffile.imwrite(path, np.asarray(movie, dtype=np.float32), photometric="minisblack")
 
 
+def _movie_to_uint8(movie: np.ndarray) -> np.ndarray:
+    arr = np.asarray(movie)
+    if arr.ndim == 2:
+        arr = arr[None, :, :]
+    if arr.ndim != 3:
+        raise ValueError(f"Expected a 3D movie stack, got shape {arr.shape}")
+    if arr.dtype == np.uint8:
+        return arr.copy()
+    arr = arr.astype(np.float32, copy=False)
+    finite = arr[np.isfinite(arr)]
+    if finite.size == 0:
+        return np.zeros(arr.shape, dtype=np.uint8)
+    lo, hi = np.percentile(finite, [1, 99])
+    if hi <= lo:
+        lo, hi = float(np.nanmin(finite)), float(np.nanmax(finite))
+    if hi <= lo:
+        return np.zeros(arr.shape, dtype=np.uint8)
+    return np.clip((arr - lo) / (hi - lo) * 255.0, 0, 255).astype(np.uint8)
+
+
+def save_movie_avi(movie: np.ndarray, path: str, fs: float = 10.0) -> None:
+    frames = _movie_to_uint8(movie)
+    fps = float(fs) if fs and fs > 0 else 10.0
+    h, w = frames.shape[1:3]
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
+    writer = cv2.VideoWriter(path, cv2.VideoWriter_fourcc(*"MJPG"), fps, (w, h), isColor=True)
+    if not writer.isOpened():
+        raise IOError(f"Cannot create AVI video: {path}")
+    try:
+        for frame in frames:
+            writer.write(cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR))
+    finally:
+        writer.release()
+
+
+def save_movie(movie: np.ndarray, path: str, fs: float = 10.0) -> None:
+    ext = Path(path).suffix.lower()
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
+    if ext in {".tif", ".tiff"}:
+        save_movie_tiff(movie, path)
+        return
+    if ext == ".avi":
+        save_movie_avi(movie, path, fs=fs)
+        return
+    raise ValueError(f"Unsupported movie output type: {ext}. Use .tif, .tiff, or .avi")
+
+
 def ensure_deepcadrt_model_available(model: str | None = None) -> str:
     model_path = Path(model) if model else DEEPCADRT_DEFAULT_MODEL_FILE
     if not model_path.is_absolute():
@@ -1215,10 +1262,16 @@ def run_caiman_motion(input_movie: np.ndarray, output_dir: str, mode: str = "rig
     return tifffile.imread(output_path).astype(np.float32), log
 
 
-def run_deepcadrt_denoise(input_movie: np.ndarray, output_dir: str, model: str | None = None) -> tuple[np.ndarray, str]:
+def run_deepcadrt_denoise(
+    input_movie: np.ndarray,
+    output_dir: str,
+    model: str | None = None,
+    overlap: float = 0.6,
+) -> tuple[np.ndarray, str]:
     if not DEEPCADRT_DIR.exists():
         raise FileNotFoundError(f"DeepCAD-RT pytorch folder not found: {DEEPCADRT_DIR}")
     model_arg = ensure_deepcadrt_model_available(model)
+    overlap = float(np.clip(float(overlap), 0.0, 0.95))
     out_dir = Path(output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     input_path = out_dir / f"deepcadrt_input_{uuid.uuid4().hex[:8]}.tif"
@@ -1229,6 +1282,7 @@ def run_deepcadrt_denoise(input_movie: np.ndarray, output_dir: str, model: str |
         "--input", str(input_path),
         "--output", str(output_path),
         "--deepcad-dir", str(DEEPCADRT_DIR),
+        "--overlap", f"{overlap:.6g}",
     ]
     if model_arg:
         args.extend(["--model", model_arg])

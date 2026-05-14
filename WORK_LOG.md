@@ -261,3 +261,13 @@
 - Updated `NewLight_Analysis.spec` to include `DeepCADRT_Model` in the PyInstaller onedir bundle.
 - Updated `build_exe.bat` to fail early if the project-local `.pth` model is missing.
 - Added `build_full_release.bat` for a future full portable + optional Inno Setup installer build. This script was written but not executed.
+
+### DeepCAD-RT Overlap / Result Output Fix
+
+- Fixed a Windows `WinError 123` failure in `workers/run_deepcadrt.py`. DeepCAD-RT builds an internal output folder name from `datasets_path`; passing an absolute Windows path such as `C:\Users\...` put an illegal `:` into that folder name. The worker now runs inside its temporary directory and passes relative `datasets` / `results` paths to DeepCAD-RT.
+- Replaced the Data tab DeepCAD `Weight` field with `Overlap`, default `0.6`. This value is now passed through `analysis_core.run_deepcadrt_denoise(..., overlap=...)` to DeepCAD-RT as `overlap_factor`.
+- Removed the previous raw/denoised display blend behavior from the DeepCAD toggle. Once the DeepCAD preview cache is ready, the view and saved movie use the denoised result directly.
+- Added stale-result protection for async DeepCAD preview runs: if the movie or overlap changes while a worker is running, the old worker result is ignored when it returns.
+- Changed `Save Current Movie` output behavior to write `result.tif`, `result.tiff`, or `result.avi` into the same folder as the loaded source when the source is TIF/TIFF/AVI. Unsupported source video extensions fall back to `result.tif`.
+- Added `analysis_core.save_movie`, including AVI writing through OpenCV MJPG at the current Movie Hz. TIFF output preserves float stacks; AVI output is scaled to 8-bit using a 1-99 percentile display range.
+- Verified `python -m py_compile NewLight_Analysis.py analysis_core.py workers\run_deepcadrt.py`, `conda run -n deepcadrt python workers\run_deepcadrt.py --help`, Tk GUI construction, and a small TIFF/AVI save-read smoke test.

@@ -1489,12 +1489,15 @@ class NewLightApp:
         self.trace_smooth_window_var = tk.StringVar(value="1")
         self.acceleration_var = tk.StringVar(value="auto")
         self.deepcad_enabled_var = tk.BooleanVar(value=False)
-        self.deepcad_weight_var = tk.StringVar(value="0.5")
+        self.deepcad_overlap_var = tk.StringVar(value="0.6")
         self.deepcad_denoised_movie = None
         self.deepcad_cache_movie_id = None
+        self.deepcad_cache_overlap = None
         self.deepcad_projection_cache = {}
         self.deepcad_running = False
+        self.deepcad_running_token = None
         self.deepcad_last_error = ""
+        self.deepcad_request_token = 0
         self.display_source = ("projection", "mean")
         self._view_limits = None
         self._view_is_fit = True
@@ -1544,14 +1547,14 @@ class NewLightApp:
         for i, (text, value) in enumerate([("Mean", "mean"), ("Max", "max"), ("Std", "std")]):
             ttk.Radiobutton(view_box, text=text, variable=self.projection_mode, value=value, command=self.refresh_projection).grid(row=i // 2, column=i % 2, sticky="w")
         ttk.Checkbutton(view_box, text="DeepCAD-RT", variable=self.deepcad_enabled_var, command=self.on_deepcad_toggle).grid(row=2, column=0, sticky="w", pady=(6, 0))
-        weight_box = ttk.Frame(view_box)
-        weight_box.grid(row=2, column=1, sticky="ew", pady=(6, 0))
-        weight_box.columnconfigure(1, weight=1)
-        ttk.Label(weight_box, text="Weight").grid(row=0, column=0, sticky="w", padx=(0, 4))
-        weight_entry = ttk.Entry(weight_box, textvariable=self.deepcad_weight_var, width=6)
-        weight_entry.grid(row=0, column=1, sticky="ew")
-        weight_entry.bind("<Return>", lambda _event: self.on_deepcad_weight_changed())
-        weight_entry.bind("<FocusOut>", lambda _event: self.on_deepcad_weight_changed())
+        overlap_box = ttk.Frame(view_box)
+        overlap_box.grid(row=2, column=1, sticky="ew", pady=(6, 0))
+        overlap_box.columnconfigure(1, weight=1)
+        ttk.Label(overlap_box, text="Overlap").grid(row=0, column=0, sticky="w", padx=(0, 4))
+        overlap_entry = ttk.Entry(overlap_box, textvariable=self.deepcad_overlap_var, width=6)
+        overlap_entry.grid(row=0, column=1, sticky="ew")
+        overlap_entry.bind("<Return>", lambda _event: self.on_deepcad_overlap_changed())
+        overlap_entry.bind("<FocusOut>", lambda _event: self.on_deepcad_overlap_changed())
 
         protocol_box = ttk.LabelFrame(flow_tab, text="Protocol", padding=8)
         protocol_box.grid(row=2, column=0, sticky="ew", pady=6)
@@ -1794,29 +1797,33 @@ class NewLightApp:
     def acceleration(self):
         return self.acceleration_var.get()
 
-    def deepcad_weight(self):
+    def deepcad_overlap(self):
         try:
-            weight = float(self.deepcad_weight_var.get())
+            overlap = float(self.deepcad_overlap_var.get())
         except ValueError:
-            weight = 0.5
-        weight = max(0.0, min(1.0, weight))
-        self.deepcad_weight_var.set(f"{weight:.3g}")
-        return weight
+            overlap = 0.6
+        overlap = max(0.0, min(0.95, overlap))
+        self.deepcad_overlap_var.set(f"{overlap:.3g}")
+        return overlap
 
     def deepcad_cache_is_current(self):
         return (
             self.deepcad_denoised_movie is not None
             and self.state.movie is not None
             and self.deepcad_cache_movie_id == id(self.state.movie)
+            and self.deepcad_cache_overlap == self.deepcad_overlap()
             and self.deepcad_denoised_movie.shape == self.state.movie.shape
         )
 
     def clear_deepcad_cache(self):
         self.deepcad_denoised_movie = None
         self.deepcad_cache_movie_id = None
+        self.deepcad_cache_overlap = None
         self.deepcad_projection_cache = {}
         self.deepcad_running = False
+        self.deepcad_running_token = None
         self.deepcad_last_error = ""
+        self.deepcad_request_token += 1
 
     def on_deepcad_toggle(self):
         if self.deepcad_enabled_var.get():
@@ -1824,8 +1831,11 @@ class NewLightApp:
             self.ensure_deepcad_cache_async()
         self.redraw(preserve_view=True)
 
-    def on_deepcad_weight_changed(self):
-        self.deepcad_weight()
+    def on_deepcad_overlap_changed(self):
+        self.deepcad_overlap()
+        self.clear_deepcad_cache()
+        if self.deepcad_enabled_var.get():
+            self.ensure_deepcad_cache_async()
         self.redraw(preserve_view=True)
 
     def deepcad_temp_dir(self):
@@ -1840,14 +1850,18 @@ class NewLightApp:
             return
         movie = np.asarray(self.state.movie, dtype=np.float32).copy()
         movie_id = id(self.state.movie)
+        overlap = self.deepcad_overlap()
+        self.deepcad_request_token += 1
+        token = self.deepcad_request_token
         out_dir = self.deepcad_temp_dir()
         self.deepcad_running = True
-        self.log("Running DeepCAD-RT preview denoise in background...")
+        self.deepcad_running_token = token
+        self.log(f"Running DeepCAD-RT preview denoise in background (overlap={overlap:.3g})...")
 
         def target():
-            payload = {"movie_id": movie_id, "movie": None, "log": "", "error": ""}
+            payload = {"token": token, "movie_id": movie_id, "overlap": overlap, "movie": None, "log": "", "error": ""}
             try:
-                denoised, log = core.run_deepcadrt_denoise(movie, str(out_dir))
+                denoised, log = core.run_deepcadrt_denoise(movie, str(out_dir), overlap=overlap)
                 payload.update({"movie": denoised, "log": log})
             except Exception as exc:
                 payload["error"] = str(exc)
@@ -1856,17 +1870,26 @@ class NewLightApp:
         threading.Thread(target=target, daemon=True).start()
 
     def _finish_deepcad_cache(self, payload):
-        self.deepcad_running = False
+        token = payload.get("token")
+        current = (
+            token == self.deepcad_request_token
+            and payload.get("movie_id") == id(self.state.movie)
+            and payload.get("overlap") == self.deepcad_overlap()
+        )
+        if self.deepcad_running_token == token:
+            self.deepcad_running = False
+            self.deepcad_running_token = None
+        if not current:
+            self.log("DeepCAD-RT preview result ignored because the movie or overlap changed.")
+            return
         if payload.get("error"):
             self.deepcad_last_error = payload["error"]
             self.log(f"DeepCAD-RT preview failed: {payload['error']}")
             messagebox.showerror("DeepCAD-RT", self.worker_error_summary(payload["error"]))
             return
-        if payload.get("movie_id") != id(self.state.movie):
-            self.log("DeepCAD-RT preview result ignored because the movie changed.")
-            return
         self.deepcad_denoised_movie = payload["movie"]
         self.deepcad_cache_movie_id = id(self.state.movie)
+        self.deepcad_cache_overlap = payload.get("overlap")
         self.deepcad_projection_cache = {}
         self.log("DeepCAD-RT preview cache ready.")
         log = str(payload.get("log", "")).strip()
@@ -1878,11 +1901,10 @@ class NewLightApp:
         img = self.state.display_image if self.state.display_image is not None else self.state.baseline_image
         if img is None or not self.deepcad_enabled_var.get() or not self.deepcad_cache_is_current():
             return img
-        weight = self.deepcad_weight()
         source = getattr(self, "display_source", ("custom", None))
         if source[0] == "frame":
             frame = min(max(0, int(source[1])), self.deepcad_denoised_movie.shape[0] - 1)
-            return core.blend_images(img, self.deepcad_denoised_movie[frame], weight)
+            return self.deepcad_denoised_movie[frame]
         if source[0] == "projection":
             mode = source[1]
             if mode not in self.deepcad_projection_cache:
@@ -1891,7 +1913,7 @@ class NewLightApp:
                     mode,
                     acceleration=self.acceleration(),
                 )
-            return core.blend_images(img, self.deepcad_projection_cache[mode], weight)
+            return self.deepcad_projection_cache[mode]
         return img
 
     def check_cuda_status_quick(self):
@@ -2485,33 +2507,49 @@ class NewLightApp:
         np.savez_compressed(path, masks=np.stack(self.state.roi_masks).astype(bool), names=np.array(self.state.roi_names))
         self.log(f"Saved ROIs: {path}")
 
+    def current_movie_result_path(self):
+        if self.state.source_path:
+            src = Path(self.state.source_path)
+            ext = src.suffix.lower()
+            if ext in {".avi", ".tif", ".tiff"}:
+                return src.with_name(f"result{ext}")
+            return src.with_name("result.tif")
+        return APP_DIR / "result.tif"
+
+    def save_movie_to_path(self, movie, path):
+        core.save_movie(movie, str(path), fs=self.state.fs)
+
     def save_current_movie(self):
         if not self.require_movie():
             return
-        path = filedialog.asksaveasfilename(defaultextension=".tif", filetypes=[("TIFF", "*.tif")])
-        if not path:
+        path = self.current_movie_result_path()
+        if path.exists() and not messagebox.askyesno(
+            "Overwrite result",
+            f"{path} already exists.\n\nOverwrite it?",
+        ):
             return
+        path.parent.mkdir(parents=True, exist_ok=True)
         if not self.deepcad_enabled_var.get():
-            core.save_movie_tiff(self.state.movie, path)
+            self.save_movie_to_path(self.state.movie, path)
             self.log(f"Saved movie: {path}")
             return
-        weight = self.deepcad_weight()
         if self.deepcad_cache_is_current():
-            movie = core.blend_movies(self.state.movie, self.deepcad_denoised_movie, weight)
-            core.save_movie_tiff(movie, path)
-            self.log(f"Saved DeepCAD-RT blended movie: {path}")
+            self.save_movie_to_path(self.deepcad_denoised_movie, path)
+            self.log(f"Saved DeepCAD-RT denoised movie: {path}")
             return
 
         movie = np.asarray(self.state.movie, dtype=np.float32).copy()
+        overlap = self.deepcad_overlap()
+        save_fs = self.state.fs
         out_dir = self.deepcad_temp_dir()
-        self.log("Running DeepCAD-RT before saving movie...")
+        self.log(f"Running DeepCAD-RT before saving movie (overlap={overlap:.3g})...")
 
         def target():
-            payload = {"path": path, "log": "", "error": ""}
+            payload = {"path": str(path), "movie": None, "overlap": overlap, "log": "", "error": ""}
             try:
-                denoised, log = core.run_deepcadrt_denoise(movie, str(out_dir))
-                core.save_movie_tiff(core.blend_movies(movie, denoised, weight), path)
-                payload["log"] = log
+                denoised, log = core.run_deepcadrt_denoise(movie, str(out_dir), overlap=overlap)
+                core.save_movie(denoised, str(path), fs=save_fs)
+                payload.update({"movie": denoised, "log": log})
             except Exception as exc:
                 payload["error"] = str(exc)
             self.worker_queue.put((self._finish_deepcad_save, payload, None))
@@ -2523,7 +2561,12 @@ class NewLightApp:
             self.log(f"DeepCAD-RT save failed: {payload['error']}")
             messagebox.showerror("DeepCAD-RT Save", self.worker_error_summary(payload["error"]))
             return
-        self.log(f"Saved DeepCAD-RT blended movie: {payload['path']}")
+        if payload.get("movie") is not None and self.state.movie is not None:
+            self.deepcad_denoised_movie = payload["movie"]
+            self.deepcad_cache_movie_id = id(self.state.movie)
+            self.deepcad_cache_overlap = payload.get("overlap")
+            self.deepcad_projection_cache = {}
+        self.log(f"Saved DeepCAD-RT denoised movie: {payload['path']}")
         log = str(payload.get("log", "")).strip()
         if log:
             self.log(log[-800:])

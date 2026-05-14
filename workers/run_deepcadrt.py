@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import shutil
 import sys
 import tempfile
@@ -132,10 +133,10 @@ def main() -> int:
             "overlap_factor": float(args.overlap),
             "scale_factor": 1,
             "test_datasize": int(t),
-            "datasets_path": str(datasets_dir),
+            "datasets_path": "datasets",
             "pth_dir": str(pth_dir),
             "denoise_model": model_name,
-            "output_dir": str(results_dir),
+            "output_dir": "results",
             "fmap": int(args.fmap),
             "GPU": str(args.gpu),
             "num_workers": int(args.num_workers),
@@ -145,7 +146,12 @@ def main() -> int:
         print(f"DeepCAD-RT model folder: {model_dir}")
         print(f"DeepCAD-RT input shape: {movie.shape}")
         print(f"DeepCAD-RT patch_xy={patch_xy}, patch_t={patch_t}, overlap={args.overlap}")
-        testing_class(test_dict).run()
+        old_cwd = Path.cwd()
+        os.chdir(tmp_dir)
+        try:
+            testing_class(test_dict).run()
+        finally:
+            os.chdir(old_cwd)
 
         outputs = sorted(results_dir.rglob("*_output.tif"), key=lambda p: p.stat().st_mtime)
         if not outputs:
