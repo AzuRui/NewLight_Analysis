@@ -69,9 +69,10 @@ The old DeepCAD-RT `pth\ModelForPytorch\DownloadedModel` path is a download/cach
 The current packaged release no longer expects target machines to have the original
 `E:\WorkSpace\NeuroSeg3`, `E:\WorkSpace\DeepCAD-RT`, or
 `E:\WorkSpace\2cafe_analysis\NeuroAlign` folders for normal bundled workflows.
-The release folder includes `NewLight_Worker.exe`, worker scripts, NeuroSeg3
-source/weights/configs, DeepCAD-RT source, NeuroAlign source, the DeepCAD-RT
-model, and small runtime compatibility/data files needed by CaImAn/DeepCAD-RT.
+The release folder includes `_internal\NewLight_Worker.exe`, worker scripts,
+NeuroSeg3 source/weights/configs, DeepCAD-RT source, NeuroAlign source, the
+DeepCAD-RT model, and small runtime compatibility/data files needed by
+CaImAn/DeepCAD-RT.
 
 DeepCAD-RT actual denoising still requires CUDA-capable NVIDIA GPU hardware and a
 compatible driver on the target machine. The model and Python code are bundled;
@@ -200,7 +201,8 @@ Requirements already discussed:
 - `build_exe.bat` / `build_full_release.bat` check that `DeepCADRT_Model\E_02_Iter_6416.pth` exists before building and accept `/nopause` or `--no-pause` for unattended runs. Do not run a build unless the user explicitly asks.
 - Current portable EXE output path is `E:\WorkSpace\NewLight_Analysis\build_release\NewLight_Analysis\NewLight_Analysis.exe`; launcher path is `E:\WorkSpace\NewLight_Analysis\build_release\Run_NewLight_Analysis.bat`.
 - In PyInstaller 6 onedir builds, data resources live under `build_release\NewLight_Analysis\_internal`. `check_backends.bat` detects that location before calling worker scripts or checking the bundled DeepCAD-RT model.
-- Latest build on 2026-05-14 used `conda run -n caiman_latest cmd /c build_exe.bat /nopause`. Release validation passed: `check_backends.bat` reports bundled Python, NeuroSeg3, CaImAn, and DeepCAD-RT backend checks OK; a deeper `NewLight_Worker.exe` import check passed for `ultralytics`, `caiman`, `igraph`, `leidenalg`, `deepcad.test_collection`, `atlas_registration_merged_bilateral_midline`, and `csbdeep.utils.normalize`; frozen `analysis_core.run_conda_worker(...)` resolves the release-folder `NewLight_Worker.exe` correctly; GUI startup smoke passed.
+- Latest build on 2026-05-14 used `conda run -n caiman_latest cmd /c build_exe.bat /nopause`. Release validation passed: `check_backends.bat` reports bundled Python, NeuroSeg3, CaImAn, and DeepCAD-RT backend checks OK; a deeper `_internal\NewLight_Worker.exe` import check passed for `ultralytics`, `caiman`, `igraph`, `leidenalg`, `deepcad.test_collection`, `atlas_registration_merged_bilateral_midline`, and `csbdeep.utils.normalize`; frozen `analysis_core.run_conda_worker(...)` resolves `_internal\NewLight_Worker.exe` correctly; GUI startup smoke passed.
+- `NewLight_Worker.exe` intentionally lives in `_internal` and uses a different console/tool icon from the main GUI. Do not move it back to the release root manually; the PyInstaller spec controls its runtime resource layout.
 - Inno Setup `ISCC.exe` was not installed/found on the build machine during the latest pass, so `build_full_release.bat` would skip installer creation and leave the complete portable folder ready. Install Inno Setup 6 or put `ISCC.exe` on `PATH` to produce the installer from `NewLight_Analysis_setup.iss`.
 
 ## Git / Record Policy

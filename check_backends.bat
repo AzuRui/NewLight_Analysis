@@ -4,6 +4,7 @@ cd /d "%~dp0"
 set "RESOURCE_DIR=%CD%"
 if exist "%CD%\_internal\workers" set "RESOURCE_DIR=%CD%\_internal"
 set "WORKER_PY=python"
+if exist "%RESOURCE_DIR%\NewLight_Worker.exe" set "WORKER_PY=%RESOURCE_DIR%\NewLight_Worker.exe"
 if exist "%CD%\NewLight_Worker.exe" set "WORKER_PY=%CD%\NewLight_Worker.exe"
 
 echo Bundled Python:

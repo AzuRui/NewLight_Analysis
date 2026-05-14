@@ -323,3 +323,12 @@
 - Verified GUI startup smoke: `NewLight_Analysis.exe` stayed alive for 8 seconds and was then closed.
 - Confirmed bundled model/resource files include the DeepCAD-RT `.pth` and NeuroSeg3 `.pt/.onnx/.engine` weights under `_internal`.
 - Inno Setup `ISCC.exe` was not found on this machine, so an installer `.exe` was not generated; the complete portable folder is ready, and `build_full_release.bat` will build the installer automatically once Inno Setup is installed.
+
+### Worker Layout Polish
+
+- Moved the bundled backend executable from the release root into `_internal\NewLight_Worker.exe` so the top-level folder exposes only `NewLight_Analysis.exe` to users.
+- Changed the worker executable icon from the app icon to PyInstaller's console/tool icon, making it visually distinct if a user opens `_internal`.
+- Updated frozen worker discovery in `analysis_core.run_conda_worker(...)` and `check_backends.bat` to prefer `_internal\NewLight_Worker.exe`.
+- Rebuilt with `conda run -n caiman_latest cmd /c build_exe.bat /nopause`.
+- Verified the top-level release folder contains `NewLight_Analysis.exe`, `_internal`, `check_backends.bat`, and `setup_caiman_latest.bat`, with no top-level `NewLight_Worker.exe`.
+- Verified `_internal\NewLight_Worker.exe` runs backend help checks, deep backend imports still pass, GUI startup smoke still passes, and bundled model/resource files remain present under `_internal`.

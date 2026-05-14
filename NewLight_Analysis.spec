@@ -7,6 +7,8 @@ from PyInstaller.utils.hooks import collect_data_files, collect_submodules
 
 ROOT = Path.cwd()
 WORKSPACE = ROOT.parent
+PYINSTALLER_DIR = Path(importlib.util.find_spec('PyInstaller').origin).parent
+WORKER_ICON = PYINSTALLER_DIR / 'bootloader' / 'images' / 'icon-console.ico'
 
 
 hiddenimports = [
@@ -100,12 +102,13 @@ worker_exe = EXE(
     strip=False,
     upx=True,
     console=True,
-    icon='xhr.ico',
+    icon=str(WORKER_ICON),
+    contents_directory='.',
 )
 
 coll = COLLECT(
     gui_exe,
-    worker_exe,
+    [('_internal/NewLight_Worker.exe', worker_exe.name, 'EXECUTABLE')],
     a.binaries,
     a.datas,
     strip=False,

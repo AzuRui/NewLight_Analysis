@@ -1210,6 +1210,7 @@ def save_heatmap_video(
 def run_conda_worker(env_name: str, script: str, args: list[str], cwd: str | None = None, timeout: int | None = None) -> subprocess.CompletedProcess:
     if IS_FROZEN:
         worker_candidates = [
+            APP_RESOURCE_DIR / "NewLight_Worker.exe",
             APP_EXEC_DIR / "NewLight_Worker.exe",
             APP_RESOURCE_DIR.parent / "NewLight_Worker.exe",
             PROJECT_DIR / "NewLight_Worker.exe",

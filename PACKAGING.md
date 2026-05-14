@@ -26,7 +26,7 @@ Output:
 
 ```text
 E:\WorkSpace\NewLight_Analysis\build_release\NewLight_Analysis\NewLight_Analysis.exe
-E:\WorkSpace\NewLight_Analysis\build_release\NewLight_Analysis\NewLight_Worker.exe
+E:\WorkSpace\NewLight_Analysis\build_release\NewLight_Analysis\_internal\NewLight_Worker.exe
 E:\WorkSpace\NewLight_Analysis\build_release\Run_NewLight_Analysis.bat
 ```
 
@@ -37,16 +37,17 @@ Distribute the whole `build_release` folder, or zip it. Do not copy only
 `NewLight_Analysis\_internal`.
 
 The release folder contains the main GUI, Python dependencies from the build
-environment, a console `NewLight_Worker.exe`, and bundled backend resources:
+environment, a console `NewLight_Worker.exe` hidden under `_internal`, and
+bundled backend resources:
 
 - NeuroSeg3 local `ultralytics` source and weights.
 - NeuroAlign source from `2cafe_analysis\NeuroAlign`.
 - DeepCAD-RT local `deepcad` source and the project DeepCAD-RT model.
 - A small `csbdeep.utils.normalize` compatibility module used by DeepCAD-RT display helpers.
 
-Backend tasks launched from the installed app use `NewLight_Worker.exe` from the
-same folder, so target machines should not need the original workspace folders
-or separate conda environments for normal bundled workflows.
+Backend tasks launched from the installed app use `_internal\NewLight_Worker.exe`,
+so target machines should not need the original workspace folders or separate
+conda environments for normal bundled workflows.
 
 The default DeepCAD-RT model is bundled from:
 

@@ -79,7 +79,7 @@ echo   %CD%\build_release\NewLight_Analysis\NewLight_Analysis.exe
 echo.
 echo Notes:
 echo - DeepCAD-RT model is bundled from %MODEL%.
-echo - NewLight_Worker.exe is bundled for backend worker tasks.
+echo - NewLight_Worker.exe is bundled under _internal for backend worker tasks.
 echo - NeuroSeg3 source/weights, NeuroAlign source, and DeepCAD-RT source are bundled.
 echo - Run check_backends.bat in the release folder on target machines.
 echo.
