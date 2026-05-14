@@ -205,6 +205,44 @@ Requirements already discussed:
 - `NewLight_Worker.exe` intentionally lives in `_internal` and uses a different console/tool icon from the main GUI. Do not move it back to the release root manually; the PyInstaller spec controls its runtime resource layout.
 - Inno Setup `ISCC.exe` was not installed/found on the build machine during the latest pass, so `build_full_release.bat` would skip installer creation and leave the complete portable folder ready. Install Inno Setup 6 or put `ISCC.exe` on `PATH` to produce the installer from `NewLight_Analysis_setup.iss`.
 
+## Packaged User Manual
+
+The packaged output folder now includes a complete Chinese user manual:
+
+- `E:\WorkSpace\NewLight_Analysis\dist\NewLight_Analysis\NewLight_Analysis_User_Manual.md`
+- `E:\WorkSpace\NewLight_Analysis\dist\NewLight_Analysis\NewLight_Analysis_User_Manual.docx`
+- `E:\WorkSpace\NewLight_Analysis\dist\NewLight_Analysis\NewLight_Analysis_User_Manual.pdf`
+- UI screenshots under `E:\WorkSpace\NewLight_Analysis\dist\NewLight_Analysis\manual_assets\`
+
+The screenshots were generated from the real Tk application using synthetic example data and cover:
+
+- Data tab
+- Preprocess tab
+- ROI tab
+- Analysis tab
+- Generate Heatmap AVI dialog
+- NeuroAlign wizard
+
+The manual explains installation/runtime expectations, the full user workflow, each major control, output files, troubleshooting, and paper-methods wording. It also records formulas for:
+
+- movie projection
+- DeepCAD-RT raw/denoised blending
+- stimulus trigger mapping and interval triggers
+- preprocessing operations
+- dF/F and ROI trace extraction
+- trace baseline correction and smoothing
+- peak detection, Pearson correlation, ROI statistics, and trial average
+- heatmap normalization / overlay / colorbar behavior
+- atlas image ROI import
+- Atlas Reference Builder line-to-region extraction
+- NeuroAlign affine, midline/inner-boundary, and final warp scoring
+
+Validation notes:
+
+- DOCX structure check passed with 103 non-empty paragraphs, 5 tables, and 6 embedded images.
+- The DOCX was converted to a 9-page PDF with local Microsoft Word COM automation.
+- LibreOffice/Poppler were not present, so no separate raster page render was produced.
+
 ## Git / Record Policy
 
 This project is now managed as a Git repository at `E:\WorkSpace\NewLight_Analysis`.

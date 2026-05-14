@@ -332,3 +332,17 @@
 - Rebuilt with `conda run -n caiman_latest cmd /c build_exe.bat /nopause`.
 - Verified the top-level release folder contains `NewLight_Analysis.exe`, `_internal`, `check_backends.bat`, and `setup_caiman_latest.bat`, with no top-level `NewLight_Worker.exe`.
 - Verified `_internal\NewLight_Worker.exe` runs backend help checks, deep backend imports still pass, GUI startup smoke still passes, and bundled model/resource files remain present under `_internal`.
+
+### Packaged User Manual
+
+- Added a complete Chinese user manual to the packaged output folder `dist\NewLight_Analysis`.
+- Generated six real UI screenshots from the Tk application with synthetic example data: Data, Preprocess, ROI, Analysis, Heatmap AVI, and NeuroAlign wizard.
+- Wrote the manual in Markdown, DOCX, and PDF formats:
+  - `dist\NewLight_Analysis\NewLight_Analysis_User_Manual.md`
+  - `dist\NewLight_Analysis\NewLight_Analysis_User_Manual.docx`
+  - `dist\NewLight_Analysis\NewLight_Analysis_User_Manual.pdf`
+  - screenshots in `dist\NewLight_Analysis\manual_assets\`
+- Documented daily workflow, installation/runtime notes, Data/Preprocess/ROI/Analysis controls, export files, troubleshooting, and paper-methods wording.
+- Included formulas for projection, DeepCAD-RT blending, trigger mapping, preprocessing, dF/F extraction, ROI trace averaging, trace baseline correction, peak detection, correlation, heatmap rendering, atlas-image ROI, atlas reference building, and NeuroAlign scoring.
+- Verified the DOCX structure with `python-docx`: 103 non-empty paragraphs, 5 tables, and 6 embedded images.
+- Converted the DOCX to PDF with local Microsoft Word COM automation and verified the PDF has 9 pages with extractable text.
