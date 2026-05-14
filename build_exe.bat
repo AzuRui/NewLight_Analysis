@@ -1,6 +1,9 @@
 @echo off
 setlocal enabledelayedexpansion
 cd /d "%~dp0"
+set "PAUSE_ON_EXIT=1"
+if /I "%~1"=="/nopause" set "PAUSE_ON_EXIT=0"
+if /I "%~1"=="--no-pause" set "PAUSE_ON_EXIT=0"
 
 echo ========================================
 echo Building NewLight_Analysis portable EXE
@@ -11,7 +14,7 @@ if not exist "DeepCADRT_Model\E_02_Iter_6416.pth" (
   echo Missing DeepCAD-RT model:
   echo   %CD%\DeepCADRT_Model\E_02_Iter_6416.pth
   echo Put the trained .pth file there before building.
-  pause
+  if "%PAUSE_ON_EXIT%"=="1" pause
   exit /b 1
 )
 
@@ -22,7 +25,7 @@ if errorlevel 1 (
   python -m pip install pyinstaller
   if errorlevel 1 (
     echo Failed to install PyInstaller.
-    pause
+    if "%PAUSE_ON_EXIT%"=="1" pause
     exit /b 1
   )
 )
@@ -36,7 +39,7 @@ echo Running PyInstaller...
 python -m PyInstaller --noconfirm NewLight_Analysis.spec
 if errorlevel 1 (
   echo PyInstaller build failed.
-  pause
+  if "%PAUSE_ON_EXIT%"=="1" pause
   exit /b 1
 )
 
@@ -61,5 +64,5 @@ echo - DeepCAD-RT model is bundled from DeepCADRT_Model\E_02_Iter_6416.pth.
 echo - DeepCAD-RT code/env remains the external deepcadrt conda backend.
 echo - Run check_backends.bat inside the release folder on target machines.
 echo.
-pause
+if "%PAUSE_ON_EXIT%"=="1" pause
 endlocal

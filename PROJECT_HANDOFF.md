@@ -185,7 +185,11 @@ Requirements already discussed:
 - DeepCAD preview runs are token-guarded. If the user changes the loaded movie while a background denoise is running, the stale result is ignored instead of replacing the current cache.
 - `Save Current Movie` opens a standard Save As dialog instead of silently writing a fixed output path. The dialog starts in the loaded movie's folder, suggests `result.<source extension>` for `.tif`, `.tiff`, and `.avi`, and falls back to `result.tif` for unsupported source video extensions. Canceling the dialog must not run DeepCAD-RT or write output.
 - `analysis_core.save_movie` supports `.tif/.tiff` and `.avi`. TIFF keeps float stack data; AVI uses OpenCV MJPG at the current Movie Hz and converts to 8-bit by 1-99 percentile scaling.
-- `NewLight_Analysis.spec` includes `DeepCADRT_Model`, and `build_exe.bat` / `build_full_release.bat` check that `DeepCADRT_Model\E_02_Iter_6416.pth` exists before building. Do not run a build unless the user explicitly asks.
+- `NewLight_Analysis.spec` includes `DeepCADRT_Model`, `workers`, `neuroalign_step_worker.py`, `NeuroAlign_atlas_registration_help.txt`, `NeuroAlign_atlas_registration_summary.json`, and `PACKAGING.md`. These are runtime resources and should stay bundled.
+- `build_exe.bat` / `build_full_release.bat` check that `DeepCADRT_Model\E_02_Iter_6416.pth` exists before building and accept `/nopause` or `--no-pause` for unattended runs. Do not run a build unless the user explicitly asks.
+- Current portable EXE output path is `E:\WorkSpace\NewLight_Analysis\build_release\NewLight_Analysis\NewLight_Analysis.exe`; launcher path is `E:\WorkSpace\NewLight_Analysis\build_release\Run_NewLight_Analysis.bat`.
+- In PyInstaller 6 onedir builds, data resources live under `build_release\NewLight_Analysis\_internal`. `check_backends.bat` detects that location before calling worker scripts or checking the bundled DeepCAD-RT model.
+- Latest build on 2026-05-14 used `conda run -n caiman_latest cmd /c build_exe.bat /nopause` and the EXE startup smoke test passed. CaImAn and DeepCAD-RT backend checks passed from the release folder. NeuroSeg3 backend check still fails because the external `neuroseg3` conda environment's `ultralytics` install is missing `cfg\default.yaml`; this is an environment repair issue, not a PyInstaller packaging miss.
 
 ## Git / Record Policy
 

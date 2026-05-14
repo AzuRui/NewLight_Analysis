@@ -1,6 +1,9 @@
 @echo off
 setlocal enabledelayedexpansion
 cd /d "%~dp0"
+set "PAUSE_ON_EXIT=1"
+if /I "%~1"=="/nopause" set "PAUSE_ON_EXIT=0"
+if /I "%~1"=="--no-pause" set "PAUSE_ON_EXIT=0"
 
 echo ========================================
 echo NewLight_Analysis full release build
@@ -12,7 +15,7 @@ if not exist "%MODEL%" (
   echo Missing DeepCAD-RT model:
   echo   %CD%\%MODEL%
   echo Put the trained .pth file there before building.
-  pause
+  if "%PAUSE_ON_EXIT%"=="1" pause
   exit /b 1
 )
 
@@ -23,7 +26,7 @@ if errorlevel 1 (
   python -m pip install pyinstaller
   if errorlevel 1 (
     echo Failed to install PyInstaller.
-    pause
+    if "%PAUSE_ON_EXIT%"=="1" pause
     exit /b 1
   )
 )
@@ -37,7 +40,7 @@ echo Running PyInstaller...
 python -m PyInstaller --noconfirm NewLight_Analysis.spec
 if errorlevel 1 (
   echo PyInstaller build failed.
-  pause
+  if "%PAUSE_ON_EXIT%"=="1" pause
   exit /b 1
 )
 
@@ -62,7 +65,7 @@ if defined ISCC (
   "%ISCC%" NewLight_Analysis_setup.iss
   if errorlevel 1 (
     echo Inno Setup build failed.
-    pause
+    if "%PAUSE_ON_EXIT%"=="1" pause
     exit /b 1
   )
 ) else (
@@ -79,5 +82,5 @@ echo - DeepCAD-RT model is bundled from %MODEL%.
 echo - NeuroSeg3, CaImAn, and DeepCAD-RT code/env remain external conda backends.
 echo - Run check_backends.bat in the release folder on target machines.
 echo.
-pause
+if "%PAUSE_ON_EXIT%"=="1" pause
 endlocal

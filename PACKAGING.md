@@ -10,6 +10,12 @@ Do not start a build unless the user explicitly asks for compilation.
 E:\WorkSpace\NewLight_Analysis\build_exe.bat
 ```
 
+For unattended builds:
+
+```powershell
+E:\WorkSpace\NewLight_Analysis\build_exe.bat /nopause
+```
+
 Full release script:
 
 ```powershell
@@ -57,5 +63,6 @@ build_release\NewLight_Analysis\setup_caiman_latest.bat
 
 - The app icon is `xhr.ico`.
 - The build mode is PyInstaller `onedir`, which creates a folder plus `NewLight_Analysis.exe`.
+- PyInstaller runtime resources live under `build_release\NewLight_Analysis\_internal`; `check_backends.bat` detects this folder and runs backend worker checks from there.
 - This is preferred over single-file mode because scientific Python libraries start faster and are easier to debug in folder mode.
 - `NewLight_Analysis_setup.iss` can be compiled after the PyInstaller build to create the installer.

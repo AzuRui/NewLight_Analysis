@@ -2,6 +2,15 @@
 
 ## 2026-05-14
 
+### Portable EXE Build Script Refresh
+
+- Updated `NewLight_Analysis.spec` so the portable EXE bundle includes recent runtime resources: `PACKAGING.md`, `NeuroAlign_atlas_registration_help.txt`, `NeuroAlign_atlas_registration_summary.json`, and `neuroalign_step_worker.py`.
+- Added `/nopause` / `--no-pause` support to `build_exe.bat` and `build_full_release.bat` for unattended Codex builds.
+- Updated `check_backends.bat` to locate bundled backend workers and the DeepCAD-RT model under PyInstaller's `_internal` runtime resource folder.
+- Rebuilt the portable EXE with `conda run -n caiman_latest cmd /c build_exe.bat /nopause`.
+- Output: `build_release\NewLight_Analysis\NewLight_Analysis.exe` and `build_release\Run_NewLight_Analysis.bat`.
+- Verified Python compilation, release resource layout, and EXE startup smoke test. Release backend check found CaImAn and DeepCAD-RT OK; NeuroSeg3 still fails in the external `neuroseg3` conda environment because its `ultralytics` install is missing `cfg\default.yaml`.
+
 ### Save Current Movie Dialog
 
 - Changed `Save Current Movie` from silent `result.<ext>` output to a standard Save As dialog.
