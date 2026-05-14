@@ -1,0 +1,158 @@
+from __future__ import annotations
+
+import argparse
+import shutil
+import sys
+import tempfile
+import warnings
+from pathlib import Path
+from typing import Optional
+
+import numpy as np
+import tifffile
+
+warnings.filterwarnings("ignore", message="pkg_resources is deprecated as an API.*", category=UserWarning)
+
+DEFAULT_MODEL_RELATIVE = Path("ModelForPytorch") / "DownloadedModel"
+
+
+def model_download_hint(deepcad_dir: Path) -> str:
+    return str(deepcad_dir / "pth" / DEFAULT_MODEL_RELATIVE)
+
+
+def validate_model_dir(model_dir: Path, deepcad_dir: Path) -> tuple[Path, str, Path]:
+    if model_dir.is_file():
+        raise FileNotFoundError(
+            "DeepCAD-RT model path is a file, but it must be a folder containing .pth files:\n"
+            f"{model_dir}\n"
+            "Replace it with a folder and download/copy the .pth model files there."
+        )
+    if not model_dir.exists():
+        raise FileNotFoundError(
+            "No DeepCAD-RT model folder was found.\n"
+            f"Download/copy .pth model files into:\n{model_download_hint(deepcad_dir)}"
+        )
+    if not model_dir.is_dir() or not list(model_dir.glob("*.pth")):
+        raise FileNotFoundError(
+            "No DeepCAD-RT .pth model file was found in:\n"
+            f"{model_dir}\n"
+            f"Download/copy the .pth model files into:\n{model_download_hint(deepcad_dir)}"
+        )
+    return model_dir.parent, model_dir.name, model_dir
+
+
+def resolve_model_location(deepcad_dir: Path, model: Optional[str]) -> tuple[Path, str, Path]:
+    pth_dir = deepcad_dir / "pth"
+    if model:
+        model_path = Path(model)
+        if model_path.is_absolute():
+            if model_path.is_file() and model_path.suffix.lower() == ".pth":
+                return validate_model_dir(model_path.parent, deepcad_dir)
+            if model_path.is_dir():
+                return validate_model_dir(model_path, deepcad_dir)
+        candidates = [
+            pth_dir / model_path,
+            pth_dir / "ModelForPytorch" / model_path,
+        ]
+        for candidate in candidates:
+            if candidate.exists():
+                if candidate.is_file() and candidate.suffix.lower() == ".pth":
+                    return validate_model_dir(candidate.parent, deepcad_dir)
+                return validate_model_dir(candidate, deepcad_dir)
+        raise FileNotFoundError(
+            f"Could not resolve DeepCAD-RT model '{model}'.\n"
+            f"Default expected download folder:\n{model_download_hint(deepcad_dir)}"
+        )
+
+    return validate_model_dir(pth_dir / DEFAULT_MODEL_RELATIVE, deepcad_dir)
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Run DeepCAD-RT denoising for NewLight Analysis.")
+    parser.add_argument("--input", required=True)
+    parser.add_argument("--output", required=True)
+    parser.add_argument("--deepcad-dir", required=True)
+    parser.add_argument("--model", default="")
+    parser.add_argument("--gpu", default="0")
+    parser.add_argument("--patch-xy", type=int, default=150)
+    parser.add_argument("--patch-t", type=int, default=150)
+    parser.add_argument("--overlap", type=float, default=0.6)
+    parser.add_argument("--fmap", type=int, default=16)
+    parser.add_argument("--num-workers", type=int, default=0)
+    args = parser.parse_args()
+
+    deepcad_dir = Path(args.deepcad_dir).resolve()
+    if not deepcad_dir.exists():
+        raise FileNotFoundError(f"DeepCAD-RT pytorch folder not found: {deepcad_dir}")
+    sys.path.insert(0, str(deepcad_dir))
+
+    import torch
+    from deepcad.test_collection import testing_class
+
+    if not torch.cuda.is_available():
+        raise RuntimeError("DeepCAD-RT worker requires CUDA, but torch.cuda.is_available() is False.")
+
+    input_path = Path(args.input).resolve()
+    output_path = Path(args.output).resolve()
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    movie = tifffile.imread(input_path)
+    movie = np.asarray(movie)
+    if movie.ndim == 2:
+        movie = movie[None, :, :]
+    if movie.ndim != 3:
+        raise ValueError(f"DeepCAD-RT expects a 3D movie stack, got shape {movie.shape}.")
+    t, h, w = movie.shape
+    patch_xy = max(8, min(int(args.patch_xy), int(h), int(w)))
+    patch_t = max(4, min(int(args.patch_t), int(t)))
+
+    pth_dir, model_name, model_dir = resolve_model_location(deepcad_dir, args.model.strip() or None)
+
+    with tempfile.TemporaryDirectory(prefix="newlight_deepcadrt_worker_") as tmp:
+        tmp_dir = Path(tmp)
+        datasets_dir = tmp_dir / "datasets"
+        results_dir = tmp_dir / "results"
+        datasets_dir.mkdir(parents=True, exist_ok=True)
+        results_dir.mkdir(parents=True, exist_ok=True)
+        work_input = datasets_dir / "input.tif"
+        shutil.copy2(input_path, work_input)
+
+        test_dict = {
+            "patch_x": patch_xy,
+            "patch_y": patch_xy,
+            "patch_t": patch_t,
+            "overlap_factor": float(args.overlap),
+            "scale_factor": 1,
+            "test_datasize": int(t),
+            "datasets_path": str(datasets_dir),
+            "pth_dir": str(pth_dir),
+            "denoise_model": model_name,
+            "output_dir": str(results_dir),
+            "fmap": int(args.fmap),
+            "GPU": str(args.gpu),
+            "num_workers": int(args.num_workers),
+            "visualize_images_per_epoch": False,
+        }
+        print(f"DeepCAD-RT model: {model_name}")
+        print(f"DeepCAD-RT model folder: {model_dir}")
+        print(f"DeepCAD-RT input shape: {movie.shape}")
+        print(f"DeepCAD-RT patch_xy={patch_xy}, patch_t={patch_t}, overlap={args.overlap}")
+        testing_class(test_dict).run()
+
+        outputs = sorted(results_dir.rglob("*_output.tif"), key=lambda p: p.stat().st_mtime)
+        if not outputs:
+            raise RuntimeError("DeepCAD-RT finished but no *_output.tif result was found.")
+        denoised = tifffile.imread(outputs[-1])
+        denoised = np.asarray(denoised)
+        if denoised.ndim == 2:
+            denoised = denoised[None, :, :]
+        if denoised.shape != movie.shape:
+            raise RuntimeError(f"DeepCAD-RT output shape {denoised.shape} does not match input {movie.shape}.")
+        tifffile.imwrite(output_path, denoised.astype(movie.dtype, copy=False), photometric="minisblack")
+
+    print(f"DeepCAD-RT denoised movie saved: {output_path}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

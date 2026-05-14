@@ -240,3 +240,15 @@
 - Kept the underlying correlation / heatmap code and Analysis-tab heatmap AVI workflow intact.
 - Verified with `python -m py_compile NewLight_Analysis.py analysis_core.py neuroalign_step_worker.py`.
 - Smoke-tested Tk GUI construction and confirmed `Corr` / `Show dF/F Heatmap` are no longer present in widget text.
+
+### DeepCAD-RT View Denoise Integration
+
+- Continued the interrupted DeepCAD-RT integration in the Data tab `View` panel.
+- Added a `DeepCAD-RT` toggle and `Weight` field that blend the current raw display with a cached DeepCAD-RT denoised movie/projection.
+- Added async preview denoising so the UI can keep working while the backend runs.
+- Added DeepCAD-aware saving: when the toggle is enabled, `Save Current Movie` writes the blended raw/denoised movie.
+- Added `workers/run_deepcadrt.py` to call `DeepCAD-RT/DeepCAD_RT_pytorch/deepcad.test_collection.testing_class` through the `deepcadrt` conda environment.
+- Added model-path validation before writing temporary input data. The default `.pth` model download folder is `E:\WorkSpace\DeepCAD-RT\DeepCAD_RT_pytorch\pth\ModelForPytorch\DownloadedModel`.
+- If `DownloadedModel` exists as a file or has no `.pth` files, the app now reports that it must be replaced with a folder containing downloaded `.pth` models.
+- Verified `python -m py_compile NewLight_Analysis.py analysis_core.py workers/run_deepcadrt.py`.
+- Verified `workers/run_deepcadrt.py --help` and a GUI smoke test with `DeepCAD-RT` present while `Corr` / `Show dF/F Heatmap` remain absent.

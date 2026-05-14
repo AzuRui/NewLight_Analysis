@@ -25,6 +25,8 @@ from PIL import Image
 
 WORKSPACE = Path(__file__).resolve().parents[1]
 NEUROSEG3_DIR = WORKSPACE / "NeuroSeg3"
+DEEPCADRT_DIR = WORKSPACE / "DeepCAD-RT" / "DeepCAD_RT_pytorch"
+DEEPCADRT_MODEL_DOWNLOAD_DIR = DEEPCADRT_DIR / "pth" / "ModelForPytorch" / "DownloadedModel"
 _CUPY_CACHE = None
 
 
@@ -203,6 +205,41 @@ def read_stimulus_file(path: str) -> np.ndarray:
 
 def save_movie_tiff(movie: np.ndarray, path: str) -> None:
     tifffile.imwrite(path, np.asarray(movie, dtype=np.float32), photometric="minisblack")
+
+
+def ensure_deepcadrt_model_available(model: str | None = None) -> None:
+    if model:
+        return
+    model_dir = DEEPCADRT_MODEL_DOWNLOAD_DIR
+    if model_dir.is_file():
+        raise FileNotFoundError(
+            "DeepCAD-RT model path is a file, but it must be a folder containing .pth files:\n"
+            f"{model_dir}\n"
+            "Replace it with a folder and download/copy the .pth model files there."
+        )
+    if not model_dir.exists() or not list(model_dir.glob("*.pth")):
+        raise FileNotFoundError(
+            "No DeepCAD-RT .pth model file was found.\n"
+            f"Download/copy the .pth model files into:\n{model_dir}"
+        )
+
+
+def blend_movies(raw_movie: np.ndarray, denoised_movie: np.ndarray, weight: float) -> np.ndarray:
+    weight = float(np.clip(weight, 0.0, 1.0))
+    raw = np.asarray(raw_movie, dtype=np.float32)
+    denoised = np.asarray(denoised_movie, dtype=np.float32)
+    if raw.shape != denoised.shape:
+        raise ValueError(f"Cannot blend movies with different shapes: {raw.shape} vs {denoised.shape}")
+    return ((1.0 - weight) * raw + weight * denoised).astype(np.float32, copy=False)
+
+
+def blend_images(raw_image: np.ndarray, denoised_image: np.ndarray, weight: float) -> np.ndarray:
+    weight = float(np.clip(weight, 0.0, 1.0))
+    raw = np.asarray(raw_image, dtype=np.float32)
+    denoised = np.asarray(denoised_image, dtype=np.float32)
+    if raw.shape != denoised.shape:
+        raise ValueError(f"Cannot blend images with different shapes: {raw.shape} vs {denoised.shape}")
+    return ((1.0 - weight) * raw + weight * denoised).astype(np.float32, copy=False)
 
 
 def compute_baseline(movie: np.ndarray, mode: str = "percentile", start: int = 0, end: int | None = None) -> np.ndarray:
@@ -1175,3 +1212,44 @@ def run_caiman_motion(input_movie: np.ndarray, output_dir: str, mode: str = "rig
     if proc.returncode != 0:
         raise RuntimeError(log.strip() or "CaImAn motion correction failed")
     return tifffile.imread(output_path).astype(np.float32), log
+
+
+def run_deepcadrt_denoise(input_movie: np.ndarray, output_dir: str, model: str | None = None) -> tuple[np.ndarray, str]:
+    if not DEEPCADRT_DIR.exists():
+        raise FileNotFoundError(f"DeepCAD-RT pytorch folder not found: {DEEPCADRT_DIR}")
+    ensure_deepcadrt_model_available(model)
+    out_dir = Path(output_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    input_path = out_dir / f"deepcadrt_input_{uuid.uuid4().hex[:8]}.tif"
+    output_path = out_dir / f"deepcadrt_denoised_{uuid.uuid4().hex[:8]}.tif"
+    save_movie_tiff(input_movie, str(input_path))
+    script = Path(__file__).resolve().parent / "workers" / "run_deepcadrt.py"
+    args = [
+        "--input", str(input_path),
+        "--output", str(output_path),
+        "--deepcad-dir", str(DEEPCADRT_DIR),
+    ]
+    if model:
+        args.extend(["--model", model])
+    proc = run_conda_worker(
+        "deepcadrt",
+        str(script),
+        args,
+        cwd=str(DEEPCADRT_DIR),
+        timeout=None,
+    )
+    log = (proc.stdout or "") + ("\n" + proc.stderr if proc.stderr else "")
+    try:
+        input_path.unlink(missing_ok=True)
+    except OSError:
+        pass
+    if proc.returncode != 0:
+        raise RuntimeError(log.strip() or "DeepCAD-RT denoising failed")
+    if not output_path.exists():
+        raise RuntimeError("DeepCAD-RT finished but did not create an output TIFF.")
+    denoised = tifffile.imread(output_path).astype(np.float32)
+    if denoised.ndim == 2:
+        denoised = denoised[None, :, :]
+    if denoised.shape != np.asarray(input_movie).shape:
+        raise RuntimeError(f"DeepCAD-RT output shape {denoised.shape} does not match input {np.asarray(input_movie).shape}.")
+    return denoised, log

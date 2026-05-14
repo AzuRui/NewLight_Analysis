@@ -1,6 +1,6 @@
 # NewLight_Analysis Handoff
 
-Last updated: 2026-05-13
+Last updated: 2026-05-14
 
 ## Project
 
@@ -58,6 +58,14 @@ Known working candidate environments from prior checks:
 
 The `base` environment was not suitable for GUI work because `cv2` failed to import with a DLL load error. `openpyxl` was missing in checked environments, while `pandas` was present in `neuroseg3` and `caiman_latest`.
 
+DeepCAD-RT model files are expected at:
+
+```text
+E:\WorkSpace\DeepCAD-RT\DeepCAD_RT_pytorch\pth\ModelForPytorch\DownloadedModel
+```
+
+That path must be a folder containing one or more `.pth` files. If `DownloadedModel` exists as a plain file, replace it with a folder and download/copy the `.pth` models there before enabling the DeepCAD-RT view toggle.
+
 ## Current UI State
 
 Recent display work restored the Matplotlib navigation toolbar under the main canvas. The redundant custom `Fit View / Zoom In / Zoom Out` row has been removed because the toolbar already covers home/reset, pan, zoom, and save interactions.
@@ -76,6 +84,8 @@ The ROI action row remains below the navigation toolbar:
 Frame slider and run log are below that.
 
 The Data tab `View` panel now only exposes `Mean`, `Max`, and `Std` projection modes. The older `Corr` projection entry and `Show dF/F Heatmap` button were removed from this panel; correlation and heatmap export code still exists elsewhere for Analysis/export workflows.
+
+The same `View` panel also includes a `DeepCAD-RT` toggle and `Weight` input. When enabled, the app runs DeepCAD-RT denoising in the background, caches the denoised movie, and blends it into the displayed frame/projection according to the weight. Saving the current movie while the toggle is enabled exports the blended raw/denoised movie.
 
 The heatmap AVI dialog now includes:
 
@@ -163,6 +173,8 @@ Requirements already discussed:
 - The Step 1 outer-affine fit is patched at runtime by `neuroalign_step_worker.install_midline_locked_outer_affine`. This keeps detected midline anchors active during affine refinement instead of using only a single averaged midline x value, and logs contour error, midline error, rotation, shear, and anchor count.
 - On the 2026-05-13 test run `NeuroAlign_runs/neuroalign_20260513_105405`, the updated Step 1 reported `mean contour error = 13.672 px`, `midline error = 3.998 px`, `rotation = -0.95 deg`, `shear = 0.000`, `midline anchors = 12`.
 - A preview-only TPS idea was tested and rejected because it over-deformed atlas polygons; keep Step 1 preview tied to the stable affine result unless a more constrained local preview warp is designed later.
+- `workers/run_deepcadrt.py` is the DeepCAD-RT backend worker. It runs inside the `deepcadrt` conda environment, feeds a temporary TIFF stack into `deepcad.test_collection.testing_class`, then returns a denoised TIFF.
+- `analysis_core.run_deepcadrt_denoise` performs a preflight model check before writing temporary input data. Without a `.pth` in the expected `DownloadedModel` folder, DeepCAD-RT should fail fast with a clear path message.
 
 ## Git / Record Policy
 
