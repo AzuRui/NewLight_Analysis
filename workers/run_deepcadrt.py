@@ -5,6 +5,7 @@ import os
 import shutil
 import sys
 import tempfile
+import types
 import warnings
 from pathlib import Path
 from typing import Optional
@@ -114,6 +115,14 @@ def main() -> int:
     if not deepcad_dir.exists():
         raise FileNotFoundError(f"DeepCAD-RT pytorch folder not found: {deepcad_dir}")
     sys.path.insert(0, str(deepcad_dir))
+    if "gdown" not in sys.modules:
+        gdown_stub = types.ModuleType("gdown")
+
+        def _download_stub(*_args, **_kwargs):
+            raise RuntimeError("gdown is not bundled; NewLight uses local DeepCAD-RT model files only.")
+
+        gdown_stub.download = _download_stub
+        sys.modules["gdown"] = gdown_stub
 
     import torch
     from deepcad.test_collection import testing_class

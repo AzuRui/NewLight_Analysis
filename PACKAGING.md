@@ -26,18 +26,27 @@ Output:
 
 ```text
 E:\WorkSpace\NewLight_Analysis\build_release\NewLight_Analysis\NewLight_Analysis.exe
+E:\WorkSpace\NewLight_Analysis\build_release\NewLight_Analysis\NewLight_Worker.exe
 E:\WorkSpace\NewLight_Analysis\build_release\Run_NewLight_Analysis.bat
 ```
 
 ## Distribution
 
-Distribute the whole `build_release` folder, or zip it.
+Distribute the whole `build_release` folder, or zip it. Do not copy only
+`NewLight_Analysis.exe`; PyInstaller onedir resources live beside it under
+`NewLight_Analysis\_internal`.
 
-The executable contains the main GUI and Python dependencies from the build environment. The optional algorithm backends remain external:
+The release folder contains the main GUI, Python dependencies from the build
+environment, a console `NewLight_Worker.exe`, and bundled backend resources:
 
-- `neuroseg3` conda environment for NeuroSeg3 ROI segmentation.
-- `caiman_latest` conda environment for CaImAn motion correction.
-- `deepcadrt` conda environment plus external `E:\WorkSpace\DeepCAD-RT\DeepCAD_RT_pytorch` code for DeepCAD-RT denoising.
+- NeuroSeg3 local `ultralytics` source and weights.
+- NeuroAlign source from `2cafe_analysis\NeuroAlign`.
+- DeepCAD-RT local `deepcad` source and the project DeepCAD-RT model.
+- A small `csbdeep.utils.normalize` compatibility module used by DeepCAD-RT display helpers.
+
+Backend tasks launched from the installed app use `NewLight_Worker.exe` from the
+same folder, so target machines should not need the original workspace folders
+or separate conda environments for normal bundled workflows.
 
 The default DeepCAD-RT model is bundled from:
 
@@ -47,17 +56,18 @@ E:\WorkSpace\NewLight_Analysis\DeepCADRT_Model\E_02_Iter_6416.pth
 
 Both build scripts check this file before running PyInstaller, and `NewLight_Analysis.spec` includes the `DeepCADRT_Model` folder in the onedir bundle.
 
-On target machines, run:
+On target machines, run this from inside the release folder:
 
 ```powershell
 build_release\NewLight_Analysis\check_backends.bat
 ```
 
-If CaImAn is missing, run:
+Expected result: bundled Python imports succeed, and NeuroSeg3, CaImAn, and
+DeepCAD-RT backend `--help` checks report OK.
 
-```powershell
-build_release\NewLight_Analysis\setup_caiman_latest.bat
-```
+DeepCAD-RT denoising still requires a CUDA-capable NVIDIA GPU and compatible
+driver at runtime. The model and Python code are bundled, but the target machine
+must provide working GPU hardware/driver support for actual DeepCAD inference.
 
 ## Notes
 
@@ -65,4 +75,6 @@ build_release\NewLight_Analysis\setup_caiman_latest.bat
 - The build mode is PyInstaller `onedir`, which creates a folder plus `NewLight_Analysis.exe`.
 - PyInstaller runtime resources live under `build_release\NewLight_Analysis\_internal`; `check_backends.bat` detects this folder and runs backend worker checks from there.
 - This is preferred over single-file mode because scientific Python libraries start faster and are easier to debug in folder mode.
-- `NewLight_Analysis_setup.iss` can be compiled after the PyInstaller build to create the installer.
+- `build_full_release.bat` compiles `NewLight_Analysis_setup.iss` after the
+  PyInstaller build when Inno Setup's `ISCC.exe` is installed. If `ISCC.exe` is
+  absent, the script leaves the complete portable release in `build_release`.

@@ -41,10 +41,10 @@ THEME = {
 }
 
 APP_DIR = Path(__file__).resolve().parent
-NEUROALIGN_DIR = core.WORKSPACE / "2cafe_analysis" / "NeuroAlign"
+NEUROALIGN_DIR = core.NEUROALIGN_DIR
 NEUROALIGN_ENV = "caiman_latest"
-NEUROALIGN_HELP_PATH = APP_DIR / "NeuroAlign_atlas_registration_help.txt"
-NEUROALIGN_SUMMARY_PATH = APP_DIR / "NeuroAlign_atlas_registration_summary.json"
+NEUROALIGN_HELP_PATH = core.APP_RESOURCE_DIR / "NeuroAlign_atlas_registration_help.txt"
+NEUROALIGN_SUMMARY_PATH = core.APP_RESOURCE_DIR / "NeuroAlign_atlas_registration_summary.json"
 NEUROALIGN_RUNS_DIR = APP_DIR / "NeuroAlign_runs"
 USER_SETTINGS_PATH = APP_DIR / "NewLight_user_settings.json"
 

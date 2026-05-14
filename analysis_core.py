@@ -23,10 +23,22 @@ from skimage import exposure, filters, measure, morphology, restoration
 from PIL import Image
 
 
-WORKSPACE = Path(__file__).resolve().parents[1]
-APP_RESOURCE_DIR = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
-NEUROSEG3_DIR = WORKSPACE / "NeuroSeg3"
-DEEPCADRT_DIR = WORKSPACE / "DeepCAD-RT" / "DeepCAD_RT_pytorch"
+IS_FROZEN = bool(getattr(sys, "frozen", False))
+PROJECT_DIR = Path(__file__).resolve().parent
+WORKSPACE = PROJECT_DIR.parents[0]
+APP_RESOURCE_DIR = Path(getattr(sys, "_MEIPASS", PROJECT_DIR))
+APP_EXEC_DIR = Path(sys.executable).resolve().parent if IS_FROZEN else PROJECT_DIR
+WORKER_DIR = APP_RESOURCE_DIR / "workers" if (APP_RESOURCE_DIR / "workers").exists() else PROJECT_DIR / "workers"
+
+
+def resource_dir(relative: str | Path, fallback: Path) -> Path:
+    bundled = APP_RESOURCE_DIR / Path(relative)
+    return bundled if bundled.exists() else fallback
+
+
+NEUROSEG3_DIR = resource_dir("NeuroSeg3", WORKSPACE / "NeuroSeg3")
+NEUROALIGN_DIR = resource_dir("NeuroAlign", WORKSPACE / "2cafe_analysis" / "NeuroAlign")
+DEEPCADRT_DIR = resource_dir(Path("DeepCAD-RT") / "DeepCAD_RT_pytorch", WORKSPACE / "DeepCAD-RT" / "DeepCAD_RT_pytorch")
 DEEPCADRT_MODEL_DIR = APP_RESOURCE_DIR / "DeepCADRT_Model"
 DEEPCADRT_DEFAULT_MODEL_FILE = DEEPCADRT_MODEL_DIR / "E_02_Iter_6416.pth"
 _CUPY_CACHE = None
@@ -1196,10 +1208,23 @@ def save_heatmap_video(
 
 
 def run_conda_worker(env_name: str, script: str, args: list[str], cwd: str | None = None, timeout: int | None = None) -> subprocess.CompletedProcess:
-    cmd = ["conda", "run", "-n", env_name, "python", script] + args
+    if IS_FROZEN:
+        worker_candidates = [
+            APP_EXEC_DIR / "NewLight_Worker.exe",
+            APP_RESOURCE_DIR.parent / "NewLight_Worker.exe",
+            PROJECT_DIR / "NewLight_Worker.exe",
+        ]
+        worker_exe = next((candidate for candidate in worker_candidates if candidate.exists()), None)
+        if worker_exe is not None:
+            cmd = [str(worker_exe), script] + args
+        else:
+            cmd = [str(Path(sys.executable)), "--worker", script] + args
+    else:
+        cmd = ["conda", "run", "-n", env_name, "python", script] + args
     env = os.environ.copy()
     env.setdefault("PYTHONIOENCODING", "utf-8")
     env.setdefault("PYTHONUTF8", "1")
+    env.setdefault("NEWLIGHT_RESOURCE_DIR", str(APP_RESOURCE_DIR))
     return subprocess.run(
         cmd,
         cwd=cwd,
@@ -1218,7 +1243,7 @@ def run_neuroseg3(input_image: np.ndarray, output_dir: str, weights: str | None 
     input_path = out_dir / "neuroseg3_input.png"
     mask_path = out_dir / "neuroseg3_masks.npz"
     plt.imsave(input_path, normalize_image(input_image), cmap="gray")
-    script = Path(__file__).resolve().parent / "workers" / "run_neuroseg3.py"
+    script = WORKER_DIR / "run_neuroseg3.py"
     weights = weights or str(NEUROSEG3_DIR / "weights" / "segmentation" / "yolov8s-seg.pt")
     proc = run_conda_worker(
         "neuroseg3",
@@ -1249,7 +1274,7 @@ def run_caiman_motion(input_movie: np.ndarray, output_dir: str, mode: str = "rig
     input_path = out_dir / "caiman_input.tif"
     output_path = out_dir / f"caiman_corrected_{uuid.uuid4().hex[:8]}.tif"
     save_movie_tiff(input_movie, str(input_path))
-    script = Path(__file__).resolve().parent / "workers" / "run_caiman.py"
+    script = WORKER_DIR / "run_caiman.py"
     proc = run_conda_worker(
         "caiman_latest",
         str(script),
@@ -1277,7 +1302,7 @@ def run_deepcadrt_denoise(
     input_path = out_dir / f"deepcadrt_input_{uuid.uuid4().hex[:8]}.tif"
     output_path = out_dir / f"deepcadrt_denoised_{uuid.uuid4().hex[:8]}.tif"
     save_movie_tiff(input_movie, str(input_path))
-    script = Path(__file__).resolve().parent / "workers" / "run_deepcadrt.py"
+    script = WORKER_DIR / "run_deepcadrt.py"
     args = [
         "--input", str(input_path),
         "--output", str(output_path),

@@ -1,4 +1,5 @@
 import argparse
+import os
 import sys
 import warnings
 from pathlib import Path
@@ -6,8 +7,11 @@ from pathlib import Path
 import cv2
 import numpy as np
 
+resource_dir = Path(os.environ.get("NEWLIGHT_RESOURCE_DIR", Path(__file__).resolve().parents[1]))
 workspace = Path(__file__).resolve().parents[2]
-neuroseg3_dir = workspace / "NeuroSeg3"
+neuroseg3_dir = resource_dir / "NeuroSeg3"
+if not neuroseg3_dir.exists():
+    neuroseg3_dir = workspace / "NeuroSeg3"
 if neuroseg3_dir.exists():
     sys.path.insert(0, str(neuroseg3_dir))
 

@@ -59,9 +59,8 @@ echo Build complete:
 echo   %CD%\build_release\NewLight_Analysis\NewLight_Analysis.exe
 echo.
 echo Notes:
-echo - NeuroSeg3 and CaImAn remain external conda backends.
-echo - DeepCAD-RT model is bundled from DeepCADRT_Model\E_02_Iter_6416.pth.
-echo - DeepCAD-RT code/env remains the external deepcadrt conda backend.
+echo - NewLight_Worker.exe is bundled for backend worker tasks.
+echo - NeuroSeg3 source/weights, NeuroAlign source, DeepCAD-RT source, and DeepCAD-RT model are bundled.
 echo - Run check_backends.bat inside the release folder on target machines.
 echo.
 if "%PAUSE_ON_EXIT%"=="1" pause

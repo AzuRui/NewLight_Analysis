@@ -13,7 +13,10 @@ warnings.filterwarnings("ignore", category=FutureWarning)
 
 APP_DIR = Path(__file__).resolve().parent
 WORKSPACE = APP_DIR.parent
-NEUROALIGN_DIR = WORKSPACE / "2cafe_analysis" / "NeuroAlign"
+RESOURCE_DIR = Path(getattr(sys, "_MEIPASS", APP_DIR))
+NEUROALIGN_DIR = RESOURCE_DIR / "NeuroAlign"
+if not NEUROALIGN_DIR.exists():
+    NEUROALIGN_DIR = WORKSPACE / "2cafe_analysis" / "NeuroAlign"
 
 CLUSTER_OUTPUTS = [
     "leiden_label_map.npy",

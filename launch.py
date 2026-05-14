@@ -1,6 +1,7 @@
 import importlib.util
 import sys
 import tkinter as tk
+from pathlib import Path
 from tkinter import messagebox
 
 
@@ -18,6 +19,13 @@ REQUIRED = [
 
 
 def main():
+    if Path(sys.executable).stem.lower() == "newlight_worker" or (len(sys.argv) > 1 and sys.argv[1] == "--worker"):
+        if len(sys.argv) > 1 and sys.argv[1] == "--worker":
+            del sys.argv[1]
+        import worker_launcher
+
+        return worker_launcher.main()
+
     missing = [name for name in REQUIRED if importlib.util.find_spec(name) is None]
     if missing:
         root = tk.Tk()

@@ -305,3 +305,21 @@
 - Weight edits are now monitored while typing; if the value changes, the current view redraws immediately without rerunning DeepCAD.
 - Current preprocessing buttons are still destructive/stacking operations on `state.movie`: `Save Current Movie` saves the processed current movie, and multiple preprocessing operations do stack in order. A future non-destructive pipeline/config refactor should convert these into recorded operations that are reapplied for preview and full-movie export.
 - Verified Python compilation, session temp cleanup on close, and a small GUI smoke test for DeepCAD display overlay / Weight redraw / save blending.
+
+### Full Bundled Backend Release
+
+- Continued the interrupted packaging pass and converted the PyInstaller build from a GUI-only app plus external conda/workspace assumptions into a bundled runtime with `NewLight_Analysis.exe` and console `NewLight_Worker.exe`.
+- `analysis_core.py` now resolves runtime resources through PyInstaller `_MEIPASS` when frozen and falls back to the source workspace during development.
+- Bundled runtime resources now include `workers`, `DeepCADRT_Model\E_02_Iter_6416.pth`, NeuroSeg3 local source/weights/config/utils, DeepCAD-RT `deepcad` source, NeuroAlign source, NeuroAlign help/summary files, and `PACKAGING.md`.
+- Added `worker_launcher.py`; frozen backend jobs now run through `NewLight_Worker.exe` instead of requiring `conda run` on target machines.
+- Added a minimal project-local `csbdeep.utils.normalize` compatibility module because DeepCAD-RT imports it from display helpers, but the full `csbdeep` dependency is unnecessary for NewLight's inference path.
+- Added PyInstaller data fixes for CaImAn dependencies: `hdmf` / `pynwb` schema files and `ipyparallel\cluster\shellcmd_receive.py`, which is read from disk at runtime.
+- Updated `check_backends.bat` so release validation uses bundled `NewLight_Worker.exe` when present.
+- Built the full portable release with `conda run -n caiman_latest cmd /c build_exe.bat /nopause`.
+- Final output folder: `E:\WorkSpace\NewLight_Analysis\build_release\NewLight_Analysis`.
+- Verified `check_backends.bat`: bundled Python imports OK; NeuroSeg3, CaImAn, and DeepCAD-RT worker help checks OK.
+- Verified deep frozen backend imports through `NewLight_Worker.exe`: `ultralytics`, `caiman`, `igraph`, `leidenalg`, `deepcad.test_collection`, `atlas_registration_merged_bilateral_midline`, and `csbdeep.utils.normalize`.
+- Verified frozen GUI-side backend dispatch by importing `analysis_core` through `NewLight_Worker.exe -c` and calling `run_conda_worker(...)`; it resolved `APP_EXEC_DIR` to the release folder, `APP_RESOURCE_DIR` to `_internal`, and successfully launched a bundled worker help command.
+- Verified GUI startup smoke: `NewLight_Analysis.exe` stayed alive for 8 seconds and was then closed.
+- Confirmed bundled model/resource files include the DeepCAD-RT `.pth` and NeuroSeg3 `.pt/.onnx/.engine` weights under `_internal`.
+- Inno Setup `ISCC.exe` was not found on this machine, so an installer `.exe` was not generated; the complete portable folder is ready, and `build_full_release.bat` will build the installer automatically once Inno Setup is installed.
