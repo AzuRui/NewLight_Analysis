@@ -20,4 +20,16 @@ if errorlevel 1 (
 ) else (
   echo CaImAn backend OK.
 )
+echo.
+echo DeepCAD-RT backend:
+if not exist "DeepCADRT_Model\E_02_Iter_6416.pth" (
+  echo DeepCAD-RT model missing: %CD%\DeepCADRT_Model\E_02_Iter_6416.pth
+) else (
+  call conda run -n deepcadrt python workers\run_deepcadrt.py --help
+  if errorlevel 1 (
+    echo DeepCAD-RT backend check failed.
+  ) else (
+    echo DeepCAD-RT backend OK.
+  )
+)
 endlocal

@@ -3,13 +3,14 @@ setlocal enabledelayedexpansion
 cd /d "%~dp0"
 
 echo ========================================
-echo Building NewLight_Analysis portable EXE
+echo NewLight_Analysis full release build
 echo ========================================
 echo.
 
-if not exist "DeepCADRT_Model\E_02_Iter_6416.pth" (
+set "MODEL=DeepCADRT_Model\E_02_Iter_6416.pth"
+if not exist "%MODEL%" (
   echo Missing DeepCAD-RT model:
-  echo   %CD%\DeepCADRT_Model\E_02_Iter_6416.pth
+  echo   %CD%\%MODEL%
   echo Put the trained .pth file there before building.
   pause
   exit /b 1
@@ -40,26 +41,43 @@ if errorlevel 1 (
   exit /b 1
 )
 
-echo Preparing release folder...
+echo Preparing portable release folder...
 mkdir build_release
 xcopy /e /i /y dist\NewLight_Analysis build_release\NewLight_Analysis >nul
 copy /y check_backends.bat build_release\NewLight_Analysis\check_backends.bat >nul
 copy /y setup_caiman_latest.bat build_release\NewLight_Analysis\setup_caiman_latest.bat >nul
 
-echo Writing release launcher...
 > build_release\Run_NewLight_Analysis.bat echo @echo off
 >> build_release\Run_NewLight_Analysis.bat echo cd /d "%%~dp0NewLight_Analysis"
 >> build_release\Run_NewLight_Analysis.bat echo start "" "NewLight_Analysis.exe"
 
+set "ISCC="
+where ISCC.exe >nul 2>nul
+if not errorlevel 1 set "ISCC=ISCC.exe"
+if not defined ISCC if exist "%ProgramFiles(x86)%\Inno Setup 6\ISCC.exe" set "ISCC=%ProgramFiles(x86)%\Inno Setup 6\ISCC.exe"
+if not defined ISCC if exist "%ProgramFiles%\Inno Setup 6\ISCC.exe" set "ISCC=%ProgramFiles%\Inno Setup 6\ISCC.exe"
+
+if defined ISCC (
+  echo Building installer with Inno Setup...
+  "%ISCC%" NewLight_Analysis_setup.iss
+  if errorlevel 1 (
+    echo Inno Setup build failed.
+    pause
+    exit /b 1
+  )
+) else (
+  echo Inno Setup compiler was not found. Portable release is ready; installer was skipped.
+)
+
 echo.
-echo Build complete:
+echo Full release build finished.
+echo Portable EXE:
 echo   %CD%\build_release\NewLight_Analysis\NewLight_Analysis.exe
 echo.
 echo Notes:
-echo - NeuroSeg3 and CaImAn remain external conda backends.
-echo - DeepCAD-RT model is bundled from DeepCADRT_Model\E_02_Iter_6416.pth.
-echo - DeepCAD-RT code/env remains the external deepcadrt conda backend.
-echo - Run check_backends.bat inside the release folder on target machines.
+echo - DeepCAD-RT model is bundled from %MODEL%.
+echo - NeuroSeg3, CaImAn, and DeepCAD-RT code/env remain external conda backends.
+echo - Run check_backends.bat in the release folder on target machines.
 echo.
 pause
 endlocal

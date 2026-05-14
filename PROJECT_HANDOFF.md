@@ -19,7 +19,7 @@ NewLight_Analysis is a Tkinter desktop GUI for two-photon / neurosurgical imagin
 - `analysis_core.py`: movie I/O, preprocessing, ROI masks, dF/F, statistics, plotting, exports, CaImAn/NeuroSeg3 helpers.
 - `launch.py`: startup gate.
 - `run_NewLight_Analysis.bat`: launcher.
-- `build_exe.bat`, `NewLight_Analysis.spec`, `NewLight_Analysis_setup.iss`: packaging.
+- `build_exe.bat`, `build_full_release.bat`, `NewLight_Analysis.spec`, `NewLight_Analysis_setup.iss`: packaging.
 - `README.md`, `DESIGN_NOTES.md`, `PACKAGING.md`: user/developer notes.
 
 ## New Chat Startup Checklist
@@ -31,7 +31,7 @@ When a new chat takes over this project, read this file first. Then inspect thes
 - `git log --oneline --decorate -5`: recent checkpoints and rollback targets.
 - `NewLight_Analysis.py`: especially GUI state, display canvas, ROI controls, heatmap AVI dialog, and workflow callbacks.
 - `analysis_core.py`: especially movie I/O, dF/F, ROI processing, heatmap rendering, and export functions.
-- `NewLight_Analysis.spec`, `build_exe.bat`, `NewLight_Analysis_setup.iss`: packaging path if the task involves compiling or installer generation.
+- `NewLight_Analysis.spec`, `build_exe.bat`, `build_full_release.bat`, `NewLight_Analysis_setup.iss`: packaging path if the task involves compiling or installer generation.
 
 Recommended new-chat instruction:
 
@@ -58,13 +58,13 @@ Known working candidate environments from prior checks:
 
 The `base` environment was not suitable for GUI work because `cv2` failed to import with a DLL load error. `openpyxl` was missing in checked environments, while `pandas` was present in `neuroseg3` and `caiman_latest`.
 
-DeepCAD-RT model files are expected at:
+NewLight's bundled/default DeepCAD-RT model file is:
 
 ```text
-E:\WorkSpace\DeepCAD-RT\DeepCAD_RT_pytorch\pth\ModelForPytorch\DownloadedModel
+E:\WorkSpace\NewLight_Analysis\DeepCADRT_Model\E_02_Iter_6416.pth
 ```
 
-That path must be a folder containing one or more `.pth` files. If `DownloadedModel` exists as a plain file, replace it with a folder and download/copy the `.pth` models there before enabling the DeepCAD-RT view toggle.
+The old DeepCAD-RT `pth\ModelForPytorch\DownloadedModel` path is a download/cache convention in the external DeepCAD-RT project, not the default model used by NewLight. For packaging, keep the trained `.pth` inside `NewLight_Analysis\DeepCADRT_Model`; the PyInstaller spec bundles that folder.
 
 ## Current UI State
 
@@ -174,7 +174,8 @@ Requirements already discussed:
 - On the 2026-05-13 test run `NeuroAlign_runs/neuroalign_20260513_105405`, the updated Step 1 reported `mean contour error = 13.672 px`, `midline error = 3.998 px`, `rotation = -0.95 deg`, `shear = 0.000`, `midline anchors = 12`.
 - A preview-only TPS idea was tested and rejected because it over-deformed atlas polygons; keep Step 1 preview tied to the stable affine result unless a more constrained local preview warp is designed later.
 - `workers/run_deepcadrt.py` is the DeepCAD-RT backend worker. It runs inside the `deepcadrt` conda environment, feeds a temporary TIFF stack into `deepcad.test_collection.testing_class`, then returns a denoised TIFF.
-- `analysis_core.run_deepcadrt_denoise` performs a preflight model check before writing temporary input data. Without a `.pth` in the expected `DownloadedModel` folder, DeepCAD-RT should fail fast with a clear path message.
+- `analysis_core.run_deepcadrt_denoise` performs a preflight model check before writing temporary input data. By default it passes `DeepCADRT_Model\E_02_Iter_6416.pth` to the worker; the worker wraps a single `.pth` file into DeepCAD-RT's required `pth_dir + denoise_model` folder contract.
+- `NewLight_Analysis.spec` includes `DeepCADRT_Model`, and `build_exe.bat` / `build_full_release.bat` check that `DeepCADRT_Model\E_02_Iter_6416.pth` exists before building. Do not run a build unless the user explicitly asks.
 
 ## Git / Record Policy
 

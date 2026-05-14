@@ -24,9 +24,11 @@ from PIL import Image
 
 
 WORKSPACE = Path(__file__).resolve().parents[1]
+APP_RESOURCE_DIR = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
 NEUROSEG3_DIR = WORKSPACE / "NeuroSeg3"
 DEEPCADRT_DIR = WORKSPACE / "DeepCAD-RT" / "DeepCAD_RT_pytorch"
-DEEPCADRT_MODEL_DOWNLOAD_DIR = DEEPCADRT_DIR / "pth" / "ModelForPytorch" / "DownloadedModel"
+DEEPCADRT_MODEL_DIR = APP_RESOURCE_DIR / "DeepCADRT_Model"
+DEEPCADRT_DEFAULT_MODEL_FILE = DEEPCADRT_MODEL_DIR / "E_02_Iter_6416.pth"
 _CUPY_CACHE = None
 
 
@@ -207,21 +209,20 @@ def save_movie_tiff(movie: np.ndarray, path: str) -> None:
     tifffile.imwrite(path, np.asarray(movie, dtype=np.float32), photometric="minisblack")
 
 
-def ensure_deepcadrt_model_available(model: str | None = None) -> None:
-    if model:
-        return
-    model_dir = DEEPCADRT_MODEL_DOWNLOAD_DIR
-    if model_dir.is_file():
-        raise FileNotFoundError(
-            "DeepCAD-RT model path is a file, but it must be a folder containing .pth files:\n"
-            f"{model_dir}\n"
-            "Replace it with a folder and download/copy the .pth model files there."
-        )
-    if not model_dir.exists() or not list(model_dir.glob("*.pth")):
-        raise FileNotFoundError(
-            "No DeepCAD-RT .pth model file was found.\n"
-            f"Download/copy the .pth model files into:\n{model_dir}"
-        )
+def ensure_deepcadrt_model_available(model: str | None = None) -> str:
+    model_path = Path(model) if model else DEEPCADRT_DEFAULT_MODEL_FILE
+    if not model_path.is_absolute():
+        model_path = APP_RESOURCE_DIR / model_path
+    if model_path.is_file() and model_path.suffix.lower() == ".pth":
+        return str(model_path)
+    if model_path.is_dir() and list(model_path.glob("*.pth")):
+        return str(model_path)
+    raise FileNotFoundError(
+        "No usable DeepCAD-RT .pth model file was found.\n"
+        f"Default project model:\n{DEEPCADRT_DEFAULT_MODEL_FILE}\n\n"
+        "Put the trained .pth model in NewLight_Analysis\\DeepCADRT_Model, "
+        "or pass an explicit .pth file / model folder."
+    )
 
 
 def blend_movies(raw_movie: np.ndarray, denoised_movie: np.ndarray, weight: float) -> np.ndarray:
@@ -1217,7 +1218,7 @@ def run_caiman_motion(input_movie: np.ndarray, output_dir: str, mode: str = "rig
 def run_deepcadrt_denoise(input_movie: np.ndarray, output_dir: str, model: str | None = None) -> tuple[np.ndarray, str]:
     if not DEEPCADRT_DIR.exists():
         raise FileNotFoundError(f"DeepCAD-RT pytorch folder not found: {DEEPCADRT_DIR}")
-    ensure_deepcadrt_model_available(model)
+    model_arg = ensure_deepcadrt_model_available(model)
     out_dir = Path(output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     input_path = out_dir / f"deepcadrt_input_{uuid.uuid4().hex[:8]}.tif"
@@ -1229,8 +1230,8 @@ def run_deepcadrt_denoise(input_movie: np.ndarray, output_dir: str, model: str |
         "--output", str(output_path),
         "--deepcad-dir", str(DEEPCADRT_DIR),
     ]
-    if model:
-        args.extend(["--model", model])
+    if model_arg:
+        args.extend(["--model", model_arg])
     proc = run_conda_worker(
         "deepcadrt",
         str(script),

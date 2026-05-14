@@ -13,11 +13,11 @@ import tifffile
 
 warnings.filterwarnings("ignore", message="pkg_resources is deprecated as an API.*", category=UserWarning)
 
-DEFAULT_MODEL_RELATIVE = Path("ModelForPytorch") / "DownloadedModel"
+DEEPCAD_DOWNLOAD_FOLDER = Path("ModelForPytorch") / "DownloadedModel"
 
 
 def model_download_hint(deepcad_dir: Path) -> str:
-    return str(deepcad_dir / "pth" / DEFAULT_MODEL_RELATIVE)
+    return str(deepcad_dir / "pth" / DEEPCAD_DOWNLOAD_FOLDER)
 
 
 def validate_model_dir(model_dir: Path, deepcad_dir: Path) -> tuple[Path, str, Path]:
@@ -64,7 +64,15 @@ def resolve_model_location(deepcad_dir: Path, model: Optional[str]) -> tuple[Pat
             f"Default expected download folder:\n{model_download_hint(deepcad_dir)}"
         )
 
-    return validate_model_dir(pth_dir / DEFAULT_MODEL_RELATIVE, deepcad_dir)
+    model_files = []
+    if pth_dir.exists():
+        model_files = sorted(p for p in pth_dir.rglob("*.pth") if p.is_file())
+    if model_files:
+        return validate_model_dir(model_files[0].parent, deepcad_dir)
+    raise FileNotFoundError(
+        "No DeepCAD-RT .pth model file was found.\n"
+        f"Pass --model explicitly, or download/copy a .pth model under:\n{pth_dir}"
+    )
 
 
 def main() -> int:

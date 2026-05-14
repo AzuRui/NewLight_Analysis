@@ -15,6 +15,7 @@ a = Analysis(
         ('README.md', '.'),
         ('DESIGN_NOTES.md', '.'),
         ('workers', 'workers'),
+        ('DeepCADRT_Model', 'DeepCADRT_Model'),
     ],
     hiddenimports=[
         'cv2',

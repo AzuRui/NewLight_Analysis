@@ -252,3 +252,12 @@
 - If `DownloadedModel` exists as a file or has no `.pth` files, the app now reports that it must be replaced with a folder containing downloaded `.pth` models.
 - Verified `python -m py_compile NewLight_Analysis.py analysis_core.py workers/run_deepcadrt.py`.
 - Verified `workers/run_deepcadrt.py --help` and a GUI smoke test with `DeepCAD-RT` present while `Corr` / `Show dF/F Heatmap` remain absent.
+
+### DeepCAD-RT Project Model / Packaging Prep
+
+- Switched NewLight's default DeepCAD-RT model from the external DeepCAD download/cache path to the project-local model file `DeepCADRT_Model\E_02_Iter_6416.pth`.
+- Kept the external DeepCAD-RT code/env at `E:\WorkSpace\DeepCAD-RT\DeepCAD_RT_pytorch`; only the default `.pth` model is now carried by the NewLight project for easier packaging.
+- Updated `workers/run_deepcadrt.py` so an explicit single `.pth` path is accepted and converted to DeepCAD-RT's required model-folder contract.
+- Updated `NewLight_Analysis.spec` to include `DeepCADRT_Model` in the PyInstaller onedir bundle.
+- Updated `build_exe.bat` to fail early if the project-local `.pth` model is missing.
+- Added `build_full_release.bat` for a future full portable + optional Inno Setup installer build. This script was written but not executed.
