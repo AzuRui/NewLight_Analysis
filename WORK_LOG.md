@@ -278,3 +278,13 @@
 - Updated `workers/run_deepcadrt.py` to inspect the selected `.pth` file and infer the required DeepCAD `fmap` automatically. The project-local model now infers `fmap=32`.
 - Restored the Data tab `Weight` field to the original raw/denoised blend behavior with default `0.5`; `Weight` is not the backend `overlap_factor`.
 - Verified `python -m py_compile NewLight_Analysis.py analysis_core.py workers\run_deepcadrt.py`, `conda run -n deepcadrt python workers\run_deepcadrt.py --help`, direct `infer_required_fmap(...) == 32`, and Tk GUI construction showing `Weight` but not `Overlap`.
+
+### Session Temp Preview Outputs
+
+- Added a per-run session temp directory created under the OS temp folder and deleted on app close.
+- Moved DeepCAD-RT preview/save intermediates, NeuroSeg3 worker inputs/masks, and CaImAn worker TIFFs into that session temp directory instead of writing `NewLight_temp` beside the source movie.
+- Changed DeepCAD-RT preview behavior so enabling the toggle runs denoising into temp storage, then temporarily replaces the current working movie with the raw/denoised blend. Turning the toggle off restores the original movie.
+- Kept formal output tied to Data -> `Save Current Movie`: without that button, DeepCAD preview files remain temporary and are cleaned up with the app session.
+- Weight changes now re-blend the temporary DeepCAD preview movie from the original movie and cached denoised movie without rerunning DeepCAD or double-blending the display.
+- Persistent preprocessing operations restore the original movie before applying so DeepCAD's temporary preview does not accidentally become a committed preprocessing input.
+- Verified Python compilation, session temp cleanup on close, and a small GUI smoke test for DeepCAD preview apply / Weight reblend / restore.

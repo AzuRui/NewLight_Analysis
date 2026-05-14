@@ -85,7 +85,7 @@ Frame slider and run log are below that.
 
 The Data tab `View` panel now only exposes `Mean`, `Max`, and `Std` projection modes. The older `Corr` projection entry and `Show dF/F Heatmap` button were removed from this panel; correlation and heatmap export code still exists elsewhere for Analysis/export workflows.
 
-The same `View` panel also includes a `DeepCAD-RT` toggle and `Weight` input. `Weight` is a raw/denoised blend ratio for display and saving, default `0.5`, and is clamped to `0.0-1.0`. It is not DeepCAD-RT's backend `overlap_factor`. When enabled, the app runs DeepCAD-RT denoising in the background, caches the denoised movie, and blends it with the current raw frame/projection according to `Weight`. Saving the current movie while the toggle is enabled exports the blended raw/denoised movie.
+The same `View` panel also includes a `DeepCAD-RT` toggle and `Weight` input. `Weight` is a raw/denoised blend ratio for preview and saving, default `0.5`, and is clamped to `0.0-1.0`. It is not DeepCAD-RT's backend `overlap_factor`. When enabled, the app runs DeepCAD-RT denoising in the background, stores intermediates in session temp, then temporarily replaces the current working movie with the raw/denoised blend. Turning the toggle off restores the original movie. Saving the current movie while the toggle is enabled exports the blended raw/denoised movie.
 
 The heatmap AVI dialog now includes:
 
@@ -178,6 +178,9 @@ Requirements already discussed:
 - The worker must pass relative `datasets` and `results` paths to DeepCAD-RT while running from its own temporary directory. Do not change this back to absolute Windows paths: DeepCAD-RT builds output folder names from `datasets_path`, and `C:\...` introduces an illegal colon that triggers `WinError 123`.
 - DeepCAD backend `overlap_factor` is passed as `--overlap` from `analysis_core.run_deepcadrt_denoise`; the GUI `Weight` field does not control it.
 - The project-local model `E_02_Iter_6416.pth` requires DeepCAD testing `fmap=32`. `workers/run_deepcadrt.py` infers this automatically from the checkpoint's first convolution shape. If a future model hits `Network_3D_Unet` size mismatch, check `infer_required_fmap` before blaming the model file.
+- `NewLightApp.session_temp_dir` is a per-run OS temp directory removed by `on_close` / `cleanup_session_temp`. DeepCAD-RT, NeuroSeg3, and CaImAn worker intermediates should use `temp_work_dir(...)`, not source-folder `NewLight_temp`, unless the user explicitly asks to preserve intermediates.
+- DeepCAD preview is temporary: `deepcad_original_movie` keeps the original movie, `deepcad_preview_active` means `state.movie` is currently the raw/denoised blend, and `restore_deepcad_original(...)` returns to the original movie when the toggle is off. Avoid double-blending in `display_image_for_render` when preview is active.
+- Persistent preprocessing operations should restore the original movie before applying, so DeepCAD's temporary preview does not become a committed input by accident.
 - DeepCAD preview runs are token-guarded. If the user changes the loaded movie while a background denoise is running, the stale result is ignored instead of replacing the current cache.
 - `Save Current Movie` now writes into the loaded movie's folder as `result.<source extension>` for `.tif`, `.tiff`, and `.avi`; unsupported source video extensions fall back to `result.tif`. It prompts before overwriting an existing result file.
 - `analysis_core.save_movie` supports `.tif/.tiff` and `.avi`. TIFF keeps float stack data; AVI uses OpenCV MJPG at the current Movie Hz and converts to 8-bit by 1-99 percentile scaling.
