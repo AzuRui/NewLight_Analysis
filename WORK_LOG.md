@@ -1,5 +1,13 @@
 # Work Log
 
+## 2026-05-14
+
+### Save Current Movie Dialog
+
+- Changed `Save Current Movie` from silent `result.<ext>` output to a standard Save As dialog.
+- The dialog opens in the loaded movie's folder, suggests `result.avi`, `result.tif`, or `result.tiff` from the input type, and lets the user change both folder and filename.
+- Canceling the dialog now exits without running DeepCAD-RT or writing any output; confirmed save behavior still uses the current processed movie and the DeepCAD blend when enabled.
+
 ## 2026-05-11
 
 ### Built-in Auto ROI Seed Estimate

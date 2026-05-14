@@ -2539,14 +2539,31 @@ class NewLightApp:
         np.savez_compressed(path, masks=np.stack(self.state.roi_masks).astype(bool), names=np.array(self.state.roi_names))
         self.log(f"Saved ROIs: {path}")
 
-    def current_movie_result_path(self):
+    def current_movie_result_defaults(self):
         if self.state.source_path:
             src = Path(self.state.source_path)
             ext = src.suffix.lower()
             if ext in {".avi", ".tif", ".tiff"}:
-                return src.with_name(f"result{ext}")
-            return src.with_name("result.tif")
-        return APP_DIR / "result.tif"
+                return src.parent, f"result{ext}", ext
+            return src.parent, "result.tif", ".tif"
+        return APP_DIR, "result.tif", ".tif"
+
+    def ask_current_movie_save_path(self):
+        initial_dir, initial_file, ext = self.current_movie_result_defaults()
+        tif_types = ("TIFF stack", "*.tif *.tiff")
+        avi_types = ("AVI video", "*.avi")
+        filetypes = [avi_types, tif_types, ("All files", "*.*")]
+        if ext in {".tif", ".tiff"}:
+            filetypes = [tif_types, avi_types, ("All files", "*.*")]
+        path = filedialog.asksaveasfilename(
+            title="Save current movie",
+            initialdir=str(initial_dir),
+            initialfile=initial_file,
+            defaultextension=ext,
+            filetypes=filetypes,
+            confirmoverwrite=True,
+        )
+        return Path(path) if path else None
 
     def save_movie_to_path(self, movie, path):
         core.save_movie(movie, str(path), fs=self.state.fs)
@@ -2554,11 +2571,8 @@ class NewLightApp:
     def save_current_movie(self):
         if not self.require_movie():
             return
-        path = self.current_movie_result_path()
-        if path.exists() and not messagebox.askyesno(
-            "Overwrite result",
-            f"{path} already exists.\n\nOverwrite it?",
-        ):
+        path = self.ask_current_movie_save_path()
+        if path is None:
             return
         path.parent.mkdir(parents=True, exist_ok=True)
         if not self.deepcad_enabled_var.get():
