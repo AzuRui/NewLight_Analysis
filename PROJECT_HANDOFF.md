@@ -243,6 +243,68 @@ Validation notes:
 - The DOCX was converted to a 9-page PDF with local Microsoft Word COM automation.
 - LibreOffice/Poppler were not present, so no separate raster page render was produced.
 
+## Stimulus Event Analysis / Split Exports
+
+The old Data-tab `Export Analysis` one-shot report button has been removed. The old Data-tab `Trial Average` button has also been removed. Analysis outputs are now split into independent user-selected buttons in the Analysis tab:
+
+- `Export Traces CSV`
+- `Export Trace Plot PNG`
+- `Export ROI Statistics`
+- `Export Correlation`
+- `Export dF/F Heatmap PNG`
+- `Export ROI Snapshot`
+- `Export Summary JSON`
+
+Stimulus-response analysis now lives in the Analysis tab as `Stimulus Event Average`.
+
+Expected workflow:
+
+1. Load a movie.
+2. Load a stimulus file or set interval triggers.
+3. Apply protocol / detect triggers, or let `Stimulus Event Average` regenerate the same trigger frames from the current protocol fields.
+4. Draw/load ROIs or allow trace extraction to create the full-frame global ROI.
+5. Click `Stimulus Event Average`.
+6. Enter:
+   - pre-event seconds
+   - post-event seconds
+   - heatmap window start seconds relative to stimulus
+   - heatmap window end seconds relative to stimulus
+   - optional top fluorescence percent
+7. Choose an output folder.
+
+Event outputs:
+
+- per-ROI PNG figures named like `{source}_stimulus_event_001_ROI1.png`; individual trials are gray, mean response is black, and stimulus onset is a red dashed line
+- `{source}_stimulus_event_mean_traces.csv`
+- `{source}_stimulus_event_trials.npz`
+- `{source}_stimulus_event_heatmap.png`
+- optional `{source}_stimulus_event_heatmap_top_{x}pct.png` when `top_percent > 0`
+- `{source}_stimulus_event_summary.json`
+
+Core functions added in `analysis_core.py`:
+
+- `event_aligned_blocks`
+- `event_aligned_mean`
+- `plot_event_aligned_roi`
+- `save_event_heatmap`
+- `export_event_aligned_response`
+- split-export helpers: `save_traces_csv`, `save_roi_statistics_table`, `save_correlation_outputs`, `save_roi_snapshot_outputs`, and `save_summary_json`
+
+GUI functions added in `NewLight_Analysis.py`:
+
+- `stimulus_event_average`
+- `event_trigger_frames`
+- `ensure_traces`
+- split-export methods matching the new Analysis buttons
+
+Implementation notes:
+
+- `extract_traces(show_window=False)` is used by export actions to avoid forcing a popup trace preview.
+- Event heatmaps compute dF/F from the current movie and baseline, align movie blocks around each valid stimulus frame, average those movie blocks, then average the selected relative-time window into one spatial heatmap.
+- Top x% fluorescence heatmap masks all pixels below the `(100 - x)` percentile of that event heatmap. If x is 0, blank, or non-positive, the top-percent heatmap is skipped.
+- The event analysis requires valid trigger frames that fit fully inside the selected pre/post window. Incomplete edge events are skipped.
+- Validation passed for Python compilation, core synthetic-data export, and GUI button presence/absence. `conda run` still prints the known OpenCL vendor `temp.txt` noise; it did not fail the checks.
+
 ## Git / Record Policy
 
 This project is now managed as a Git repository at `E:\WorkSpace\NewLight_Analysis`.

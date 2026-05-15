@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -724,25 +725,60 @@ def generate_interval_triggers(start_s: float, interval_s: float, movie_fs: floa
     return frames[(frames - pre_frames >= 0) & (frames + post_frames < n_frames)]
 
 
-def trial_average(traces: np.ndarray, trigger_frames: np.ndarray, fs: float, pre_s: float, post_s: float) -> tuple[np.ndarray, np.ndarray]:
-    if traces is None or traces.size == 0 or trigger_frames.size == 0:
-        return np.empty((0, 0, 0), dtype=np.float32), np.array([], dtype=np.float32)
-    pre = int(round(pre_s * fs))
-    post = int(round(post_s * fs))
+def event_aligned_blocks(data: np.ndarray, trigger_frames: np.ndarray, fs: float, pre_s: float, post_s: float) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    arr = np.asarray(data)
+    triggers = np.asarray(trigger_frames, dtype=int).reshape(-1)
+    pre = max(0, int(round(float(pre_s) * float(fs))))
+    post = max(0, int(round(float(post_s) * float(fs))))
     if pre == 0 and post == 0:
-        post = int(round(fs))
+        post = max(1, int(round(float(fs))))
     window = pre + post + 1
+    trial_t = (np.arange(window, dtype=np.float32) - pre) / float(fs)
+    if arr.ndim == 0 or arr.shape[0] == 0 or triggers.size == 0:
+        return np.empty((0, window) + tuple(arr.shape[1:]), dtype=np.float32), trial_t, np.array([], dtype=int)
     blocks = []
-    for frame in trigger_frames:
+    kept = []
+    for frame in triggers:
         start = int(frame) - pre
         end = int(frame) + post + 1
-        if start >= 0 and end <= traces.shape[0]:
-            blocks.append(traces[start:end])
+        if start >= 0 and end <= arr.shape[0]:
+            blocks.append(arr[start:end])
+            kept.append(int(frame))
     if not blocks:
+        return np.empty((0, window) + tuple(arr.shape[1:]), dtype=np.float32), trial_t, np.array([], dtype=int)
+    return np.stack(blocks).astype(np.float32), trial_t, np.asarray(kept, dtype=int)
+
+
+def event_aligned_mean(data: np.ndarray, trigger_frames: np.ndarray, fs: float, pre_s: float, post_s: float) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    arr = np.asarray(data, dtype=np.float32)
+    triggers = np.asarray(trigger_frames, dtype=int).reshape(-1)
+    pre = max(0, int(round(float(pre_s) * float(fs))))
+    post = max(0, int(round(float(post_s) * float(fs))))
+    if pre == 0 and post == 0:
+        post = max(1, int(round(float(fs))))
+    window = pre + post + 1
+    trial_t = (np.arange(window, dtype=np.float32) - pre) / float(fs)
+    out_shape = (window,) + tuple(arr.shape[1:])
+    acc = np.zeros(out_shape, dtype=np.float64)
+    kept = []
+    if arr.ndim == 0 or arr.shape[0] == 0 or triggers.size == 0:
+        return np.zeros(out_shape, dtype=np.float32), trial_t, np.array([], dtype=int)
+    for frame in triggers:
+        start = int(frame) - pre
+        end = int(frame) + post + 1
+        if start >= 0 and end <= arr.shape[0]:
+            acc += arr[start:end].astype(np.float64, copy=False)
+            kept.append(int(frame))
+    if not kept:
+        return np.zeros(out_shape, dtype=np.float32), trial_t, np.array([], dtype=int)
+    return (acc / float(len(kept))).astype(np.float32), trial_t, np.asarray(kept, dtype=int)
+
+
+def trial_average(traces: np.ndarray, trigger_frames: np.ndarray, fs: float, pre_s: float, post_s: float) -> tuple[np.ndarray, np.ndarray]:
+    if traces is None:
         return np.empty((0, 0, 0), dtype=np.float32), np.array([], dtype=np.float32)
-    stack = np.stack(blocks).astype(np.float32)
-    t = (np.arange(window) - pre) / float(fs)
-    return stack, t.astype(np.float32)
+    blocks, trial_t, _ = event_aligned_blocks(traces, trigger_frames, fs, pre_s, post_s)
+    return blocks, trial_t
 
 
 def roi_statistics(traces: np.ndarray, roi_names: list[str], fs: float, trigger_frames: np.ndarray | None = None) -> pd.DataFrame:
@@ -1005,6 +1041,30 @@ def plot_trial_average(path: str, t: np.ndarray, mean_trial: np.ndarray, roi_nam
     plt.close(fig)
 
 
+def safe_filename(text: object, fallback: str = "item") -> str:
+    name = re.sub(r"[^\w.-]+", "_", str(text).strip(), flags=re.UNICODE).strip("._")
+    return name or fallback
+
+
+def plot_event_aligned_roi(path: str, trial_t: np.ndarray, roi_trials: np.ndarray, roi_name: str, trigger_count: int) -> None:
+    arr = np.asarray(roi_trials, dtype=np.float32)
+    fig, ax = plt.subplots(figsize=(7.2, 4.4))
+    if arr.size:
+        for trial in arr:
+            ax.plot(trial_t, trial, color="0.70", linewidth=0.8, alpha=0.55)
+        mean_trial = np.nanmean(arr, axis=0)
+        ax.plot(trial_t, mean_trial, color="black", linewidth=2.0, label="Mean")
+    ax.axvline(0, color="red", linestyle="--", linewidth=1.2, label="Stimulus")
+    ax.set_xlabel("Time from stimulus (s)")
+    ax.set_ylabel("dF/F")
+    ax.set_title(f"{roi_name} stimulus-aligned response, n={trigger_count}")
+    ax.grid(True, alpha=0.25)
+    ax.legend(loc="best", frameon=False)
+    fig.tight_layout()
+    fig.savefig(path, dpi=180)
+    plt.close(fig)
+
+
 def plot_correlation(path: str, corr: np.ndarray, roi_names: list[str]) -> None:
     fig, ax = plt.subplots(figsize=(6, 5))
     im = ax.imshow(corr, cmap="hot", vmin=-1, vmax=1)
@@ -1031,6 +1091,235 @@ def save_heatmap(path: str, heat: np.ndarray, mask: np.ndarray) -> None:
     fig.tight_layout()
     fig.savefig(path, dpi=200)
     plt.close(fig)
+
+
+def save_event_heatmap(path: str, heat: np.ndarray, title: str = "Stimulus-aligned mean dF/F", top_percent: float | None = None) -> None:
+    data = gaussian_filter(np.asarray(heat, dtype=np.float32), sigma=2)
+    data = data.copy()
+    if top_percent is not None and top_percent > 0:
+        top_percent = float(np.clip(top_percent, 0.0, 100.0))
+        finite = data[np.isfinite(data)]
+        if finite.size:
+            threshold = float(np.percentile(finite, 100.0 - top_percent))
+            data[data < threshold] = np.nan
+    fig, ax = plt.subplots(figsize=(7, 6))
+    im = ax.imshow(data, cmap="jet")
+    ax.set_title(title)
+    ax.axis("off")
+    fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+    fig.tight_layout()
+    fig.savefig(path, dpi=200)
+    plt.close(fig)
+
+
+def traces_dataframe(traces: np.ndarray, roi_names: list[str], fs: float) -> pd.DataFrame:
+    traces = np.asarray(traces, dtype=np.float32)
+    t = np.arange(traces.shape[0], dtype=np.float32) / float(fs)
+    df = pd.DataFrame({"Time_sec": t})
+    for i, roi_name in enumerate(roi_names):
+        if i < traces.shape[1]:
+            df[str(roi_name)] = traces[:, i]
+    return df
+
+
+def save_traces_csv(path: str, traces: np.ndarray, roi_names: list[str], fs: float) -> None:
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
+    traces_dataframe(traces, roi_names, fs).to_csv(path, index=False)
+
+
+def save_roi_statistics_table(
+    path: str,
+    stats: pd.DataFrame,
+    movie: np.ndarray | None = None,
+    fs: float | None = None,
+    roi_count: int | None = None,
+    trigger_count: int | None = None,
+    pre_trigger_s: float = 0.0,
+    post_trigger_s: float = 0.0,
+) -> None:
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
+    ext = Path(path).suffix.lower()
+    if ext == ".xlsx":
+        with pd.ExcelWriter(path, engine="openpyxl") as writer:
+            stats.to_excel(writer, sheet_name="ROI Statistics", index=False)
+            if movie is not None:
+                info = pd.DataFrame({
+                    "Item": ["Frames", "Frame Rate Hz", "ROI Count", "Trigger Count", "Pre Trigger s", "Post Trigger s"],
+                    "Value": [
+                        int(movie.shape[0]),
+                        float(fs or 0),
+                        int(0 if roi_count is None else roi_count),
+                        int(0 if trigger_count is None else trigger_count),
+                        float(pre_trigger_s),
+                        float(post_trigger_s),
+                    ],
+                })
+                info.to_excel(writer, sheet_name="Experiment Info", index=False)
+        return
+    stats.to_csv(path, index=False)
+
+
+def save_correlation_outputs(output_dir: str, name: str, traces: np.ndarray, roi_names: list[str]) -> dict[str, str]:
+    if traces is None or traces.shape[1] < 2:
+        raise ValueError("Need at least two ROI traces for correlation export")
+    out_dir = Path(output_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    corr = np.corrcoef(traces.T)
+    paths = {
+        "correlation_csv": str(out_dir / f"{name}_roi_correlation_matrix.csv"),
+        "correlation_png": str(out_dir / f"{name}_roi_correlation_matrix.png"),
+    }
+    pd.DataFrame(corr, index=roi_names, columns=roi_names).to_csv(paths["correlation_csv"])
+    plot_correlation(paths["correlation_png"], corr, roi_names)
+    return paths
+
+
+def save_roi_snapshot_outputs(output_dir: str, name: str, baseline: np.ndarray, roi_masks: list[np.ndarray], roi_names: list[str]) -> dict[str, str]:
+    out_dir = Path(output_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    paths = {
+        "baseline_png": str(out_dir / f"{name}_baseline.png"),
+        "roi_npz": str(out_dir / f"{name}_ROI_data.npz"),
+        "roi_overlay_png": str(out_dir / f"{name}_ROI_overlay.png"),
+    }
+    plt.imsave(paths["baseline_png"], normalize_image(baseline), cmap="gray")
+    masks = np.stack(roi_masks).astype(bool) if roi_masks else np.zeros((0,) + baseline.shape, dtype=bool)
+    np.savez_compressed(paths["roi_npz"], masks=masks, names=np.array(roi_names), baseline_shape=baseline.shape)
+    overlay = draw_roi_overlay(baseline, roi_masks, roi_names)
+    cv2.imwrite(paths["roi_overlay_png"], cv2.cvtColor(overlay, cv2.COLOR_RGB2BGR))
+    return paths
+
+
+def save_summary_json(
+    path: str,
+    name: str,
+    movie: np.ndarray,
+    fs: float,
+    roi_masks: list[np.ndarray],
+    trigger_frames: np.ndarray | None = None,
+    files: dict[str, str] | None = None,
+) -> str:
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
+    summary = {
+        "source": name,
+        "frames": int(movie.shape[0]),
+        "height": int(movie.shape[1]),
+        "width": int(movie.shape[2]),
+        "fs": float(fs),
+        "roi_count": int(len(roi_masks)),
+        "trigger_count": int(0 if trigger_frames is None else len(trigger_frames)),
+        "files": files or {},
+    }
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(summary, f, indent=2, ensure_ascii=False)
+    return path
+
+
+def export_event_aligned_response(
+    output_dir: str,
+    name: str,
+    movie: np.ndarray,
+    baseline: np.ndarray,
+    roi_masks: list[np.ndarray],
+    roi_names: list[str],
+    traces: np.ndarray,
+    trigger_frames: np.ndarray,
+    fs: float,
+    pre_s: float,
+    post_s: float,
+    heatmap_start_s: float = 0.0,
+    heatmap_end_s: float | None = None,
+    top_percent: float | None = None,
+    acceleration: str = "auto",
+) -> dict[str, str]:
+    if traces is None or traces.size == 0:
+        raise ValueError("Stimulus event average needs extracted ROI traces")
+    out_dir = Path(output_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    safe_name = safe_filename(name, "NewLight")
+    paths: dict[str, str] = {}
+
+    trials, trial_t, kept_triggers = event_aligned_blocks(traces, trigger_frames, fs, pre_s, post_s)
+    if trials.size == 0 or kept_triggers.size == 0:
+        raise ValueError("No complete stimulus events fit inside the selected pre/post window")
+
+    paths["event_trials_npz"] = str(out_dir / f"{safe_name}_stimulus_event_trials.npz")
+    np.savez_compressed(
+        paths["event_trials_npz"],
+        trials=trials,
+        trial_time_sec=trial_t,
+        trigger_frames=kept_triggers,
+        roi_names=np.array(roi_names),
+        pre_s=float(pre_s),
+        post_s=float(post_s),
+    )
+
+    mean_trial = np.nanmean(trials, axis=0)
+    mean_df = pd.DataFrame({"Time_from_stimulus_sec": trial_t})
+    for i, roi_name in enumerate(roi_names):
+        if i < mean_trial.shape[1]:
+            mean_df[str(roi_name)] = mean_trial[:, i]
+    paths["event_mean_csv"] = str(out_dir / f"{safe_name}_stimulus_event_mean_traces.csv")
+    mean_df.to_csv(paths["event_mean_csv"], index=False)
+
+    for i, roi_name in enumerate(roi_names):
+        if i >= trials.shape[2]:
+            continue
+        roi_path = out_dir / f"{safe_name}_stimulus_event_{i + 1:03d}_{safe_filename(roi_name, f'ROI{i + 1}')}.png"
+        plot_event_aligned_roi(str(roi_path), trial_t, trials[:, :, i], str(roi_name), int(kept_triggers.size))
+        paths[f"event_roi_{i + 1:03d}_png"] = str(roi_path)
+
+    dff = compute_dff(movie, baseline, acceleration=acceleration)
+    mean_movie, movie_t, kept_movie_triggers = event_aligned_mean(dff, kept_triggers, fs, pre_s, post_s)
+    if kept_movie_triggers.size == 0:
+        raise ValueError("No complete movie events fit inside the selected pre/post window")
+    if heatmap_end_s is None:
+        heatmap_end_s = float(post_s)
+    h_start = float(heatmap_start_s)
+    h_end = float(heatmap_end_s)
+    if h_end < h_start:
+        h_start, h_end = h_end, h_start
+    frame_mask = (movie_t >= h_start) & (movie_t <= h_end)
+    if not np.any(frame_mask):
+        frame_mask = movie_t >= 0
+    if not np.any(frame_mask):
+        frame_mask = np.ones_like(movie_t, dtype=bool)
+    event_heat = np.nanmean(mean_movie[frame_mask], axis=0)
+    paths["event_heatmap_png"] = str(out_dir / f"{safe_name}_stimulus_event_heatmap.png")
+    save_event_heatmap(
+        paths["event_heatmap_png"],
+        event_heat,
+        title=f"Stimulus-aligned mean dF/F ({h_start:g} to {h_end:g} s)",
+    )
+
+    if top_percent is not None and float(top_percent) > 0:
+        pct = float(np.clip(float(top_percent), 0.0, 100.0))
+        paths["event_heatmap_top_png"] = str(out_dir / f"{safe_name}_stimulus_event_heatmap_top_{pct:g}pct.png")
+        save_event_heatmap(
+            paths["event_heatmap_top_png"],
+            event_heat,
+            title=f"Stimulus-aligned mean dF/F, top {pct:g}%",
+            top_percent=pct,
+        )
+
+    paths["event_summary_json"] = str(out_dir / f"{safe_name}_stimulus_event_summary.json")
+    summary = {
+        "source": name,
+        "fs": float(fs),
+        "pre_s": float(pre_s),
+        "post_s": float(post_s),
+        "heatmap_start_s": float(h_start),
+        "heatmap_end_s": float(h_end),
+        "top_percent": None if top_percent is None else float(top_percent),
+        "trigger_count_input": int(len(trigger_frames)),
+        "trigger_count_used": int(kept_triggers.size),
+        "roi_count": int(len(roi_names)),
+        "movie_shape": [int(x) for x in movie.shape],
+        "files": paths,
+    }
+    with open(paths["event_summary_json"], "w", encoding="utf-8") as f:
+        json.dump(summary, f, ensure_ascii=False, indent=2)
+    return paths
 
 
 def heatmap_limits(

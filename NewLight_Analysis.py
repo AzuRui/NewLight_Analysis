@@ -1545,7 +1545,6 @@ class NewLightApp:
         ttk.Button(file_box, text="Open Movie", command=self.open_movie).grid(row=0, column=0, sticky="ew", pady=2)
         ttk.Button(file_box, text="Open Stimulus", command=self.open_stimulus).grid(row=1, column=0, sticky="ew", pady=2)
         ttk.Button(file_box, text="Save Current Movie", command=self.save_current_movie).grid(row=2, column=0, sticky="ew", pady=2)
-        ttk.Button(file_box, text="Export Analysis", command=self.export_analysis).grid(row=3, column=0, sticky="ew", pady=2)
 
         view_box = ttk.LabelFrame(flow_tab, text="View", padding=8)
         view_box.grid(row=1, column=0, sticky="ew", pady=6)
@@ -1582,7 +1581,6 @@ class NewLightApp:
             ttk.Entry(protocol_box, textvariable=var, width=10).grid(row=r, column=1, sticky="ew", pady=1, padx=(6, 0))
         ttk.Button(protocol_box, text="Apply Protocol", command=self.apply_protocol).grid(row=len(protocol_rows), column=0, columnspan=2, sticky="ew", pady=(6, 2))
         ttk.Button(protocol_box, text="Detect Triggers", command=self.detect_triggers).grid(row=len(protocol_rows) + 1, column=0, columnspan=2, sticky="ew", pady=2)
-        ttk.Button(protocol_box, text="Trial Average", command=self.show_trial_average).grid(row=len(protocol_rows) + 2, column=0, columnspan=2, sticky="ew", pady=2)
 
         pre_box = ttk.LabelFrame(pre_tab, text="Preprocessing", padding=8)
         pre_box.grid(row=0, column=0, sticky="ew", pady=6)
@@ -1623,7 +1621,8 @@ class NewLightApp:
         ttk.Button(analysis_box, text="Peak Detection", command=self.peak_detection).grid(row=1, column=0, sticky="ew", pady=2)
         ttk.Button(analysis_box, text="ROI Correlation", command=self.roi_correlation).grid(row=2, column=0, sticky="ew", pady=2)
         ttk.Button(analysis_box, text="ROI Statistics", command=self.show_roi_statistics).grid(row=3, column=0, sticky="ew", pady=2)
-        ttk.Button(analysis_box, text="Generate Heatmap AVI", command=self.generate_heatmap_avi).grid(row=4, column=0, sticky="ew", pady=2)
+        ttk.Button(analysis_box, text="Stimulus Event Average", command=self.stimulus_event_average).grid(row=4, column=0, sticky="ew", pady=2)
+        ttk.Button(analysis_box, text="Generate Heatmap AVI", command=self.generate_heatmap_avi).grid(row=5, column=0, sticky="ew", pady=2)
         trace_box = ttk.LabelFrame(analysis_tab, text="dF/F Options", padding=8)
         trace_box.grid(row=1, column=0, sticky="ew", pady=6)
         trace_box.columnconfigure(1, weight=1)
@@ -1632,6 +1631,16 @@ class NewLightApp:
         ttk.Entry(trace_box, textvariable=self.trace_baseline_window_var, width=10).grid(row=1, column=1, sticky="ew", padx=(6, 0), pady=2)
         ttk.Label(trace_box, text="Moving avg").grid(row=2, column=0, sticky="w", pady=2)
         ttk.Entry(trace_box, textvariable=self.trace_smooth_window_var, width=10).grid(row=2, column=1, sticky="ew", padx=(6, 0), pady=2)
+
+        export_box = ttk.LabelFrame(analysis_tab, text="Export", padding=8)
+        export_box.grid(row=2, column=0, sticky="ew", pady=6)
+        ttk.Button(export_box, text="Export Traces CSV", command=self.export_traces_csv).grid(row=0, column=0, sticky="ew", pady=2)
+        ttk.Button(export_box, text="Export Trace Plot PNG", command=self.export_trace_plot_png).grid(row=1, column=0, sticky="ew", pady=2)
+        ttk.Button(export_box, text="Export ROI Statistics", command=self.export_roi_statistics_table).grid(row=2, column=0, sticky="ew", pady=2)
+        ttk.Button(export_box, text="Export Correlation", command=self.export_correlation_outputs).grid(row=3, column=0, sticky="ew", pady=2)
+        ttk.Button(export_box, text="Export dF/F Heatmap PNG", command=self.export_heatmap_png).grid(row=4, column=0, sticky="ew", pady=2)
+        ttk.Button(export_box, text="Export ROI Snapshot", command=self.export_roi_snapshot).grid(row=5, column=0, sticky="ew", pady=2)
+        ttk.Button(export_box, text="Export Summary JSON", command=self.export_summary_json).grid(row=6, column=0, sticky="ew", pady=2)
 
         main = ttk.Frame(self.root, padding=(0, 10, 10, 10), style="Work.TFrame")
         main.grid(row=0, column=1, sticky="nsew")
@@ -2720,6 +2729,286 @@ class NewLightApp:
         self.apply_protocol(update_baseline=False)
         HeatmapVideoDialog(self)
 
+    def analysis_default_dir(self):
+        if self.state.source_path:
+            return Path(self.state.source_path).parent
+        return APP_DIR
+
+    def analysis_name(self):
+        if self.state.source_path:
+            stem = Path(self.state.source_path).stem
+            if stem:
+                return stem
+        return "NewLight"
+
+    def ask_analysis_save_path(self, title, initialfile, defaultextension, filetypes):
+        path = filedialog.asksaveasfilename(
+            title=title,
+            initialdir=str(self.analysis_default_dir()),
+            initialfile=initialfile,
+            defaultextension=defaultextension,
+            filetypes=filetypes,
+            confirmoverwrite=True,
+        )
+        return Path(path) if path else None
+
+    def ensure_baseline_image(self):
+        if self.state.movie is not None and self.state.baseline_image is None:
+            self.state.baseline_image = core.baseline_from_seconds(
+                self.state.movie,
+                self.state.fs,
+                self.state.baseline_start_s,
+                self.state.baseline_duration_s,
+            )
+        return self.state.baseline_image
+
+    def ensure_traces(self, show_window=False):
+        if self.state.traces is None:
+            self.extract_traces(show_window=show_window)
+        return self.state.traces
+
+    def event_trigger_frames(self, pre_s, post_s):
+        if not self.require_movie():
+            return np.array([], dtype=int)
+        self.apply_protocol(update_baseline=False)
+        try:
+            interval = float(self.trigger_interval_var.get())
+            start = float(self.trigger_start_var.get())
+            if interval > 0:
+                frames = core.generate_interval_triggers(
+                    start,
+                    interval,
+                    self.state.fs,
+                    self.state.movie.shape[0],
+                    pre_s,
+                    post_s,
+                )
+            elif self.state.stimulus is not None:
+                samples = core.detect_stimulus_triggers(
+                    self.state.stimulus,
+                    self.state.stimulus_fs,
+                    threshold=float(self.trigger_threshold_var.get()),
+                )
+                frames = core.map_stimulus_triggers_to_frames(
+                    samples,
+                    self.state.stimulus_fs,
+                    self.state.fs,
+                    self.state.movie.shape[0],
+                    pre_s,
+                    post_s,
+                )
+            elif self.state.trigger_frames.size:
+                frames = self.state.trigger_frames.astype(int)
+            else:
+                frames = np.array([], dtype=int)
+        except Exception as exc:
+            messagebox.showerror("Stimulus triggers", str(exc))
+            return np.array([], dtype=int)
+        return np.asarray(frames, dtype=int)
+
+    def stimulus_event_average(self):
+        if not self.require_movie():
+            return
+        default_pre = self.state.pre_trigger_s if self.state.pre_trigger_s > 0 else 1.0
+        default_post = self.state.post_trigger_s if self.state.post_trigger_s > 0 else 5.0
+        vals = self.param_dialog(
+            "Stimulus Event Average",
+            [
+                ("pre_s", "Pre event s", default_pre),
+                ("post_s", "Post event s", default_post),
+                ("heatmap_start_s", "Heatmap start s", 0.0),
+                ("heatmap_end_s", "Heatmap end s", default_post),
+                ("top_percent", "Top fluorescence %", 0),
+            ],
+        )
+        if not vals:
+            return
+        try:
+            pre_s = max(0.0, float(vals["pre_s"]))
+            post_s = max(0.0, float(vals["post_s"]))
+            heatmap_start_s = float(vals["heatmap_start_s"])
+            heatmap_end_s = float(vals["heatmap_end_s"])
+            top_percent = core.parse_optional_float(vals.get("top_percent", "0"))
+            if top_percent is not None:
+                top_percent = max(0.0, min(100.0, float(top_percent)))
+        except Exception as exc:
+            messagebox.showerror("Stimulus Event Average", f"Invalid parameters: {exc}")
+            return
+        out_dir = filedialog.askdirectory(title="Select stimulus event output folder", initialdir=str(self.analysis_default_dir()))
+        if not out_dir:
+            return
+        try:
+            self.apply_protocol(update_baseline=False)
+            self.ensure_baseline_image()
+            traces = self.ensure_traces(show_window=False)
+            if traces is None or traces.size == 0:
+                return
+            if len(self.state.roi_names) != len(self.state.roi_masks):
+                self.sync_roi_names()
+            frames = self.event_trigger_frames(pre_s, post_s)
+            if frames.size == 0:
+                self.log("Stimulus event average needs detected triggers or an interval trigger setting.")
+                return
+            self.state.trigger_frames = frames.astype(int)
+            self.redraw()
+            paths = core.export_event_aligned_response(
+                out_dir,
+                self.analysis_name(),
+                self.state.movie,
+                self.state.baseline_image,
+                self.state.roi_masks,
+                self.state.roi_names,
+                traces,
+                frames,
+                self.state.fs,
+                pre_s,
+                post_s,
+                heatmap_start_s=heatmap_start_s,
+                heatmap_end_s=heatmap_end_s,
+                top_percent=top_percent,
+                acceleration=self.acceleration(),
+            )
+            self.log(f"Stimulus event average exported {len(paths)} files to {out_dir}")
+            messagebox.showinfo("Stimulus Event Average", f"Saved stimulus event analysis to:\n{out_dir}")
+        except Exception as exc:
+            traceback.print_exc()
+            messagebox.showerror("Stimulus Event Average failed", str(exc))
+
+    def export_traces_csv(self):
+        if not self.require_movie():
+            return
+        traces = self.ensure_traces(show_window=False)
+        if traces is None or traces.size == 0:
+            return
+        path = self.ask_analysis_save_path(
+            "Export traces CSV",
+            f"{self.analysis_name()}_deltaF_F_multiROI.csv",
+            ".csv",
+            [("CSV", "*.csv"), ("All files", "*.*")],
+        )
+        if path is None:
+            return
+        core.save_traces_csv(str(path), traces, self.state.roi_names, self.state.fs)
+        self.log(f"Exported traces CSV: {path}")
+
+    def export_trace_plot_png(self):
+        if not self.require_movie():
+            return
+        traces = self.ensure_traces(show_window=False)
+        if traces is None or traces.size == 0:
+            return
+        path = self.ask_analysis_save_path(
+            "Export trace plot PNG",
+            f"{self.analysis_name()}_traces.png",
+            ".png",
+            [("PNG image", "*.png"), ("All files", "*.*")],
+        )
+        if path is None:
+            return
+        t = np.arange(traces.shape[0]) / self.state.fs
+        core.plot_traces(str(path), t, traces, self.state.roi_names, self.state.trigger_frames, self.state.fs)
+        self.log(f"Exported trace plot PNG: {path}")
+
+    def export_roi_statistics_table(self):
+        if not self.require_movie():
+            return
+        traces = self.ensure_traces(show_window=False)
+        if traces is None or traces.size == 0:
+            return
+        stats = core.roi_statistics(traces, self.state.roi_names, self.state.fs, self.state.trigger_frames)
+        path = self.ask_analysis_save_path(
+            "Export ROI statistics",
+            f"{self.analysis_name()}_ROI_statistics.xlsx",
+            ".xlsx",
+            [("Excel workbook", "*.xlsx"), ("CSV", "*.csv"), ("All files", "*.*")],
+        )
+        if path is None:
+            return
+        core.save_roi_statistics_table(
+            str(path),
+            stats,
+            movie=self.state.movie,
+            fs=self.state.fs,
+            roi_count=len(self.state.roi_masks),
+            trigger_count=len(self.state.trigger_frames),
+            pre_trigger_s=self.state.pre_trigger_s,
+            post_trigger_s=self.state.post_trigger_s,
+        )
+        self.log(f"Exported ROI statistics: {path}")
+
+    def export_correlation_outputs(self):
+        if not self.require_movie():
+            return
+        traces = self.ensure_traces(show_window=False)
+        if traces is None or traces.shape[1] < 2:
+            self.log("Need at least two ROI traces for correlation export.")
+            return
+        out_dir = filedialog.askdirectory(title="Select correlation output folder", initialdir=str(self.analysis_default_dir()))
+        if not out_dir:
+            return
+        paths = core.save_correlation_outputs(out_dir, self.analysis_name(), traces, self.state.roi_names)
+        self.log(f"Exported correlation outputs: {len(paths)} files to {out_dir}")
+
+    def export_heatmap_png(self):
+        if not self.require_movie():
+            return
+        self.apply_protocol(update_baseline=False)
+        self.ensure_baseline_image()
+        path = self.ask_analysis_save_path(
+            "Export mean dF/F heatmap",
+            f"{self.analysis_name()}_diff_heatmap.png",
+            ".png",
+            [("PNG image", "*.png"), ("All files", "*.*")],
+        )
+        if path is None:
+            return
+        masks = np.stack(self.state.roi_masks).astype(bool) if self.state.roi_masks else np.zeros((0,) + self.state.baseline_image.shape, dtype=bool)
+        combined = np.any(masks, axis=0) if masks.size else np.ones_like(self.state.baseline_image, dtype=bool)
+        dff = core.compute_dff(self.state.movie, self.state.baseline_image, acceleration=self.acceleration())
+        heat = np.mean(dff, axis=0)
+        core.save_heatmap(str(path), heat, combined)
+        self.log(f"Exported dF/F heatmap PNG: {path}")
+
+    def export_roi_snapshot(self):
+        if not self.require_movie():
+            return
+        self.apply_protocol(update_baseline=False)
+        self.ensure_baseline_image()
+        if len(self.state.roi_names) != len(self.state.roi_masks):
+            self.sync_roi_names()
+        out_dir = filedialog.askdirectory(title="Select ROI snapshot output folder", initialdir=str(self.analysis_default_dir()))
+        if not out_dir:
+            return
+        paths = core.save_roi_snapshot_outputs(
+            out_dir,
+            self.analysis_name(),
+            self.state.baseline_image,
+            self.state.roi_masks,
+            self.state.roi_names,
+        )
+        self.log(f"Exported ROI snapshot outputs: {len(paths)} files to {out_dir}")
+
+    def export_summary_json(self):
+        if not self.require_movie():
+            return
+        path = self.ask_analysis_save_path(
+            "Export summary JSON",
+            f"{self.analysis_name()}_summary.json",
+            ".json",
+            [("JSON", "*.json"), ("All files", "*.*")],
+        )
+        if path is None:
+            return
+        core.save_summary_json(
+            str(path),
+            self.analysis_name(),
+            self.state.movie,
+            self.state.fs,
+            self.state.roi_masks,
+            self.state.trigger_frames,
+        )
+        self.log(f"Exported summary JSON: {path}")
+
     def auto_roi(self):
         if not self.require_movie():
             return
@@ -2838,7 +3127,7 @@ class NewLightApp:
             pass
         self.root.after(200, self._poll_worker)
 
-    def extract_traces(self):
+    def extract_traces(self, show_window=True):
         if not self.require_movie():
             return
         if not self.state.roi_masks:
@@ -2862,7 +3151,8 @@ class NewLightApp:
             f"Extracted traces: {traces.shape}, baseline correction={correction}, "
             f"smooth window={self.trace_smooth_window_var.get()}"
         )
-        self.show_trace_window(traces)
+        if show_window:
+            self.show_trace_window(traces)
 
     def show_trace_window(self, traces):
         win = tk.Toplevel(self.root)

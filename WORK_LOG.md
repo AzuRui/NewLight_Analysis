@@ -346,3 +346,30 @@
 - Included formulas for projection, DeepCAD-RT blending, trigger mapping, preprocessing, dF/F extraction, ROI trace averaging, trace baseline correction, peak detection, correlation, heatmap rendering, atlas-image ROI, atlas reference building, and NeuroAlign scoring.
 - Verified the DOCX structure with `python-docx`: 103 non-empty paragraphs, 5 tables, and 6 embedded images.
 - Converted the DOCX to PDF with local Microsoft Word COM automation and verified the PDF has 9 pages with extractable text.
+
+### Stimulus Event Average / Split Analysis Exports
+
+- Removed the Data-tab `Export Analysis` one-shot report button from the GUI.
+- Removed the Data-tab `Trial Average` button so stimulus-response analysis lives in the Analysis tab.
+- Added `Stimulus Event Average` to the Analysis tab. It asks for pre-event seconds, post-event seconds, event-heatmap window start/end seconds, and optional top fluorescence percent.
+- The new event analysis uses current ROI traces and detected/generated stimulus frames, then exports:
+  - one per-ROI stimulus-aligned response plot with individual trials in gray, the mean in black, and the stimulus onset as a red dashed line
+  - a mean trace CSV for all ROIs
+  - a compressed NPZ containing all aligned trial traces
+  - a whole-brain stimulus-aligned mean dF/F heatmap
+  - an optional top x% fluorescence heatmap when the user enters a positive top-percent value
+  - a JSON summary with timing, trigger count, ROI count, movie shape, and output paths
+- Added Analysis-tab export buttons that split the old report behavior into user-selectable actions:
+  - `Export Traces CSV`
+  - `Export Trace Plot PNG`
+  - `Export ROI Statistics`
+  - `Export Correlation`
+  - `Export dF/F Heatmap PNG`
+  - `Export ROI Snapshot`
+  - `Export Summary JSON`
+- Added reusable core helpers for event-aligned blocks/means, per-ROI event plots, event heatmaps, trace CSV export, ROI statistics export, correlation export, ROI snapshot export, and summary JSON export.
+- `extract_traces` now accepts `show_window=False` so export actions can compute traces without forcing a trace-preview popup.
+- Verified `python -m py_compile NewLight_Analysis.py analysis_core.py`.
+- Verified `conda run -n caiman_latest python -m py_compile NewLight_Analysis.py analysis_core.py neuroalign_step_worker.py workers\run_deepcadrt.py`.
+- Smoke-tested the core event exporter on synthetic data: it generated 7 files including 2 ROI plots, full heatmap, top 10% heatmap, mean CSV, trials NPZ, and summary JSON.
+- Smoke-tested GUI construction and confirmed `Export Analysis` / `Trial Average` are absent while the new Analysis export buttons are present.
