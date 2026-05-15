@@ -373,3 +373,12 @@
 - Verified `conda run -n caiman_latest python -m py_compile NewLight_Analysis.py analysis_core.py neuroalign_step_worker.py workers\run_deepcadrt.py`.
 - Smoke-tested the core event exporter on synthetic data: it generated 7 files including 2 ROI plots, full heatmap, top 10% heatmap, mean CSV, trials NPZ, and summary JSON.
 - Smoke-tested GUI construction and confirmed `Export Analysis` / `Trial Average` are absent while the new Analysis export buttons are present.
+
+### Packaged Manual Refresh After Rebuild
+
+- Updated `dist\NewLight_Analysis\NewLight_Analysis_User_Manual.docx` after the latest rebuild so it matches the new Analysis-tab workflow.
+- Refreshed the manual text to remove old `Export Analysis` and `Trial Average` references.
+- Added documentation for `Stimulus Event Average`, including pre/post event windows, event heatmap start/end seconds, optional `Top fluorescence %`, skipped edge events, and generated output files.
+- Added documentation for the split Analysis export buttons, including `Export Trace Plot PNG`.
+- Re-exported `dist\NewLight_Analysis\NewLight_Analysis_User_Manual.pdf` from the updated DOCX with Microsoft Word COM automation.
+- Verified the updated DOCX contains 112 non-empty paragraphs, 5 tables, and 6 embedded images; the PDF has 11 pages and contains the new stimulus-event section.

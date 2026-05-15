@@ -305,6 +305,13 @@ Implementation notes:
 - The event analysis requires valid trigger frames that fit fully inside the selected pre/post window. Incomplete edge events are skipped.
 - Validation passed for Python compilation, core synthetic-data export, and GUI button presence/absence. `conda run` still prints the known OpenCL vendor `temp.txt` noise; it did not fail the checks.
 
+Packaged manual refresh:
+
+- After the 2026-05-15 rebuild, `dist\NewLight_Analysis` retained only `NewLight_Analysis_User_Manual.docx` from the manual set.
+- `NewLight_Analysis_User_Manual.docx` was updated to document the new Analysis-tab stimulus event workflow and split export buttons.
+- `NewLight_Analysis_User_Manual.pdf` was regenerated from the updated DOCX.
+- Validation after the refresh: DOCX has 112 non-empty paragraphs, 5 tables, and 6 embedded images; PDF has 11 pages and contains the stimulus-event section.
+
 ## Git / Record Policy
 
 This project is now managed as a Git repository at `E:\WorkSpace\NewLight_Analysis`.
