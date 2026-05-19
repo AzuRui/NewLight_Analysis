@@ -45,6 +45,22 @@ DEEPCADRT_DEFAULT_MODEL_FILE = DEEPCADRT_MODEL_DIR / "E_02_Iter_6416.pth"
 _CUPY_CACHE = None
 
 
+def hidden_subprocess_kwargs() -> dict[str, object]:
+    if os.name != "nt":
+        return {}
+    kwargs: dict[str, object] = {}
+    creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    if creationflags:
+        kwargs["creationflags"] = creationflags
+    startupinfo_cls = getattr(subprocess, "STARTUPINFO", None)
+    if startupinfo_cls is not None:
+        startupinfo = startupinfo_cls()
+        startupinfo.dwFlags |= getattr(subprocess, "STARTF_USESHOWWINDOW", 1)
+        startupinfo.wShowWindow = 0
+        kwargs["startupinfo"] = startupinfo
+    return kwargs
+
+
 @dataclass
 class AnalysisState:
     movie: np.ndarray | None = None
@@ -123,6 +139,7 @@ def cuda_status(check_neuroseg3: bool = False) -> dict[str, object]:
                 capture_output=True,
                 text=True,
                 timeout=30,
+                **hidden_subprocess_kwargs(),
             )
             lines = [line.strip() for line in (proc.stdout or "").splitlines() if line.strip()]
             status["neuroseg3_cuda_available"] = bool(lines and lines[0].lower() == "true")
@@ -1524,6 +1541,7 @@ def run_conda_worker(env_name: str, script: str, args: list[str], cwd: str | Non
         errors="replace",
         timeout=timeout,
         env=env,
+        **hidden_subprocess_kwargs(),
     )
 
 

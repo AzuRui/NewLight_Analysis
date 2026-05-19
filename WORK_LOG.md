@@ -382,3 +382,12 @@
 - Added documentation for the split Analysis export buttons, including `Export Trace Plot PNG`.
 - Re-exported `dist\NewLight_Analysis\NewLight_Analysis_User_Manual.pdf` from the updated DOCX with Microsoft Word COM automation.
 - Verified the updated DOCX contains 112 non-empty paragraphs, 5 tables, and 6 embedded images; the PDF has 11 pages and contains the new stimulus-event section.
+
+### Hidden Backend Console Windows
+
+- Added `analysis_core.hidden_subprocess_kwargs()` to hide Windows console windows for backend subprocess calls.
+- Applied the hidden subprocess settings to `analysis_core.run_conda_worker(...)`, which is the shared launch path for DeepCAD-RT, NeuroSeg3, CaImAn, NeuroAlign, and frozen `NewLight_Worker.exe` jobs.
+- Applied the same hidden settings to the NeuroSeg3 CUDA status probe.
+- This addresses the black console window appearing when enabling DeepCAD-RT preview from the GUI.
+- Verified `python -m py_compile analysis_core.py NewLight_Analysis.py`.
+- Verified a lightweight `run_conda_worker('caiman_latest', '-c', ...)` call returns successfully with hidden-window kwargs active.

@@ -312,6 +312,14 @@ Packaged manual refresh:
 - `NewLight_Analysis_User_Manual.pdf` was regenerated from the updated DOCX.
 - Validation after the refresh: DOCX has 112 non-empty paragraphs, 5 tables, and 6 embedded images; PDF has 11 pages and contains the stimulus-event section.
 
+## Backend Console Window Handling
+
+DeepCAD-RT preview, NeuroSeg3, CaImAn, NeuroAlign, and frozen worker calls all go through `analysis_core.run_conda_worker(...)`.
+
+On Windows, `analysis_core.hidden_subprocess_kwargs()` now supplies `CREATE_NO_WINDOW` and `STARTUPINFO` / `SW_HIDE` settings to backend `subprocess.run(...)` calls. Keep new backend launches on the `run_conda_worker(...)` path so GUI users do not see black console windows during background processing.
+
+The NeuroSeg3 CUDA status probe also uses the same hidden subprocess settings.
+
 ## Git / Record Policy
 
 This project is now managed as a Git repository at `E:\WorkSpace\NewLight_Analysis`.
