@@ -320,6 +320,31 @@ On Windows, `analysis_core.hidden_subprocess_kwargs()` now supplies `CREATE_NO_W
 
 The NeuroSeg3 CUDA status probe also uses the same hidden subprocess settings.
 
+## Workspace Cleanup State
+
+A conservative cleanup was performed on 2026-05-21. No files were permanently deleted. Generated/cache/runtime folders were moved out of the workspace to:
+
+```text
+E:\WorkSpace_cleanup_20260521_145153
+```
+
+Moved items:
+
+- `NewLight_Analysis\build`
+- `NewLight_Analysis\build_release`
+- `NewLight_Analysis\Output`
+- `NewLight_Analysis\NewLight_temp`
+- `NewLight_Analysis\NeuroAlign_runs`
+- Python `__pycache__` folders under `NewLight_Analysis`, `csbdeep`, and `workers`
+- top-level `logs`
+
+Preserved items:
+
+- source files, workers, bundled compatibility modules, DeepCADRT model files, PyInstaller/Inno Setup scripts, project documentation, git metadata, and the current `dist\NewLight_Analysis` portable release/manual folder
+- external development dependencies under `E:\WorkSpace`, including `2cafe_analysis`, `DeepCAD-RT`, `CaImAn`, and `NeuroSeg3`
+
+If the user later wants a stricter source-only tree, confirm first and then move or delete `dist\NewLight_Analysis`; it currently accounts for most of the remaining `NewLight_Analysis` size.
+
 ## Git / Record Policy
 
 This project is now managed as a Git repository at `E:\WorkSpace\NewLight_Analysis`.

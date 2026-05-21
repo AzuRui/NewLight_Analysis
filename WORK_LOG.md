@@ -391,3 +391,20 @@
 - This addresses the black console window appearing when enabling DeepCAD-RT preview from the GUI.
 - Verified `python -m py_compile analysis_core.py NewLight_Analysis.py`.
 - Verified a lightweight `run_conda_worker('caiman_latest', '-c', ...)` call returns successfully with hidden-window kwargs active.
+
+### Workspace Cleanup
+
+- Performed a conservative workspace cleanup without permanent deletion.
+- Moved generated/cache/runtime output folders to the recoverable quarantine folder `E:\WorkSpace_cleanup_20260521_145153`.
+- Moved items:
+  - `NewLight_Analysis\build`
+  - `NewLight_Analysis\build_release`
+  - `NewLight_Analysis\Output`
+  - `NewLight_Analysis\NewLight_temp`
+  - `NewLight_Analysis\NeuroAlign_runs`
+  - `NewLight_Analysis\__pycache__`
+  - `NewLight_Analysis\csbdeep\__pycache__`
+  - `NewLight_Analysis\workers\__pycache__`
+  - `logs`
+- Preserved core source, model, packaging scripts, handoff records, and the current `dist\NewLight_Analysis` portable release/manual folder.
+- Post-cleanup size check: `E:\WorkSpace\NewLight_Analysis` is about 3.65 GB, mostly from the preserved `dist` release folder; the quarantine folder is about 5.89 GB.
