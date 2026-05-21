@@ -320,6 +320,26 @@ On Windows, `analysis_core.hidden_subprocess_kwargs()` now supplies `CREATE_NO_W
 
 The NeuroSeg3 CUDA status probe also uses the same hidden subprocess settings.
 
+## dF/F Baseline Semantics
+
+Protocol baseline inputs are frame-based, not second-based:
+
+- `Base start frame`: the first movie frame used for the baseline window.
+- `Base dur frames`: the number of frames in that window.
+
+dF/F baseline behavior:
+
+- If `Base dur frames` is `0`, NewLight uses the full-movie 25th percentile image as the baseline.
+- If `Base dur frames` is greater than `0`, NewLight uses the mean image over frames `[Base start frame, Base start frame + Base dur frames)`, clipped to the movie length.
+
+Implementation notes:
+
+- The core entry point is `analysis_core.baseline_from_frames(...)`.
+- `AnalysisState` stores `baseline_start_frame` and `baseline_duration_frames`.
+- When these Protocol values change, cached baseline/dF/F/traces are invalidated, and dF/F traces, dF/F heatmaps, heatmap AVI generation, stimulus-event heatmaps, and split exports recompute from the current baseline.
+- `analysis_core.baseline_from_seconds(...)` remains only as a compatibility wrapper.
+- Regression coverage lives in `tests\test_baseline.py`.
+
 ## Workspace Cleanup State
 
 A conservative cleanup was performed on 2026-05-21. No files were permanently deleted. Generated/cache/runtime folders were moved out of the workspace to:

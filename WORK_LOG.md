@@ -408,3 +408,15 @@
   - `logs`
 - Preserved core source, model, packaging scripts, handoff records, and the current `dist\NewLight_Analysis` portable release/manual folder.
 - Post-cleanup size check: `E:\WorkSpace\NewLight_Analysis` is about 3.65 GB, mostly from the preserved `dist` release folder; the quarantine folder is about 5.89 GB.
+
+### dF/F Baseline Frame Window
+
+- Changed Protocol baseline inputs from seconds to frame units in the GUI: `Base start frame` and `Base dur frames`.
+- Added `analysis_core.baseline_from_frames(...)`.
+- dF/F baseline behavior is now:
+  - `Base dur frames = 0`: use the full-movie 25th percentile baseline.
+  - `Base dur frames > 0`: use the mean image over frames `[Base start frame, Base start frame + Base dur frames)`, clipped to the movie length.
+- Invalidated cached baseline/dF/F/traces when baseline frame parameters change, so trace extraction, dF/F heatmaps, heatmap AVI generation, and exports use the current Protocol settings.
+- Added `tests\test_baseline.py` to lock the two baseline behaviors.
+- Verified `conda run -n caiman_latest python -m unittest tests.test_baseline`.
+- Verified `conda run -n caiman_latest python -m py_compile NewLight_Analysis.py analysis_core.py`.

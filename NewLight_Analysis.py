@@ -1568,8 +1568,8 @@ class NewLightApp:
         protocol_rows = [
             ("Movie Hz", self.fs_var),
             ("Stim Hz", self.stim_fs_var),
-            ("Base start s", self.baseline_start_var),
-            ("Base dur s", self.baseline_duration_var),
+            ("Base start frame", self.baseline_start_var),
+            ("Base dur frames", self.baseline_duration_var),
             ("Trig threshold", self.trigger_threshold_var),
             ("Trig start s", self.trigger_start_var),
             ("Trig interval s", self.trigger_interval_var),
@@ -2010,6 +2010,17 @@ class NewLightApp:
         self.sync_roi_names()
         self.state.traces = None
 
+    def recompute_baseline_image(self):
+        if self.state.movie is None:
+            return None
+        self.state.baseline_image = core.baseline_from_frames(
+            self.state.movie,
+            self.state.baseline_start_frame,
+            self.state.baseline_duration_frames,
+        )
+        self.state.dff_movie = None
+        return self.state.baseline_image
+
     def undo(self):
         if not self.state.history:
             self.log("Nothing to undo.")
@@ -2017,12 +2028,7 @@ class NewLightApp:
         label, movie = self.state.history.pop()
         self.state.movie = movie
         self.clear_deepcad_cache()
-        self.state.baseline_image = core.baseline_from_seconds(
-            movie,
-            self.state.fs,
-            self.state.baseline_start_s,
-            self.state.baseline_duration_s,
-        )
+        self.recompute_baseline_image()
         self.update_frame_controls()
         self.refresh_projection()
         self.log(f"Undone: {label}")
@@ -2037,12 +2043,7 @@ class NewLightApp:
             self.clear_deepcad_cache()
             self.fs_var.set(f"{fs:.6g}")
             self.apply_protocol(update_baseline=False)
-            self.state.baseline_image = core.baseline_from_seconds(
-                movie,
-                self.state.fs,
-                self.state.baseline_start_s,
-                self.state.baseline_duration_s,
-            )
+            self.recompute_baseline_image()
             self.refresh_projection(preserve_view=False)
             self.update_frame_controls()
             self.log(f"Loaded {Path(path).name}: {movie.shape}, fs={fs:.3g}")
@@ -2061,21 +2062,38 @@ class NewLightApp:
 
     def apply_protocol(self, update_baseline=True):
         try:
+            old_baseline = (self.state.baseline_start_frame, self.state.baseline_duration_frames)
             self.state.fs = float(self.fs_var.get())
             self.state.stimulus_fs = float(self.stim_fs_var.get())
-            self.state.baseline_start_s = float(self.baseline_start_var.get())
-            self.state.baseline_duration_s = float(self.baseline_duration_var.get())
+            baseline_start_frame = int(round(float(self.baseline_start_var.get())))
+            baseline_duration_frames = int(round(float(self.baseline_duration_var.get())))
+            if baseline_start_frame < 0 or baseline_duration_frames < 0:
+                raise ValueError("Baseline start frame and duration frames must be non-negative")
+            self.state.baseline_start_frame = baseline_start_frame
+            self.state.baseline_duration_frames = baseline_duration_frames
             self.state.pre_trigger_s = float(self.pre_trigger_var.get())
             self.state.post_trigger_s = float(self.post_trigger_var.get())
+            baseline_changed = old_baseline != (self.state.baseline_start_frame, self.state.baseline_duration_frames)
+            if baseline_changed:
+                self.state.baseline_image = None
+                self.state.dff_movie = None
+                self.state.traces = None
             if update_baseline and self.state.movie is not None:
-                self.state.baseline_image = core.baseline_from_seconds(
-                    self.state.movie,
-                    self.state.fs,
-                    self.state.baseline_start_s,
-                    self.state.baseline_duration_s,
-                )
+                self.recompute_baseline_image()
                 self.refresh_projection(preserve_view=False)
-            self.log("Protocol parameters applied.")
+            if self.state.baseline_duration_frames > 0:
+                end_frame = None
+                if self.state.movie is not None:
+                    end_frame = min(self.state.movie.shape[0], self.state.baseline_start_frame + self.state.baseline_duration_frames) - 1
+                if end_frame is None:
+                    self.log("Protocol parameters applied. dF/F baseline uses the selected frame-window mean.")
+                else:
+                    self.log(
+                        "Protocol parameters applied. "
+                        f"dF/F baseline uses mean frames {self.state.baseline_start_frame}-{end_frame}."
+                    )
+            else:
+                self.log("Protocol parameters applied. dF/F baseline uses the full-movie 25th percentile.")
         except Exception as exc:
             messagebox.showerror("Protocol failed", str(exc))
 
@@ -2638,12 +2656,7 @@ class NewLightApp:
             self.push_history(label)
             self.state.movie = func(self.state.movie)
             self.clear_deepcad_cache()
-            self.state.baseline_image = core.baseline_from_seconds(
-                self.state.movie,
-                self.state.fs,
-                self.state.baseline_start_s,
-                self.state.baseline_duration_s,
-            )
+            self.recompute_baseline_image()
             self.update_frame_controls()
             self.refresh_projection(preserve_view=False)
             self.log(f"Applied: {label}")
@@ -2712,6 +2725,8 @@ class NewLightApp:
     def show_dff_heatmap(self):
         if not self.require_movie():
             return
+        self.apply_protocol(update_baseline=False)
+        self.ensure_baseline_image()
         dff = core.compute_dff(self.state.movie, self.state.baseline_image, acceleration=self.acceleration())
         self.state.display_image = np.mean(dff, axis=0)
         self.display_source = ("custom", "dff_heatmap")
@@ -2727,6 +2742,7 @@ class NewLightApp:
         if not self.require_movie():
             return
         self.apply_protocol(update_baseline=False)
+        self.ensure_baseline_image()
         HeatmapVideoDialog(self)
 
     def analysis_default_dir(self):
@@ -2754,12 +2770,7 @@ class NewLightApp:
 
     def ensure_baseline_image(self):
         if self.state.movie is not None and self.state.baseline_image is None:
-            self.state.baseline_image = core.baseline_from_seconds(
-                self.state.movie,
-                self.state.fs,
-                self.state.baseline_start_s,
-                self.state.baseline_duration_s,
-            )
+            self.recompute_baseline_image()
         return self.state.baseline_image
 
     def ensure_traces(self, show_window=False):
@@ -3093,12 +3104,7 @@ class NewLightApp:
         movie, log = result
         self.state.movie = movie
         self.clear_deepcad_cache()
-        self.state.baseline_image = core.baseline_from_seconds(
-            movie,
-            self.state.fs,
-            self.state.baseline_start_s,
-            self.state.baseline_duration_s,
-        )
+        self.recompute_baseline_image()
         self.update_frame_controls()
         self.refresh_projection()
         self.log("CaImAn motion correction applied.")
@@ -3136,6 +3142,7 @@ class NewLightApp:
             self.sync_roi_names()
             self.log("No ROI selected; using a full-frame global ROI.")
         self.apply_protocol(update_baseline=False)
+        self.ensure_baseline_image()
         if len(self.state.roi_names) != len(self.state.roi_masks):
             self.sync_roi_names()
         traces = core.extract_traces(self.state.movie, self.state.roi_masks, "dff", self.state.baseline_image, acceleration=self.acceleration())
@@ -3306,6 +3313,7 @@ class NewLightApp:
         name = Path(self.state.source_path).stem or "NewLight"
         try:
             self.apply_protocol(update_baseline=False)
+            self.ensure_baseline_image()
             if len(self.state.roi_names) != len(self.state.roi_masks):
                 self.sync_roi_names()
             traces = self.state.traces if self.state.traces is not None else np.empty((self.state.movie.shape[0], 0))

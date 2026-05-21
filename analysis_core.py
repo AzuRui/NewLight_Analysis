@@ -74,8 +74,8 @@ class AnalysisState:
     trigger_frames: np.ndarray = field(default_factory=lambda: np.array([], dtype=int))
     fs: float = 10.0
     stimulus_fs: float = 2000.0
-    baseline_start_s: float = 0.0
-    baseline_duration_s: float = 0.0
+    baseline_start_frame: int = 0
+    baseline_duration_frames: int = 0
     pre_trigger_s: float = 0.0
     post_trigger_s: float = 0.0
     source_path: str = ""
@@ -331,10 +331,23 @@ def compute_baseline(movie: np.ndarray, mode: str = "percentile", start: int = 0
     elif mode == "max":
         baseline = np.max(block, axis=0)
     else:
-        baseline = np.percentile(movie, 25, axis=0)
+        baseline = np.percentile(block, 25, axis=0)
     baseline = baseline.astype(np.float32)
     baseline[baseline <= 0] = np.finfo(np.float32).eps
     return baseline
+
+
+def baseline_from_frames(movie: np.ndarray, start_frame: int | float = 0, duration_frames: int | float = 0) -> np.ndarray:
+    start = max(0, int(round(float(start_frame))))
+    duration = max(0, int(round(float(duration_frames))))
+    if duration <= 0:
+        return compute_baseline(movie, mode="percentile")
+    if start >= movie.shape[0]:
+        raise ValueError(f"Baseline start frame {start} is outside movie length {movie.shape[0]}")
+    end = min(movie.shape[0], start + duration)
+    if end <= start:
+        raise ValueError("Baseline duration selects no frames")
+    return compute_baseline(movie, mode="mean", start=start, end=end)
 
 
 def baseline_from_seconds(movie: np.ndarray, fs: float, start_s: float, duration_s: float, mode: str = "percentile") -> np.ndarray:
@@ -343,6 +356,10 @@ def baseline_from_seconds(movie: np.ndarray, fs: float, start_s: float, duration
         end = start + int(round(duration_s * fs))
     else:
         end = None
+    if mode == "percentile" and (duration_s is None or duration_s <= 0):
+        return baseline_from_frames(movie, start_frame=start, duration_frames=0)
+    if mode == "percentile":
+        return baseline_from_frames(movie, start_frame=start, duration_frames=(end - start if end is not None else 0))
     return compute_baseline(movie, mode=mode, start=start, end=end)
 
 
