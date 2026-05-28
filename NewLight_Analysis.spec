@@ -1,14 +1,22 @@
 # -*- mode: python ; coding: utf-8 -*-
 
 import importlib.util
+import runpy
 from pathlib import Path
 
+from PyInstaller.config import CONF
 from PyInstaller.utils.hooks import collect_data_files, collect_submodules
 
 ROOT = Path.cwd()
 WORKSPACE = ROOT.parent
 PYINSTALLER_DIR = Path(importlib.util.find_spec('PyInstaller').origin).parent
 WORKER_ICON = PYINSTALLER_DIR / 'bootloader' / 'images' / 'icon-console.ico'
+CV2_PATCH_TOOL = ROOT / 'tools' / 'patch_frozen_cv2.py'
+
+
+def patch_frozen_cv2_config(app_root):
+    namespace = runpy.run_path(str(CV2_PATCH_TOOL))
+    namespace['patch_frozen_cv2_config'](app_root)
 
 
 hiddenimports = [
@@ -116,3 +124,4 @@ coll = COLLECT(
     upx_exclude=[],
     name='NewLight_Analysis',
 )
+patch_frozen_cv2_config(Path(CONF['distpath']) / 'NewLight_Analysis')

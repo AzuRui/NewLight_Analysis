@@ -435,3 +435,15 @@
 - Verified the real sample folder `E:\WorkSpace\Image format converter Folder （new）\20260424_A04` is recognized as a two-photon folder with 600x600 frames, 40 Hz, 2400 expected frames, Ch1 only, and 2400 TDMS image slots.
 - Verified `conda run -n caiman_latest python -B -m unittest tests.test_baseline tests.test_two_photon_converter`.
 - Verified `conda run -n caiman_latest python -m py_compile NewLight_Analysis.py analysis_core.py`.
+
+### Frozen OpenCV Loader Portability
+
+- Diagnosed the target-machine OpenCV failure:
+  `ImportError: ERROR: recursion is detected during loading of "cv2" binary extensions`.
+- Root cause: the PyInstaller bundle copied conda OpenCV's `cv2\config.py` and `cv2\config-3.11.py` with build-machine absolute paths such as `D:/anaconda3/envs/caiman_latest/...`; this worked on the build PC but failed on other computers and made the OpenCV loader re-import `cv2` recursively.
+- Added `tools\patch_frozen_cv2.py` to rewrite frozen OpenCV config files to self-contained paths under the bundle's `_internal` folder.
+- Updated `NewLight_Analysis.spec`, `build_exe.bat`, and `build_full_release.bat` so future builds automatically patch those frozen OpenCV loader paths.
+- Patched the current `dist\NewLight_Analysis` portable folder in place.
+- Verified the current frozen worker imports `numpy`, `scipy`, `cv2`, `tifffile`, `pandas`, and `matplotlib`; `cv2.__version__` reports `4.13.0`.
+- Verified bundled backend help entry points for NeuroSeg3, CaImAn, and DeepCAD-RT still launch through `_internal\NewLight_Worker.exe`.
+- Verified `conda run -n caiman_latest python -m py_compile tools\patch_frozen_cv2.py NewLight_Analysis.py analysis_core.py`.

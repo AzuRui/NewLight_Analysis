@@ -57,6 +57,10 @@ E:\WorkSpace\NewLight_Analysis\DeepCADRT_Model\E_02_Iter_6416.pth
 
 Both build scripts check this file before running PyInstaller, and `NewLight_Analysis.spec` includes the `DeepCADRT_Model` folder in the onedir bundle.
 
+The build also patches frozen OpenCV loader config files after PyInstaller
+collection. This removes conda build-machine paths from `_internal\cv2` and
+keeps `cv2` import self-contained on other computers.
+
 On target machines, run this from inside the release folder:
 
 ```powershell

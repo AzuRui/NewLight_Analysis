@@ -43,6 +43,14 @@ if errorlevel 1 (
   exit /b 1
 )
 
+echo Patching frozen OpenCV loader paths...
+python tools\patch_frozen_cv2.py dist\NewLight_Analysis
+if errorlevel 1 (
+  echo OpenCV loader patch failed.
+  if "%PAUSE_ON_EXIT%"=="1" pause
+  exit /b 1
+)
+
 echo Preparing release folder...
 mkdir build_release
 xcopy /e /i /y dist\NewLight_Analysis build_release\NewLight_Analysis >nul
