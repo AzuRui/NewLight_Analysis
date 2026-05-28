@@ -10,6 +10,25 @@ echo NewLight_Analysis full release build
 echo ========================================
 echo.
 
+set "BUILD_PY=python"
+set "BUILD_PY_LABEL=active PATH python"
+where conda >nul 2>nul
+if not errorlevel 1 (
+  call conda run -n caiman_latest python -c "import sys" >nul 2>nul
+  if not errorlevel 1 (
+    set "BUILD_PY=call conda run -n caiman_latest python"
+    set "BUILD_PY_LABEL=conda env caiman_latest"
+  )
+)
+
+echo Build Python: %BUILD_PY_LABEL%
+%BUILD_PY% -c "import sys; print(sys.executable); print(sys.version)"
+if errorlevel 1 (
+  echo Failed to start the selected build Python.
+  if "%PAUSE_ON_EXIT%"=="1" pause
+  exit /b 1
+)
+
 set "MODEL=DeepCADRT_Model\E_02_Iter_6416.pth"
 if not exist "%MODEL%" (
   echo Missing DeepCAD-RT model:
@@ -19,16 +38,35 @@ if not exist "%MODEL%" (
   exit /b 1
 )
 
-python -c "import PyInstaller" >nul 2>nul
+%BUILD_PY% -c "import pkg_resources" >nul 2>nul
+if errorlevel 1 (
+  echo Installing setuptools<81 for PyInstaller pkg_resources compatibility...
+  %BUILD_PY% -m pip install "setuptools<81"
+  if errorlevel 1 (
+    echo Failed to install compatible setuptools.
+    if "%PAUSE_ON_EXIT%"=="1" pause
+    exit /b 1
+  )
+)
+
+%BUILD_PY% -c "import PyInstaller" >nul 2>nul
 if errorlevel 1 (
   echo PyInstaller is not installed in this Python.
   echo Installing PyInstaller...
-  python -m pip install pyinstaller
+  %BUILD_PY% -m pip install pyinstaller
   if errorlevel 1 (
     echo Failed to install PyInstaller.
     if "%PAUSE_ON_EXIT%"=="1" pause
     exit /b 1
   )
+)
+
+%BUILD_PY% -c "import numpy, cv2, scipy, skimage, pandas, tifffile, matplotlib, torch" >nul 2>nul
+if errorlevel 1 (
+  echo The selected Python is missing NewLight_Analysis build dependencies.
+  echo Please build from the caiman_latest environment or repair that environment.
+  if "%PAUSE_ON_EXIT%"=="1" pause
+  exit /b 1
 )
 
 echo Cleaning previous build folders...
@@ -37,7 +75,7 @@ if exist dist rmdir /s /q dist
 if exist build_release rmdir /s /q build_release
 
 echo Running PyInstaller...
-python -m PyInstaller --noconfirm NewLight_Analysis.spec
+%BUILD_PY% -m PyInstaller --noconfirm NewLight_Analysis.spec
 if errorlevel 1 (
   echo PyInstaller build failed.
   if "%PAUSE_ON_EXIT%"=="1" pause
@@ -45,7 +83,7 @@ if errorlevel 1 (
 )
 
 echo Patching frozen OpenCV loader paths...
-python tools\patch_frozen_cv2.py dist\NewLight_Analysis
+%BUILD_PY% tools\patch_frozen_cv2.py dist\NewLight_Analysis
 if errorlevel 1 (
   echo OpenCV loader patch failed.
   if "%PAUSE_ON_EXIT%"=="1" pause

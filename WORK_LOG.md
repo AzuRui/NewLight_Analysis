@@ -447,3 +447,14 @@
 - Verified the current frozen worker imports `numpy`, `scipy`, `cv2`, `tifffile`, `pandas`, and `matplotlib`; `cv2.__version__` reports `4.13.0`.
 - Verified bundled backend help entry points for NeuroSeg3, CaImAn, and DeepCAD-RT still launch through `_internal\NewLight_Worker.exe`.
 - Verified `conda run -n caiman_latest python -m py_compile tools\patch_frozen_cv2.py NewLight_Analysis.py analysis_core.py`.
+
+### Build Script Python Selection Fix
+
+- Diagnosed a direct `build_exe.bat` failure where the script used the PATH Python (`Python312`) instead of the project build environment, causing PyInstaller to fail before project analysis with `ModuleNotFoundError: No module named 'pkg_resources'`.
+- Updated `build_exe.bat` and `build_full_release.bat` to prefer `conda run -n caiman_latest python` automatically, while still falling back to PATH Python if conda is unavailable.
+- Fixed Windows batch control flow by using `call conda ...`; direct `conda` calls inside another `.bat` transfer control and can make the script end after the environment probe.
+- Added a build preflight that installs `setuptools<81` when `pkg_resources` is missing, because newer setuptools builds can omit that compatibility module while PyInstaller/altgraph still imports it.
+- Added a dependency preflight for the selected build Python before cleaning/building.
+- Re-ran `cmd /c build_exe.bat /nopause`; build succeeded and produced `build_release\NewLight_Analysis\NewLight_Analysis.exe`.
+- Verified the release worker imports `numpy`, `scipy`, `cv2`, `tifffile`, `pandas`, and `matplotlib`, with OpenCV `4.13.0`.
+- Verified `build_release\NewLight_Analysis\check_backends.bat` reports bundled Python, NeuroSeg3, CaImAn, and DeepCAD-RT backend checks OK.

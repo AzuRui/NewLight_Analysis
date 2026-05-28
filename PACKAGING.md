@@ -16,6 +16,11 @@ For unattended builds:
 E:\WorkSpace\NewLight_Analysis\build_exe.bat /nopause
 ```
 
+The build scripts automatically prefer the `caiman_latest` conda environment
+when it is available. They also check for PyInstaller's `pkg_resources`
+compatibility dependency and install `setuptools<81` in the selected build
+Python if needed.
+
 Full release script:
 
 ```powershell
