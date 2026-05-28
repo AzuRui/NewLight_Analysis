@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import struct
 import subprocess
 import sys
 import tempfile
@@ -79,8 +80,33 @@ class AnalysisState:
     pre_trigger_s: float = 0.0
     post_trigger_s: float = 0.0
     source_path: str = ""
+    converted_color_avi_path: str = ""
+    converted_source_folder: str = ""
     history: list[tuple[str, np.ndarray]] = field(default_factory=list)
     last_message: str = ""
+
+
+@dataclass(frozen=True)
+class TwoPhotonProtocol:
+    folder: Path
+    width: int
+    height: int
+    frame_rate: float
+    recording_time_s: float
+    expected_frames: int
+    channels: tuple[str, ...]
+    values: dict[str, str] = field(default_factory=dict)
+
+
+@dataclass
+class ConvertedTwoPhotonMovie:
+    movie: np.ndarray
+    fs: float
+    color_avi_path: Path
+    source_folder: Path
+    protocol: TwoPhotonProtocol
+    frames: int
+    channel_count: int
 
 
 def get_cupy():
@@ -217,6 +243,290 @@ def load_movie(path: str, max_preview_frames: int | None = None) -> tuple[np.nda
             raise IOError(f"No frames read from: {path}")
         return np.stack(frames, axis=0), float(fps)
     raise ValueError(f"Unsupported file type: {ext}")
+
+
+def _read_text_with_fallback(path: Path, encodings: tuple[str, ...] = ("gbk", "utf-8", "latin1")) -> str:
+    last_error: Exception | None = None
+    for encoding in encodings:
+        try:
+            return path.read_text(encoding=encoding)
+        except Exception as exc:
+            last_error = exc
+    raise UnicodeError(f"Cannot read text file {path}: {last_error}")
+
+
+def _protocol_float(values: dict[str, str], key: str, default: float = 0.0) -> float:
+    raw = values.get(key, "")
+    match = re.search(r"[-+]?\d+(?:\.\d+)?", raw)
+    return float(match.group(0)) if match else float(default)
+
+
+def _protocol_int(values: dict[str, str], key: str, default: int = 0) -> int:
+    return int(round(_protocol_float(values, key, float(default))))
+
+
+def _protocol_channels(values: dict[str, str]) -> tuple[str, ...]:
+    raw = values.get("Recorded channels", "")
+    channels = tuple(dict.fromkeys(f"Ch{ch[-1]}" for ch in re.findall(r"Ch[12]", raw, flags=re.IGNORECASE)))
+    if channels:
+        return channels
+    inferred: list[str] = []
+    if _protocol_float(values, "Ch1 PMT voltage", 0.0) > 0:
+        inferred.append("Ch1")
+    if _protocol_float(values, "Ch2 PMT voltage", 0.0) > 0:
+        inferred.append("Ch2")
+    return tuple(inferred or ["Ch1"])
+
+
+def read_two_photon_protocol(folder: str | Path) -> TwoPhotonProtocol:
+    folder = Path(folder)
+    candidates = sorted(folder.glob("protocol*.txt"))
+    if not candidates:
+        raise FileNotFoundError(f"No protocol*.txt file found in {folder}")
+    protocol_path = candidates[0]
+    values: dict[str, str] = {}
+    for line in _read_text_with_fallback(protocol_path).splitlines():
+        if ":" not in line:
+            continue
+        key, value = line.split(":", 1)
+        values[key.strip()] = value.strip()
+    width = _protocol_int(values, "Image frame size (x)")
+    height = _protocol_int(values, "Image frame size (y)")
+    frame_rate = _protocol_float(values, "Image frame rate", 10.0)
+    recording_time_s = _protocol_float(values, "Recording time", 0.0)
+    if width <= 0 or height <= 0:
+        raise ValueError(f"Protocol does not contain a valid image size: {protocol_path}")
+    if frame_rate <= 0:
+        frame_rate = 10.0
+    expected_frames = int(round(recording_time_s * frame_rate)) if recording_time_s > 0 else 0
+    return TwoPhotonProtocol(
+        folder=folder,
+        width=width,
+        height=height,
+        frame_rate=frame_rate,
+        recording_time_s=recording_time_s,
+        expected_frames=expected_frames,
+        channels=_protocol_channels(values),
+        values=values,
+    )
+
+
+def is_two_photon_folder(path: str | Path) -> bool:
+    folder = Path(path)
+    return folder.is_dir() and any(folder.glob("*.tdms")) and any(folder.glob("protocol*.txt"))
+
+
+def _tdms_u32(buf: bytes, offset: int) -> int:
+    return struct.unpack_from("<I", buf, offset)[0]
+
+
+def _tdms_u64(buf: bytes, offset: int) -> int:
+    return struct.unpack_from("<Q", buf, offset)[0]
+
+
+def _tdms_raw_segments(path: str | Path) -> list[tuple[int, int]]:
+    path = Path(path)
+    size = path.stat().st_size
+    segments: list[tuple[int, int]] = []
+    pos = 0
+    with path.open("rb") as f:
+        while pos + 28 <= size:
+            f.seek(pos)
+            leadin = f.read(28)
+            if len(leadin) < 28:
+                break
+            if leadin[:4] != b"TDSm":
+                raise ValueError(f"Invalid TDMS segment at offset {pos}: {path}")
+            next_segment_offset = _tdms_u64(leadin, 12)
+            raw_data_offset = _tdms_u64(leadin, 20)
+            if next_segment_offset == 0xFFFFFFFFFFFFFFFF:
+                segment_end = size
+            else:
+                segment_end = min(size, pos + 28 + int(next_segment_offset))
+            raw_start = pos + 28 + int(raw_data_offset)
+            if raw_start < segment_end:
+                segments.append((raw_start, segment_end - raw_start))
+            if segment_end <= pos:
+                break
+            pos = segment_end
+    if not segments:
+        raise ValueError(f"No raw TDMS image segments found: {path}")
+    return segments
+
+
+def tdms_image_slot_count(path: str | Path, width: int, height: int) -> int:
+    frame_bytes = int(width) * int(height) * 2
+    if frame_bytes <= 0:
+        return 0
+    return sum(length // frame_bytes for _, length in _tdms_raw_segments(path))
+
+
+def iter_tdms_image_slots(path: str | Path, width: int, height: int):
+    frame_bytes = int(width) * int(height) * 2
+    if frame_bytes <= 0:
+        return
+    with Path(path).open("rb") as f:
+        for raw_start, raw_length in _tdms_raw_segments(path):
+            frames = raw_length // frame_bytes
+            f.seek(raw_start)
+            for _ in range(frames):
+                data = f.read(frame_bytes)
+                if len(data) != frame_bytes:
+                    return
+                yield np.frombuffer(data, dtype="<i2").reshape((height, width))
+
+
+def _two_photon_tdms_path(folder: Path) -> Path:
+    tdms_files = sorted(p for p in folder.glob("*.tdms") if not p.name.endswith("_index"))
+    if not tdms_files:
+        raise FileNotFoundError(f"No .tdms file found in {folder}")
+    preferred = [p for p in tdms_files if "real-time imaging" in p.name.lower()]
+    return preferred[0] if preferred else tdms_files[0]
+
+
+def _channel_frame_count(protocol: TwoPhotonProtocol, raw_slots: int) -> tuple[int, int]:
+    wants_two = "Ch2" in protocol.channels
+    expected = protocol.expected_frames if protocol.expected_frames > 0 else raw_slots
+    if wants_two and raw_slots >= expected * 2:
+        return expected, 2
+    if wants_two and raw_slots >= 2 and raw_slots % 2 == 0 and protocol.expected_frames == 0:
+        return raw_slots // 2, 2
+    return min(expected, raw_slots), 1
+
+
+def _scale_channel_to_uint8(image: np.ndarray, limits: tuple[float, float]) -> np.ndarray:
+    lo, hi = float(limits[0]), float(limits[1])
+    if hi <= lo:
+        return np.zeros(image.shape, dtype=np.uint8)
+    return np.clip((np.asarray(image, dtype=np.float32) - lo) / (hi - lo) * 255.0, 0, 255).astype(np.uint8)
+
+
+def pseudocolor_bgr(
+    ch1: np.ndarray,
+    ch2: np.ndarray | None = None,
+    ch1_limits: tuple[float, float] | None = None,
+    ch2_limits: tuple[float, float] | None = None,
+) -> np.ndarray:
+    ch1_arr = np.asarray(ch1, dtype=np.float32)
+    if ch1_limits is None:
+        ch1_limits = (float(np.nanmin(ch1_arr)), float(np.nanmax(ch1_arr)))
+    green = _scale_channel_to_uint8(ch1_arr, ch1_limits)
+    if ch2 is None:
+        red = np.zeros_like(green)
+    else:
+        ch2_arr = np.asarray(ch2, dtype=np.float32)
+        if ch2_limits is None:
+            ch2_limits = (float(np.nanmin(ch2_arr)), float(np.nanmax(ch2_arr)))
+        red = _scale_channel_to_uint8(ch2_arr, ch2_limits)
+    bgr = np.zeros(ch1_arr.shape + (3,), dtype=np.uint8)
+    bgr[:, :, 1] = green
+    bgr[:, :, 2] = red
+    return bgr
+
+
+def _sample_channel_limits(tdms_path: Path, protocol: TwoPhotonProtocol, frame_count: int, channel_count: int) -> tuple[tuple[float, float], tuple[float, float]]:
+    ch1_samples: list[np.ndarray] = []
+    ch2_samples: list[np.ndarray] = []
+    if frame_count <= 0:
+        return (0.0, 1.0), (0.0, 1.0)
+    frame_step = max(1, frame_count // 200)
+    pixel_step = max(1, (protocol.width * protocol.height) // 5000)
+    slots = iter_tdms_image_slots(tdms_path, protocol.width, protocol.height)
+    for frame_idx in range(frame_count):
+        try:
+            ch1_raw = next(slots)
+            ch2_raw = next(slots) if channel_count == 2 else None
+        except StopIteration:
+            break
+        if frame_idx % frame_step != 0:
+            continue
+        ch1_samples.append((ch1_raw.astype(np.float32).reshape(-1)[::pixel_step] + 32768.0))
+        if ch2_raw is not None:
+            ch2_samples.append((ch2_raw.astype(np.float32).reshape(-1)[::pixel_step] + 32768.0))
+
+    def limits(samples: list[np.ndarray]) -> tuple[float, float]:
+        if not samples:
+            return (0.0, 1.0)
+        arr = np.concatenate(samples)
+        lo, hi = np.percentile(arr[np.isfinite(arr)], [1, 99]) if np.any(np.isfinite(arr)) else (0.0, 1.0)
+        if hi <= lo:
+            lo, hi = float(np.nanmin(arr)), float(np.nanmax(arr))
+        if hi <= lo:
+            hi = lo + 1.0
+        return float(lo), float(hi)
+
+    return limits(ch1_samples), limits(ch2_samples)
+
+
+def convert_two_photon_folder_to_movie(
+    folder: str | Path,
+    output_dir: str | Path,
+    progress=None,
+) -> ConvertedTwoPhotonMovie:
+    folder = Path(folder)
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    protocol = read_two_photon_protocol(folder)
+    tdms_path = _two_photon_tdms_path(folder)
+    raw_slots = tdms_image_slot_count(tdms_path, protocol.width, protocol.height)
+    frame_count, channel_count = _channel_frame_count(protocol, raw_slots)
+    if frame_count <= 0:
+        raise ValueError(f"No complete image frames found in {tdms_path}")
+
+    ch1_limits, ch2_limits = _sample_channel_limits(tdms_path, protocol, frame_count, channel_count)
+    movie_path = output_dir / "converted_movie.npy"
+    movie = np.lib.format.open_memmap(
+        movie_path,
+        mode="w+",
+        dtype=np.float32,
+        shape=(frame_count, protocol.height, protocol.width),
+    )
+    color_avi_path = output_dir / "converted_pseudocolor.avi"
+    writer = cv2.VideoWriter(
+        str(color_avi_path),
+        cv2.VideoWriter_fourcc(*"MJPG"),
+        float(protocol.frame_rate),
+        (protocol.width, protocol.height),
+        isColor=True,
+    )
+    if not writer.isOpened():
+        raise IOError(f"Cannot create AVI video: {color_avi_path}")
+    slots = iter_tdms_image_slots(tdms_path, protocol.width, protocol.height)
+    try:
+        for frame_idx in range(frame_count):
+            ch1 = next(slots).astype(np.float32) + 32768.0
+            ch2 = next(slots).astype(np.float32) + 32768.0 if channel_count == 2 else None
+            movie[frame_idx] = np.maximum(ch1, ch2) if ch2 is not None else ch1
+            writer.write(pseudocolor_bgr(ch1, ch2, ch1_limits, ch2_limits))
+            if progress is not None:
+                progress(frame_idx + 1, frame_count)
+    finally:
+        writer.release()
+        movie.flush()
+
+    return ConvertedTwoPhotonMovie(
+        movie=movie,
+        fs=float(protocol.frame_rate),
+        color_avi_path=color_avi_path,
+        source_folder=folder,
+        protocol=protocol,
+        frames=frame_count,
+        channel_count=channel_count,
+    )
+
+
+def read_video_frame_rgb(path: str | Path, frame_index: int) -> np.ndarray | None:
+    cap = cv2.VideoCapture(str(path))
+    if not cap.isOpened():
+        return None
+    try:
+        cap.set(cv2.CAP_PROP_POS_FRAMES, max(0, int(frame_index)))
+        ok, frame = cap.read()
+        if not ok:
+            return None
+        return cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+    finally:
+        cap.release()
 
 
 def read_stimulus_file(path: str) -> np.ndarray:

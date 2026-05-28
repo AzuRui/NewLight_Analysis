@@ -340,6 +340,41 @@ Implementation notes:
 - `analysis_core.baseline_from_seconds(...)` remains only as a compatibility wrapper.
 - Regression coverage lives in `tests\test_baseline.py`.
 
+## Two-Photon Folder Import / Conversion
+
+The Data tab uses `Open Source` instead of a file-only movie opener.
+
+Supported source choices:
+
+- movie file: existing TIFF/AVI/MP4/MOV/MKV loading behavior
+- two-photon data folder: folder containing `protocol*.txt` and a `.tdms` imaging file
+- direct `.tdms` file: treated as its parent folder
+
+Folder conversion behavior:
+
+- Protocol values are read from `protocol*.txt` using `analysis_core.read_two_photon_protocol(...)`.
+- TDMS image segments are streamed directly by `analysis_core.iter_tdms_image_slots(...)`; no `nptdms` dependency is required.
+- Each TDMS image slot is restored as a `height x width` `int16` frame.
+- The analysis movie stores `float32(frame + 32768)`, matching the LabVIEW thumbnail/TIFF offset convention and keeping dF/F baseline values positive.
+- If protocol channels and TDMS slot count indicate Ch1/Ch2 frame interleaving, adjacent slots are read as Ch1 and Ch2 for each time point.
+- Ch1 is mapped to green and Ch2 to red in `converted_pseudocolor.avi`.
+- If the folder only contains Ch1, the red channel remains blank.
+- A temporary `converted_movie.npy` memmap is used as the analysis movie to avoid holding an extra RGB movie in RAM.
+- Temporary conversion files live under the session temp directory and are removed on app close.
+
+GUI/runtime notes:
+
+- Current-frame display uses the temporary pseudocolor AVI for converted folders, while projections and analysis remain grayscale.
+- Any movie-altering preprocessing or motion correction clears the temporary pseudocolor source, because it no longer matches the modified analysis movie.
+- `Save Current Movie` now enforces AVI output. For an unmodified converted-folder movie, it copies the temporary pseudocolor AVI to the user-selected `result.avi`.
+- Regression coverage lives in `tests\test_two_photon_converter.py`.
+
+Sample validation:
+
+- `E:\WorkSpace\Image format converter Folder （new）\20260424_A04` is recognized as a two-photon folder.
+- Its protocol reports 600x600, 40 Hz, 60 s, 2400 expected frames, and Ch1 only.
+- Its TDMS contains 2400 image slots, matching the protocol. Ch2 thumbnail is blank in this sample because Ch2 PMT voltage is 0.
+
 ## Workspace Cleanup State
 
 A conservative cleanup was performed on 2026-05-21. No files were permanently deleted. Generated/cache/runtime folders were moved out of the workspace to:

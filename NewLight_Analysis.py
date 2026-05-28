@@ -346,6 +346,29 @@ class ParameterDialog(tk.Toplevel):
         self.destroy()
 
 
+class SourcePickerDialog(tk.Toplevel):
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.title("Open Source")
+        self.configure(bg=THEME["bg"])
+        self.resizable(False, False)
+        self.choice = None
+        body = ttk.Frame(self, padding=14)
+        body.grid(row=0, column=0, sticky="nsew")
+        ttk.Label(body, text="Choose a movie file or a two-photon data folder.").grid(row=0, column=0, columnspan=3, sticky="w", pady=(0, 12))
+        ttk.Button(body, text="File", command=lambda: self._choose("file")).grid(row=1, column=0, sticky="ew", padx=(0, 8))
+        ttk.Button(body, text="Folder", command=lambda: self._choose("folder")).grid(row=1, column=1, sticky="ew", padx=(0, 8))
+        ttk.Button(body, text="Cancel", command=self.destroy).grid(row=1, column=2, sticky="ew")
+        self.transient(parent)
+        self.grab_set()
+        self.bind("<Escape>", lambda _event: self.destroy())
+        self.wait_window(self)
+
+    def _choose(self, choice):
+        self.choice = choice
+        self.destroy()
+
+
 class TextDisplayDialog(tk.Toplevel):
     def __init__(self, parent, title, text, width=92, height=34):
         super().__init__(parent)
@@ -1504,6 +1527,7 @@ class NewLightApp:
         self.deepcad_last_error = ""
         self.deepcad_request_token = 0
         self.display_source = ("projection", "mean")
+        self._converted_frame_cache = (None, None, None)
         self._view_limits = None
         self._view_is_fit = True
         self._view_lock = False
@@ -1542,7 +1566,7 @@ class NewLightApp:
 
         file_box = ttk.LabelFrame(flow_tab, text="Data", padding=8)
         file_box.grid(row=0, column=0, sticky="ew", pady=6)
-        ttk.Button(file_box, text="Open Movie", command=self.open_movie).grid(row=0, column=0, sticky="ew", pady=2)
+        ttk.Button(file_box, text="Open Source", command=self.open_movie).grid(row=0, column=0, sticky="ew", pady=2)
         ttk.Button(file_box, text="Open Stimulus", command=self.open_stimulus).grid(row=1, column=0, sticky="ew", pady=2)
         ttk.Button(file_box, text="Save Current Movie", command=self.save_current_movie).grid(row=2, column=0, sticky="ew", pady=2)
 
@@ -1814,6 +1838,7 @@ class NewLightApp:
         if self._session_temp_cleaned:
             return
         self._session_temp_cleaned = True
+        self.release_movie_resources()
         try:
             shutil.rmtree(self.session_temp_dir, ignore_errors=True)
         except Exception:
@@ -1827,6 +1852,21 @@ class NewLightApp:
         path = self.session_temp_dir / name
         path.mkdir(parents=True, exist_ok=True)
         return path
+
+    def release_movie_resources(self):
+        movie = getattr(self.state, "movie", None)
+        mmap_obj = getattr(movie, "_mmap", None)
+        if mmap_obj is not None:
+            try:
+                mmap_obj.close()
+            except Exception:
+                pass
+        self._converted_frame_cache = (None, None, None)
+
+    def clear_converted_color_source(self):
+        self.state.converted_color_avi_path = ""
+        self.state.converted_source_folder = ""
+        self._converted_frame_cache = (None, None, None)
 
     def acceleration(self):
         return self.acceleration_var.get()
@@ -1939,10 +1979,16 @@ class NewLightApp:
 
     def display_image_for_render(self):
         img = self.state.display_image if self.state.display_image is not None else self.state.baseline_image
-        if img is None or not self.deepcad_enabled_var.get() or not self.deepcad_cache_is_current():
+        if img is None:
             return img
-        weight = self.deepcad_weight()
         source = getattr(self, "display_source", ("custom", None))
+        if not self.deepcad_enabled_var.get():
+            color = self.converted_color_frame(source)
+            return color if color is not None else img
+        if not self.deepcad_cache_is_current():
+            color = self.converted_color_frame(source)
+            return color if color is not None else img
+        weight = self.deepcad_weight()
         if source[0] == "frame":
             frame = min(max(0, int(source[1])), self.deepcad_denoised_movie.shape[0] - 1)
             return core.blend_images(img, self.deepcad_denoised_movie[frame], weight)
@@ -1956,6 +2002,19 @@ class NewLightApp:
                 )
             return core.blend_images(img, self.deepcad_projection_cache[mode], weight)
         return img
+
+    def converted_color_frame(self, source):
+        if source[0] != "frame" or not self.state.converted_color_avi_path:
+            return None
+        path = self.state.converted_color_avi_path
+        frame = int(source[1])
+        cached_path, cached_frame, cached_image = self._converted_frame_cache
+        if cached_path == path and cached_frame == frame:
+            return cached_image
+        image = core.read_video_frame_rgb(path, frame)
+        if image is not None:
+            self._converted_frame_cache = (path, frame, image)
+        return image
 
     def check_cuda_status_quick(self):
         self.log(f"Acceleration backend: {core.acceleration_label(self.acceleration())}")
@@ -2027,6 +2086,7 @@ class NewLightApp:
             return
         label, movie = self.state.history.pop()
         self.state.movie = movie
+        self.clear_converted_color_source()
         self.clear_deepcad_cache()
         self.recompute_baseline_image()
         self.update_frame_controls()
@@ -2034,12 +2094,28 @@ class NewLightApp:
         self.log(f"Undone: {label}")
 
     def open_movie(self):
-        path = filedialog.askopenfilename(filetypes=[("Movies", "*.tif *.tiff *.avi *.mp4 *.mov *.mkv"), ("All files", "*.*")])
+        selection = SourcePickerDialog(self.root).choice
+        if not selection:
+            return
+        if selection == "folder":
+            path = filedialog.askdirectory(title="Select two-photon data folder")
+        else:
+            path = filedialog.askopenfilename(
+                title="Select movie file",
+                filetypes=[("Movies", "*.tif *.tiff *.avi *.mp4 *.mov *.mkv *.tdms"), ("All files", "*.*")],
+            )
         if not path:
             return
+        path_obj = Path(path)
+        if path_obj.is_dir() or path_obj.suffix.lower() == ".tdms":
+            folder = path_obj if path_obj.is_dir() else path_obj.parent
+            self.open_two_photon_folder(folder)
+            return
         try:
+            self.release_movie_resources()
             movie, fs = core.load_movie(path)
             self.state = core.AnalysisState(movie=movie, fs=fs, source_path=path)
+            self._converted_frame_cache = (None, None, None)
             self.clear_deepcad_cache()
             self.fs_var.set(f"{fs:.6g}")
             self.apply_protocol(update_baseline=False)
@@ -2049,6 +2125,42 @@ class NewLightApp:
             self.log(f"Loaded {Path(path).name}: {movie.shape}, fs={fs:.3g}")
         except Exception as exc:
             messagebox.showerror("Open failed", str(exc))
+
+    def open_two_photon_folder(self, folder):
+        folder = Path(folder)
+        if not core.is_two_photon_folder(folder):
+            messagebox.showerror("Open folder failed", f"Not a recognized two-photon data folder:\n{folder}")
+            return
+        out_dir = self.temp_work_dir("TwoPhotonConverter") / f"{folder.name}_{int(time.time())}_{random.randint(1000, 9999)}"
+        self.log(f"Converting two-photon folder: {folder}")
+
+        def target():
+            return core.convert_two_photon_folder_to_movie(folder, out_dir)
+
+        self.run_worker("Two-photon folder conversion", target, self._finish_two_photon_folder)
+
+    def _finish_two_photon_folder(self, result):
+        self.release_movie_resources()
+        self.state = core.AnalysisState(
+            movie=result.movie,
+            fs=result.fs,
+            source_path=str(result.source_folder),
+            converted_color_avi_path=str(result.color_avi_path),
+            converted_source_folder=str(result.source_folder),
+        )
+        self._converted_frame_cache = (None, None, None)
+        self.clear_deepcad_cache()
+        self.fs_var.set(f"{result.fs:.6g}")
+        self.apply_protocol(update_baseline=False)
+        self.recompute_baseline_image()
+        self.update_frame_controls()
+        self.show_frame(0)
+        channels = ", ".join(result.protocol.channels)
+        self.log(
+            f"Converted {result.source_folder.name}: {result.frames} frames, "
+            f"{result.protocol.width}x{result.protocol.height}, {result.fs:.3g} Hz, channels={channels}. "
+            f"Temporary pseudocolor AVI: {result.color_avi_path}"
+        )
 
     def open_stimulus(self):
         path = filedialog.askopenfilename(filetypes=[("Stimulus", "*.txt *.csv *.dat"), ("All files", "*.*")])
@@ -2569,28 +2681,25 @@ class NewLightApp:
     def current_movie_result_defaults(self):
         if self.state.source_path:
             src = Path(self.state.source_path)
-            ext = src.suffix.lower()
-            if ext in {".avi", ".tif", ".tiff"}:
-                return src.parent, f"result{ext}", ext
-            return src.parent, "result.tif", ".tif"
-        return APP_DIR, "result.tif", ".tif"
+            initial_dir = src if src.is_dir() else src.parent
+            return initial_dir, "result.avi", ".avi"
+        return APP_DIR, "result.avi", ".avi"
 
     def ask_current_movie_save_path(self):
         initial_dir, initial_file, ext = self.current_movie_result_defaults()
-        tif_types = ("TIFF stack", "*.tif *.tiff")
         avi_types = ("AVI video", "*.avi")
-        filetypes = [avi_types, tif_types, ("All files", "*.*")]
-        if ext in {".tif", ".tiff"}:
-            filetypes = [tif_types, avi_types, ("All files", "*.*")]
         path = filedialog.asksaveasfilename(
             title="Save current movie",
             initialdir=str(initial_dir),
             initialfile=initial_file,
             defaultextension=ext,
-            filetypes=filetypes,
+            filetypes=[avi_types, ("All files", "*.*")],
             confirmoverwrite=True,
         )
-        return Path(path) if path else None
+        if not path:
+            return None
+        path = Path(path)
+        return path if path.suffix.lower() == ".avi" else path.with_suffix(".avi")
 
     def save_movie_to_path(self, movie, path):
         core.save_movie(movie, str(path), fs=self.state.fs)
@@ -2603,6 +2712,10 @@ class NewLightApp:
             return
         path.parent.mkdir(parents=True, exist_ok=True)
         if not self.deepcad_enabled_var.get():
+            if self.state.converted_color_avi_path and Path(self.state.converted_color_avi_path).exists():
+                shutil.copy2(self.state.converted_color_avi_path, path)
+                self.log(f"Saved pseudocolor AVI: {path}")
+                return
             self.save_movie_to_path(self.state.movie, path)
             self.log(f"Saved movie: {path}")
             return
@@ -2655,6 +2768,7 @@ class NewLightApp:
             self.apply_protocol(update_baseline=False)
             self.push_history(label)
             self.state.movie = func(self.state.movie)
+            self.clear_converted_color_source()
             self.clear_deepcad_cache()
             self.recompute_baseline_image()
             self.update_frame_controls()
@@ -3103,6 +3217,7 @@ class NewLightApp:
     def _finish_caiman_motion(self, result):
         movie, log = result
         self.state.movie = movie
+        self.clear_converted_color_source()
         self.clear_deepcad_cache()
         self.recompute_baseline_image()
         self.update_frame_controls()

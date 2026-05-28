@@ -420,3 +420,18 @@
 - Added `tests\test_baseline.py` to lock the two baseline behaviors.
 - Verified `conda run -n caiman_latest python -m unittest tests.test_baseline`.
 - Verified `conda run -n caiman_latest python -m py_compile NewLight_Analysis.py analysis_core.py`.
+
+### Two-Photon Folder Converter
+
+- Changed the Data-tab open action from `Open Movie` to `Open Source`.
+- `Open Source` now lets the user choose either a movie file or a two-photon data folder.
+- Added built-in conversion for folders containing `protocol*.txt` and `*.tdms` files.
+- The converter reads the protocol for frame size, frame rate, recording time, and recorded channels, then streams TDMS `int16` image frames into a temporary analysis movie.
+- TDMS image values are shifted by `+32768` to match the LabVIEW thumbnail/TIFF convention and keep dF/F baselines positive.
+- Ch1 is mapped to green and Ch2 to red in a temporary pseudocolor AVI. If a dataset only contains Ch1, the red channel remains blank.
+- The GUI displays temporary pseudocolor AVI frames for converted folders while preserving a grayscale analysis movie for ROI, dF/F, heatmaps, and exports.
+- `Save Current Movie` now defaults to `result.avi` and enforces AVI output. For an unmodified converted folder movie, it copies the temporary pseudocolor AVI to the chosen save path.
+- Added regression coverage in `tests\test_two_photon_converter.py` for protocol parsing, Ch1-green/Ch2-red mapping, synthetic TDMS restoration, and AVI writing.
+- Verified the real sample folder `E:\WorkSpace\Image format converter Folder （new）\20260424_A04` is recognized as a two-photon folder with 600x600 frames, 40 Hz, 2400 expected frames, Ch1 only, and 2400 TDMS image slots.
+- Verified `conda run -n caiman_latest python -B -m unittest tests.test_baseline tests.test_two_photon_converter`.
+- Verified `conda run -n caiman_latest python -m py_compile NewLight_Analysis.py analysis_core.py`.
