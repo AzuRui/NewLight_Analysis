@@ -40,6 +40,25 @@ THEME = {
     "entry": "#081525",
 }
 
+CHANNEL_COLOR_HEX = {
+    "green": "#22c55e",
+    "red": "#ef4444",
+    "yellow": "#facc15",
+    "blue": "#3b82f6",
+    "purple": "#a855f7",
+    "gray": "#9ca3af",
+}
+CHANNEL_COLOR_LABELS = {
+    "green": "Green",
+    "red": "Red",
+    "yellow": "Yellow",
+    "blue": "Blue",
+    "purple": "Purple",
+    "gray": "Gray",
+}
+CHANNEL_COLOR_ORDER = ("green", "red", "yellow", "blue", "purple", "gray")
+MAX_CHANNELS = 5
+
 APP_DIR = Path(__file__).resolve().parent
 NEUROALIGN_DIR = core.NEUROALIGN_DIR
 NEUROALIGN_ENV = "caiman_latest"
@@ -1529,6 +1548,8 @@ class NewLightApp:
         self.display_source = ("projection", "mean")
         self._converted_frame_cache = (None, None, None)
         self._converted_projection_cache = {}
+        self.channel_color_buttons = []
+        self.channel_palette_popup = None
         self._view_limits = None
         self._view_is_fit = True
         self._view_lock = False
@@ -1568,8 +1589,9 @@ class NewLightApp:
         file_box = ttk.LabelFrame(flow_tab, text="Data", padding=8)
         file_box.grid(row=0, column=0, sticky="ew", pady=6)
         ttk.Button(file_box, text="Open Source", command=self.open_movie).grid(row=0, column=0, sticky="ew", pady=2)
-        ttk.Button(file_box, text="Open Stimulus", command=self.open_stimulus).grid(row=1, column=0, sticky="ew", pady=2)
-        ttk.Button(file_box, text="Save Current Movie", command=self.save_current_movie).grid(row=2, column=0, sticky="ew", pady=2)
+        ttk.Button(file_box, text="Add Channel Data", command=self.add_channel_data).grid(row=1, column=0, sticky="ew", pady=2)
+        ttk.Button(file_box, text="Open Stimulus", command=self.open_stimulus).grid(row=2, column=0, sticky="ew", pady=2)
+        ttk.Button(file_box, text="Save Current Movie", command=self.save_current_movie).grid(row=3, column=0, sticky="ew", pady=2)
 
         view_box = ttk.LabelFrame(flow_tab, text="View", padding=8)
         view_box.grid(row=1, column=0, sticky="ew", pady=6)
@@ -1586,6 +1608,23 @@ class NewLightApp:
         weight_entry.bind("<KeyRelease>", lambda _event: self.on_deepcad_weight_edited())
         weight_entry.bind("<Return>", lambda _event: self.on_deepcad_weight_changed())
         weight_entry.bind("<FocusOut>", lambda _event: self.on_deepcad_weight_changed())
+        ttk.Label(view_box, text="Ch").grid(row=3, column=0, sticky="w", pady=(8, 0))
+        channel_row = ttk.Frame(view_box)
+        channel_row.grid(row=3, column=1, sticky="w", pady=(8, 0))
+        self.channel_color_buttons = []
+        for idx in range(MAX_CHANNELS):
+            btn = tk.Button(
+                channel_row,
+                text=str(idx + 1),
+                width=2,
+                height=1,
+                relief="solid",
+                bd=1,
+                command=lambda i=idx: self.choose_channel_color(i),
+            )
+            btn.grid(row=0, column=idx, padx=2)
+            self.channel_color_buttons.append(btn)
+        self.update_channel_color_buttons()
 
         protocol_box = ttk.LabelFrame(flow_tab, text="Protocol", padding=8)
         protocol_box.grid(row=2, column=0, sticky="ew", pady=6)
@@ -1872,8 +1911,101 @@ class NewLightApp:
         self.state.converted_source_folder = ""
         self.state.converted_channel_avi_paths = ()
         self.state.converted_channel_movies = ()
+        self.state.channel_colors = ()
         self._converted_frame_cache = (None, None, None)
         self._converted_projection_cache = {}
+        self.update_channel_color_buttons()
+
+    def channel_movies(self):
+        return tuple(movie for movie in self.state.converted_channel_movies if movie is not None)
+
+    def channel_colors(self):
+        return core.channel_colors_for_count(self.state.channel_colors, len(self.channel_movies()))
+
+    def channel_pseudocolor_enabled(self):
+        return bool(self.channel_movies()) and core.has_pseudocolor(self.channel_colors())
+
+    def clear_channel_render_cache(self):
+        self._converted_frame_cache = (None, None, None)
+        self._converted_projection_cache = {}
+
+    def update_channel_color_buttons(self):
+        if not getattr(self, "channel_color_buttons", None):
+            return
+        colors = self.channel_colors()
+        count = len(self.channel_movies())
+        for idx, button in enumerate(self.channel_color_buttons):
+            if idx < count:
+                color_name = colors[idx]
+                bg = CHANNEL_COLOR_HEX.get(color_name, CHANNEL_COLOR_HEX["gray"])
+                fg = "#020617" if color_name in {"yellow", "gray"} else "#ffffff"
+                button.configure(
+                    bg=bg,
+                    activebackground=bg,
+                    fg=fg,
+                    activeforeground=fg,
+                    state="normal",
+                    text=str(idx + 1),
+                )
+            else:
+                button.configure(
+                    bg="#000000",
+                    activebackground="#000000",
+                    fg="#64748b",
+                    activeforeground="#64748b",
+                    state="normal",
+                    text=str(idx + 1),
+                )
+
+    def choose_channel_color(self, channel_index):
+        if channel_index >= len(self.channel_movies()):
+            return
+        if self.channel_palette_popup is not None and self.channel_palette_popup.winfo_exists():
+            self.channel_palette_popup.destroy()
+        popup = tk.Toplevel(self.root)
+        self.channel_palette_popup = popup
+        popup.title(f"Ch{channel_index + 1} color")
+        popup.configure(bg=THEME["panel"])
+        popup.resizable(False, False)
+        for idx, color_name in enumerate(CHANNEL_COLOR_ORDER):
+            bg = CHANNEL_COLOR_HEX[color_name]
+            fg = "#020617" if color_name in {"yellow", "gray"} else "#ffffff"
+            btn = tk.Button(
+                popup,
+                text="",
+                width=4,
+                height=2,
+                bg=bg,
+                activebackground=bg,
+                fg=fg,
+                activeforeground=fg,
+                relief="solid",
+                bd=1,
+                command=lambda name=color_name: self.set_channel_color(channel_index, name),
+            )
+            btn.grid(row=idx // 3, column=idx % 3, padx=4, pady=4)
+        try:
+            x = self.root.winfo_pointerx()
+            y = self.root.winfo_pointery()
+            popup.geometry(f"+{x}+{y}")
+        except Exception:
+            pass
+        popup.transient(self.root)
+        popup.bind("<Escape>", lambda _event: popup.destroy())
+
+    def set_channel_color(self, channel_index, color_name):
+        movies = self.channel_movies()
+        if channel_index >= len(movies):
+            return
+        colors = list(self.channel_colors())
+        colors[channel_index] = core.normalized_channel_color(color_name)
+        self.state.channel_colors = tuple(colors)
+        self.clear_channel_render_cache()
+        self.update_channel_color_buttons()
+        if self.channel_palette_popup is not None and self.channel_palette_popup.winfo_exists():
+            self.channel_palette_popup.destroy()
+        self.redraw(preserve_view=True)
+        self.log(f"Ch{channel_index + 1} color: {CHANNEL_COLOR_LABELS[colors[channel_index]]}")
 
     def acceleration(self):
         return self.acceleration_var.get()
@@ -1988,12 +2120,13 @@ class NewLightApp:
         if img is None:
             return img
         source = getattr(self, "display_source", ("custom", None))
+        color = self.converted_color_image(source) if self.channel_pseudocolor_enabled() else None
+        if color is not None:
+            return color
         if not self.deepcad_enabled_var.get():
-            color = self.converted_color_image(source)
-            return color if color is not None else img
+            return img
         if not self.deepcad_cache_is_current():
-            color = self.converted_color_image(source)
-            return color if color is not None else img
+            return img
         weight = self.deepcad_weight()
         if source[0] == "frame":
             frame = min(max(0, int(source[1])), self.deepcad_denoised_movie.shape[0] - 1)
@@ -2012,30 +2145,27 @@ class NewLightApp:
     def converted_color_image(self, source):
         if not source:
             return None
-        channel_movies = tuple(movie for movie in self.state.converted_channel_movies if movie is not None)
+        channel_movies = self.channel_movies()
         if channel_movies:
+            colors = self.channel_colors()
             if source[0] == "frame":
                 frame = min(max(0, int(source[1])), channel_movies[0].shape[0] - 1)
                 cached_path, cached_frame, cached_image = self._converted_frame_cache
-                cache_key = ("channels", tuple(id(movie) for movie in channel_movies))
+                cache_key = ("channels", tuple(id(movie) for movie in channel_movies), colors)
                 if cached_path == cache_key and cached_frame == frame:
                     return cached_image
-                ch1 = channel_movies[0][frame]
-                ch2 = channel_movies[1][frame] if len(channel_movies) > 1 else None
-                image = core.pseudocolor_rgb(ch1, ch2)
+                image = core.compose_channel_pseudocolor_rgb([movie[frame] for movie in channel_movies], colors)
                 self._converted_frame_cache = (cache_key, frame, image)
                 return image
             if source[0] == "projection":
                 mode = source[1]
-                cache_key = (tuple(id(movie) for movie in channel_movies), mode, self.acceleration())
+                cache_key = (tuple(id(movie) for movie in channel_movies), colors, mode, self.acceleration())
                 if cache_key not in self._converted_projection_cache:
-                    ch1 = core.compute_projection(channel_movies[0], mode, acceleration=self.acceleration())
-                    ch2 = (
-                        core.compute_projection(channel_movies[1], mode, acceleration=self.acceleration())
-                        if len(channel_movies) > 1
-                        else None
+                    projections = tuple(
+                        core.compute_projection(movie, mode, acceleration=self.acceleration())
+                        for movie in channel_movies
                     )
-                    self._converted_projection_cache[cache_key] = core.pseudocolor_rgb(ch1, ch2)
+                    self._converted_projection_cache[cache_key] = core.compose_channel_pseudocolor_rgb(projections, colors)
                 return self._converted_projection_cache[cache_key]
             return None
         if source[0] != "frame" or not self.state.converted_color_avi_path:
@@ -2077,7 +2207,7 @@ class NewLightApp:
     def push_history(self, label):
         if self.state.movie is not None:
             channel_snapshot = tuple(np.asarray(movie).copy() for movie in self.state.converted_channel_movies)
-            self.state.history.append((label, self.state.movie.copy(), channel_snapshot))
+            self.state.history.append((label, self.state.movie.copy(), channel_snapshot, tuple(self.state.channel_colors)))
             if len(self.state.history) > 12:
                 self.state.history.pop(0)
 
@@ -2124,13 +2254,66 @@ class NewLightApp:
         self.state.movie = movie
         if len(entry) > 2:
             self.state.converted_channel_movies = tuple(entry[2])
+        if len(entry) > 3:
+            self.state.channel_colors = tuple(entry[3])
         self._converted_frame_cache = (None, None, None)
         self._converted_projection_cache = {}
         self.clear_deepcad_cache()
         self.recompute_baseline_image()
         self.update_frame_controls()
+        self.update_channel_color_buttons()
         self.refresh_projection()
         self.log(f"Undone: {label}")
+
+    def reset_loaded_movie_view(self, fs, preserve_view=False):
+        self.clear_channel_render_cache()
+        self.clear_deepcad_cache()
+        self.fs_var.set(f"{float(fs):.6g}")
+        self.apply_protocol(update_baseline=False)
+        self.recompute_baseline_image()
+        self.update_frame_controls()
+        self.update_channel_color_buttons()
+        self.refresh_projection(preserve_view=preserve_view)
+
+    def append_channel_movies(self, new_movies, fs, source_label):
+        new_movies = tuple(np.asarray(movie, dtype=np.float32) for movie in new_movies if movie is not None)
+        if not new_movies:
+            raise ValueError("No channel movie was loaded.")
+        existing_channels = self.channel_movies()
+        existing_colors = list(self.channel_colors())
+        if not existing_channels and self.state.movie is not None:
+            existing_channels = (np.asarray(self.state.movie, dtype=np.float32),)
+            existing_colors = ["gray"]
+        if len(existing_channels) + len(new_movies) > MAX_CHANNELS:
+            raise ValueError(f"Only {MAX_CHANNELS} channels are supported.")
+        if existing_channels:
+            expected_shape = existing_channels[0].shape
+            for movie in new_movies:
+                if movie.shape != expected_shape:
+                    raise ValueError(f"Channel shape mismatch: expected {expected_shape}, got {movie.shape}")
+            combined = existing_channels + new_movies
+            self.state.converted_channel_movies = combined
+            self.state.channel_colors = tuple(existing_colors + ["gray"] * len(new_movies))
+            self.state.movie = core.two_photon_analysis_movie(combined)
+            self.state.converted_color_avi_path = ""
+            self.state.converted_channel_avi_paths = ()
+            self.state.converted_source_folder = source_label
+            if abs(float(fs) - float(self.state.fs)) > 1e-6:
+                self.log(f"Added channel data at {float(fs):.3g} Hz; current Movie Hz remains {self.state.fs:.3g}.")
+            self.reset_loaded_movie_view(self.state.fs, preserve_view=False)
+            self.log(f"Added {len(new_movies)} channel(s) from {source_label}. Total channels={len(combined)}.")
+            return
+        self.release_movie_resources()
+        self.state = core.AnalysisState(
+            movie=core.two_photon_analysis_movie(new_movies),
+            converted_channel_movies=new_movies,
+            channel_colors=tuple("gray" for _ in new_movies),
+            fs=float(fs),
+            source_path=source_label,
+            converted_source_folder=source_label,
+        )
+        self.reset_loaded_movie_view(fs, preserve_view=False)
+        self.log(f"Loaded {len(new_movies)} channel(s) from {source_label}: {self.state.movie.shape}, fs={float(fs):.3g}")
 
     def open_movie(self):
         selection = SourcePickerDialog(self.root).choice
@@ -2153,56 +2336,81 @@ class NewLightApp:
         try:
             self.release_movie_resources()
             movie, fs = core.load_movie(path)
-            self.state = core.AnalysisState(movie=movie, fs=fs, source_path=path)
-            self._converted_frame_cache = (None, None, None)
-            self.clear_deepcad_cache()
-            self.fs_var.set(f"{fs:.6g}")
-            self.apply_protocol(update_baseline=False)
-            self.recompute_baseline_image()
-            self.refresh_projection(preserve_view=False)
-            self.update_frame_controls()
+            self.state = core.AnalysisState(
+                movie=movie,
+                converted_channel_movies=(movie,),
+                channel_colors=("gray",),
+                fs=fs,
+                source_path=path,
+            )
+            self.reset_loaded_movie_view(fs, preserve_view=False)
             self.log(f"Loaded {Path(path).name}: {movie.shape}, fs={fs:.3g}")
         except Exception as exc:
             messagebox.showerror("Open failed", str(exc))
 
-    def open_two_photon_folder(self, folder):
+    def add_channel_data(self):
+        selection = SourcePickerDialog(self.root).choice
+        if not selection:
+            return
+        if selection == "folder":
+            path = filedialog.askdirectory(title="Select channel data folder")
+        else:
+            path = filedialog.askopenfilename(
+                title="Select channel movie file",
+                filetypes=[("Movies", "*.tif *.tiff *.avi *.mp4 *.mov *.mkv *.tdms"), ("All files", "*.*")],
+            )
+        if not path:
+            return
+        path_obj = Path(path)
+        if path_obj.is_dir() or path_obj.suffix.lower() == ".tdms":
+            folder = path_obj if path_obj.is_dir() else path_obj.parent
+            self.open_two_photon_folder(folder, append=True)
+            return
+        try:
+            movie, fs = core.load_movie(path)
+            self.append_channel_movies((movie,), fs, str(path_obj))
+        except Exception as exc:
+            messagebox.showerror("Add channel failed", str(exc))
+
+    def open_two_photon_folder(self, folder, append=False):
         folder = Path(folder)
         if not core.is_two_photon_folder(folder):
             messagebox.showerror("Open folder failed", f"Not a recognized two-photon data folder:\n{folder}")
             return
         out_dir = self.temp_work_dir("TwoPhotonConverter") / f"{folder.name}_{int(time.time())}_{random.randint(1000, 9999)}"
-        self.log(f"Converting two-photon folder: {folder}")
+        action = "Adding channel data from" if append else "Converting two-photon folder"
+        self.log(f"{action}: {folder}")
 
         def target():
             return core.convert_two_photon_folder_to_movie(folder, out_dir)
 
-        self.run_worker("Two-photon folder conversion", target, self._finish_two_photon_folder)
+        self.run_worker("Two-photon folder conversion", target, lambda result: self._finish_two_photon_folder(result, append=append))
 
-    def _finish_two_photon_folder(self, result):
+    def _finish_two_photon_folder(self, result, append=False):
+        if append:
+            try:
+                self.append_channel_movies(result.channel_movies, result.fs, str(result.source_folder))
+            except Exception as exc:
+                messagebox.showerror("Add channel failed", str(exc))
+            return
         self.release_movie_resources()
         self.state = core.AnalysisState(
             movie=result.movie,
             converted_channel_movies=result.channel_movies,
+            channel_colors=tuple("gray" for _ in result.channel_movies),
             fs=result.fs,
             source_path=str(result.source_folder),
-            converted_color_avi_path=str(result.color_avi_path),
+            converted_color_avi_path=str(result.color_avi_path) if result.color_avi_path else "",
             converted_channel_avi_paths=tuple(str(path) for path in result.channel_avi_paths),
             converted_source_folder=str(result.source_folder),
         )
-        self._converted_frame_cache = (None, None, None)
-        self._converted_projection_cache = {}
-        self.clear_deepcad_cache()
-        self.fs_var.set(f"{result.fs:.6g}")
-        self.apply_protocol(update_baseline=False)
-        self.recompute_baseline_image()
-        self.update_frame_controls()
+        self.reset_loaded_movie_view(result.fs, preserve_view=False)
         self.show_frame(0)
         channels = ", ".join(result.protocol.channels)
         self.log(
             f"Converted {result.source_folder.name}: {result.frames} frames, "
             f"{result.protocol.width}x{result.protocol.height}, {result.fs:.3g} Hz, channels={channels}. "
-            f"Temporary channel AVIs: {', '.join(str(path) for path in result.channel_avi_paths)}. "
-            f"Temporary pseudocolor preview AVI: {result.color_avi_path}"
+            "Default display/save is grayscale; use the View channel color buttons for pseudocolor."
         )
 
     def open_stimulus(self):
@@ -2777,13 +2985,11 @@ class NewLightApp:
         if path is None:
             return
         path.parent.mkdir(parents=True, exist_ok=True)
-        if self.save_converted_channels_to_path(path):
+        if self.channel_pseudocolor_enabled():
+            core.save_channel_pseudocolor_avi(self.channel_movies(), self.channel_colors(), str(path), fs=self.state.fs)
+            self.log(f"Saved pseudocolor movie: {path}")
             return
         if not self.deepcad_enabled_var.get():
-            if self.state.converted_color_avi_path and Path(self.state.converted_color_avi_path).exists():
-                shutil.copy2(self.state.converted_color_avi_path, path)
-                self.log(f"Saved pseudocolor AVI: {path}")
-                return
             self.save_movie_to_path(self.state.movie, path)
             self.log(f"Saved movie: {path}")
             return
@@ -2846,6 +3052,7 @@ class NewLightApp:
             self.clear_deepcad_cache()
             self.recompute_baseline_image()
             self.update_frame_controls()
+            self.update_channel_color_buttons()
             self.refresh_projection(preserve_view=False)
             self.log(f"Applied: {label}")
         except Exception as exc:
@@ -3292,6 +3499,9 @@ class NewLightApp:
         movie, log = result
         self.state.movie = movie
         self.clear_converted_color_source()
+        self.state.converted_channel_movies = (movie,)
+        self.state.channel_colors = ("gray",)
+        self.update_channel_color_buttons()
         self.clear_deepcad_cache()
         self.recompute_baseline_image()
         self.update_frame_controls()

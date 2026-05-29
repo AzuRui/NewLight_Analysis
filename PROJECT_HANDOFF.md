@@ -361,18 +361,19 @@ Folder conversion behavior:
 - Each TDMS image slot is restored as a `height x width` `int16` frame.
 - The analysis movie stores `float32(frame + 32768)`, matching the LabVIEW thumbnail/TIFF offset convention and keeping dF/F baseline values positive.
 - If protocol channels and TDMS slot count indicate Ch1/Ch2 frame interleaving, adjacent slots are read as Ch1 and Ch2 for each time point.
-- Ch1 is mapped to green and Ch2 to red in `converted_pseudocolor.avi`.
-- If the folder only contains Ch1, the red channel remains blank.
-- A temporary `converted_movie.npy` memmap is used as the analysis movie to avoid holding an extra RGB movie in RAM.
+- Ch1-Ch5 are stored as grayscale channel movies; all channels default to gray in the UI.
+- No default `converted_pseudocolor.avi` is generated. Pseudocolor is composed only for the current display frame/projection or while saving.
+- A temporary `converted_movie.npy` memmap is used as the grayscale analysis movie to avoid holding an extra RGB movie in RAM.
 - Temporary conversion files live under the session temp directory and are removed on app close.
 
 GUI/runtime notes:
 
-- Current-frame display uses the temporary pseudocolor AVI for converted folders, while projections and analysis remain grayscale.
-- Current-frame and projection display now prefer the stored converted channel movies and rebuild RGB pseudocolor from the current Ch1/Ch2 data. The temporary pseudocolor AVI remains a fallback/preview artifact.
+- The Data tab has `Add Channel Data`. It accepts movie files, two-photon folders, or direct `.tdms` files and appends loaded channels into the next Ch1-Ch5 slots. A two-channel two-photon folder appended after Ch1/Ch2 becomes Ch3/Ch4.
+- The View panel has five square channel color buttons. Loaded channels start gray; unloaded channels are black. Clicking a loaded channel opens six color swatches: green, red, yellow, blue, purple, and gray.
+- Display and `Save Current Movie` remain grayscale while every loaded channel is gray. If any loaded channel is assigned a non-gray color, current-frame display, projection display, and save output are composed on demand from the current channel colors.
 - Movie-altering preprocessing operations are applied to each converted channel movie when present, and the analysis movie is recombined from the processed channels. This preserves red/green display after smoothing, background subtraction, bleach correction, contrast enhancement, built-in rigid motion, and undo.
-- CaImAn motion still operates on the analysis movie only; do not assume converted channel movies are motion-corrected by that backend unless a dedicated channel-aware CaImAn path is added later.
-- `Save Current Movie` now enforces AVI output. For dual-channel converted-folder movies, it writes separate files from the chosen base path, for example `result_ch1.avi` and `result_ch2.avi`, instead of a merged/pseudocolor AVI. For single-channel converted-folder movies, it can still use the pseudocolor/current movie path.
+- CaImAn motion still operates on the analysis movie only; after it finishes, the result is treated as a single gray Ch1 movie unless a dedicated channel-aware CaImAn path is added later.
+- `Save Current Movie` enforces AVI output. With all channel buttons gray it saves the current grayscale analysis movie; with any non-gray channel button it streams a pseudocolor AVI according to the current swatches.
 - Regression coverage lives in `tests\test_two_photon_converter.py`.
 
 Sample validation:

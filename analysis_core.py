@@ -84,6 +84,7 @@ class AnalysisState:
     converted_source_folder: str = ""
     converted_channel_avi_paths: tuple[str, ...] = field(default_factory=tuple)
     converted_channel_movies: tuple[np.ndarray, ...] = field(default_factory=tuple)
+    channel_colors: tuple[str, ...] = field(default_factory=tuple)
     history: list[tuple] = field(default_factory=list)
     last_message: str = ""
 
@@ -105,7 +106,7 @@ class ConvertedTwoPhotonMovie:
     movie: np.ndarray
     channel_movies: tuple[np.ndarray, ...]
     fs: float
-    color_avi_path: Path
+    color_avi_path: Path | None
     channel_avi_paths: tuple[Path, ...]
     source_folder: Path
     protocol: TwoPhotonProtocol
@@ -405,6 +406,65 @@ def _scale_channel_to_uint8(image: np.ndarray, limits: tuple[float, float]) -> n
     return np.clip((np.asarray(image, dtype=np.float32) - lo) / (hi - lo) * 255.0, 0, 255).astype(np.uint8)
 
 
+CHANNEL_COLOR_VECTORS: dict[str, tuple[float, float, float]] = {
+    "green": (0.0, 1.0, 0.0),
+    "red": (1.0, 0.0, 0.0),
+    "yellow": (1.0, 1.0, 0.0),
+    "blue": (0.0, 0.35, 1.0),
+    "purple": (0.75, 0.0, 1.0),
+    "gray": (1.0, 1.0, 1.0),
+}
+
+
+def normalized_channel_color(name: str | None) -> str:
+    key = str(name or "gray").strip().lower()
+    return key if key in CHANNEL_COLOR_VECTORS else "gray"
+
+
+def channel_colors_for_count(colors: tuple[str, ...] | list[str] | None, count: int) -> tuple[str, ...]:
+    values = [normalized_channel_color(color) for color in (colors or ())]
+    if len(values) < count:
+        values.extend(["gray"] * (count - len(values)))
+    return tuple(values[:count])
+
+
+def has_pseudocolor(colors: tuple[str, ...] | list[str] | None) -> bool:
+    return any(normalized_channel_color(color) != "gray" for color in (colors or ()))
+
+
+def compose_channel_pseudocolor_rgb(
+    channel_images: tuple[np.ndarray, ...] | list[np.ndarray],
+    colors: tuple[str, ...] | list[str] | None,
+    limits: tuple[tuple[float, float] | None, ...] | None = None,
+) -> np.ndarray:
+    if not channel_images:
+        raise ValueError("No channel images were provided")
+    images = [np.asarray(image, dtype=np.float32) for image in channel_images]
+    shape = images[0].shape
+    if any(image.shape != shape for image in images):
+        shapes = ", ".join(str(image.shape) for image in images)
+        raise ValueError(f"Channel images must have the same shape, got: {shapes}")
+    color_names = channel_colors_for_count(colors, len(images))
+    if limits is None:
+        limits = tuple(None for _ in images)
+    rgb = np.zeros(shape + (3,), dtype=np.float32)
+    for image, color_name, limit in zip(images, color_names, limits):
+        if limit is None:
+            finite = image[np.isfinite(image)]
+            if finite.size:
+                lo, hi = np.percentile(finite, [1, 99])
+            else:
+                lo, hi = 0.0, 1.0
+            if hi <= lo:
+                lo, hi = float(np.nanmin(image)), float(np.nanmax(image))
+            if hi <= lo:
+                hi = lo + 1.0
+            limit = (float(lo), float(hi))
+        intensity = _scale_channel_to_uint8(image, limit).astype(np.float32) / 255.0
+        rgb += intensity[:, :, None] * np.asarray(CHANNEL_COLOR_VECTORS[normalized_channel_color(color_name)], dtype=np.float32)
+    return np.clip(rgb * 255.0, 0, 255).astype(np.uint8)
+
+
 def pseudocolor_bgr(
     ch1: np.ndarray,
     ch2: np.ndarray | None = None,
@@ -420,21 +480,14 @@ def pseudocolor_rgb(
     ch1_limits: tuple[float, float] | None = None,
     ch2_limits: tuple[float, float] | None = None,
 ) -> np.ndarray:
-    ch1_arr = np.asarray(ch1, dtype=np.float32)
-    if ch1_limits is None:
-        ch1_limits = (float(np.nanmin(ch1_arr)), float(np.nanmax(ch1_arr)))
-    green = _scale_channel_to_uint8(ch1_arr, ch1_limits)
-    if ch2 is None:
-        red = np.zeros_like(green)
-    else:
-        ch2_arr = np.asarray(ch2, dtype=np.float32)
-        if ch2_limits is None:
-            ch2_limits = (float(np.nanmin(ch2_arr)), float(np.nanmax(ch2_arr)))
-        red = _scale_channel_to_uint8(ch2_arr, ch2_limits)
-    rgb = np.zeros(ch1_arr.shape + (3,), dtype=np.uint8)
-    rgb[:, :, 0] = red
-    rgb[:, :, 1] = green
-    return rgb
+    channels = [ch1]
+    colors = ["green"]
+    limits: list[tuple[float, float] | None] = [ch1_limits]
+    if ch2 is not None:
+        channels.append(ch2)
+        colors.append("red")
+        limits.append(ch2_limits)
+    return compose_channel_pseudocolor_rgb(channels, colors, tuple(limits))
 
 
 def two_photon_analysis_movie(channel_movies: tuple[np.ndarray, ...]) -> np.ndarray:
@@ -494,7 +547,6 @@ def convert_two_photon_folder_to_movie(
     if frame_count <= 0:
         raise ValueError(f"No complete image frames found in {tdms_path}")
 
-    ch1_limits, ch2_limits = _sample_channel_limits(tdms_path, protocol, frame_count, channel_count)
     movie_path = output_dir / "converted_movie.npy"
     movie = np.lib.format.open_memmap(
         movie_path,
@@ -504,7 +556,6 @@ def convert_two_photon_folder_to_movie(
     )
     channel_movies: list[np.ndarray] = []
     channel_avi_paths: list[Path] = []
-    channel_writers = []
     for channel_idx in range(channel_count):
         ch_movie_path = output_dir / f"converted_ch{channel_idx + 1}_movie.npy"
         channel_movies.append(
@@ -515,46 +566,18 @@ def convert_two_photon_folder_to_movie(
                 shape=(frame_count, protocol.height, protocol.width),
             )
         )
-        ch_avi_path = output_dir / f"converted_ch{channel_idx + 1}.avi"
-        ch_writer = cv2.VideoWriter(
-            str(ch_avi_path),
-            cv2.VideoWriter_fourcc(*"MJPG"),
-            float(protocol.frame_rate),
-            (protocol.width, protocol.height),
-            isColor=True,
-        )
-        if not ch_writer.isOpened():
-            raise IOError(f"Cannot create AVI video: {ch_avi_path}")
-        channel_avi_paths.append(ch_avi_path)
-        channel_writers.append(ch_writer)
-    color_avi_path = output_dir / "converted_pseudocolor.avi"
-    writer = cv2.VideoWriter(
-        str(color_avi_path),
-        cv2.VideoWriter_fourcc(*"MJPG"),
-        float(protocol.frame_rate),
-        (protocol.width, protocol.height),
-        isColor=True,
-    )
-    if not writer.isOpened():
-        raise IOError(f"Cannot create AVI video: {color_avi_path}")
     slots = iter_tdms_image_slots(tdms_path, protocol.width, protocol.height)
     try:
         for frame_idx in range(frame_count):
             ch1 = next(slots).astype(np.float32) + 32768.0
             ch2 = next(slots).astype(np.float32) + 32768.0 if channel_count == 2 else None
             channel_movies[0][frame_idx] = ch1
-            channel_writers[0].write(cv2.cvtColor(_scale_channel_to_uint8(ch1, ch1_limits), cv2.COLOR_GRAY2BGR))
             if ch2 is not None and len(channel_movies) > 1:
                 channel_movies[1][frame_idx] = ch2
-                channel_writers[1].write(cv2.cvtColor(_scale_channel_to_uint8(ch2, ch2_limits), cv2.COLOR_GRAY2BGR))
             movie[frame_idx] = np.maximum(ch1, ch2) if ch2 is not None else ch1
-            writer.write(pseudocolor_bgr(ch1, ch2, ch1_limits, ch2_limits))
             if progress is not None:
                 progress(frame_idx + 1, frame_count)
     finally:
-        writer.release()
-        for ch_writer in channel_writers:
-            ch_writer.release()
         movie.flush()
         for ch_movie in channel_movies:
             ch_movie.flush()
@@ -563,7 +586,7 @@ def convert_two_photon_folder_to_movie(
         movie=movie,
         channel_movies=tuple(channel_movies),
         fs=float(protocol.frame_rate),
-        color_avi_path=color_avi_path,
+        color_avi_path=None,
         channel_avi_paths=tuple(channel_avi_paths),
         source_folder=folder,
         protocol=protocol,
@@ -637,6 +660,39 @@ def save_movie_avi(movie: np.ndarray, path: str, fs: float = 10.0) -> None:
     try:
         for frame in frames:
             writer.write(cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR))
+    finally:
+        writer.release()
+
+
+def save_channel_pseudocolor_avi(
+    channel_movies: tuple[np.ndarray, ...] | list[np.ndarray],
+    colors: tuple[str, ...] | list[str] | None,
+    path: str,
+    fs: float = 10.0,
+    progress=None,
+) -> None:
+    movies = [np.asarray(movie) for movie in channel_movies if movie is not None]
+    if not movies:
+        raise ValueError("No channel movies were provided")
+    first_shape = movies[0].shape
+    if len(first_shape) != 3:
+        raise ValueError(f"Expected a 3D channel movie, got shape {first_shape}")
+    if any(movie.shape != first_shape for movie in movies):
+        shapes = ", ".join(str(movie.shape) for movie in movies)
+        raise ValueError(f"Channel movies must have the same shape, got: {shapes}")
+    color_names = channel_colors_for_count(colors, len(movies))
+    frame_count, h, w = first_shape
+    fps = float(fs) if fs and fs > 0 else 10.0
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
+    writer = cv2.VideoWriter(path, cv2.VideoWriter_fourcc(*"MJPG"), fps, (w, h), isColor=True)
+    if not writer.isOpened():
+        raise IOError(f"Cannot create AVI video: {path}")
+    try:
+        for frame_idx in range(frame_count):
+            rgb = compose_channel_pseudocolor_rgb([movie[frame_idx] for movie in movies], color_names)
+            writer.write(cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR))
+            if progress is not None:
+                progress(frame_idx + 1, frame_count)
     finally:
         writer.release()
 

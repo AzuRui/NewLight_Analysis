@@ -2,6 +2,14 @@
 
 ## 2026-05-29
 
+### Multi-Channel Grayscale Default And Optional Pseudocolor
+
+- Changed channel handling so loaded channels stay as grayscale channel movies by default; RGB pseudocolor is composed only for display or save when the user selects a non-gray channel color.
+- Added `Add Channel Data` in the Data tab for appending movie files, two-photon folders, or direct `.tdms` files into Ch1-Ch5 channel slots.
+- Added five square channel color buttons in the View panel. Loaded channels default to gray, unloaded slots are black, and each loaded slot can be set to green/red/yellow/blue/purple/gray.
+- Changed two-photon conversion to stop generating default `converted_pseudocolor.avi` / channel AVI files; it now keeps temporary grayscale memmaps and lets `Save Current Movie` stream the selected grayscale or pseudocolor output on demand.
+- Verified Python compilation, channel pseudocolor RGB composition, pseudocolor AVI saving, and a Tk GUI channel-render smoke test.
+
 ### NeuroSeg3 Packaged Runtime Fix
 
 - Reproduced the packaged NeuroSeg3 failure with a real smoke image and bundled `NewLight_Worker.exe`; the error was PyTorch 2.6+ rejecting the older YOLO `.pt` checkpoint because `torch.load()` now defaults to `weights_only=True`.

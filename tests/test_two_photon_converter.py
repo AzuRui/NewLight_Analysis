@@ -91,7 +91,7 @@ class TwoPhotonConverterTests(unittest.TestCase):
         self.assertEqual(int(bgr[0, 1, 2]), 170)
         self.assertTrue(np.all(bgr[:, :, 0] == 0))
 
-    def test_convert_folder_restores_tdms_frames_and_writes_avi(self):
+    def test_convert_folder_restores_tdms_frames_without_default_rgb_avi(self):
         with tempfile.TemporaryDirectory() as tmp:
             folder = Path(tmp) / "20260424_A04"
             folder.mkdir()
@@ -118,14 +118,16 @@ class TwoPhotonConverterTests(unittest.TestCase):
 
             self.assertEqual(result.movie.shape, (2, 2, 3))
             self.assertEqual(len(result.channel_movies), 2)
-            self.assertEqual(len(result.channel_avi_paths), 2)
+            self.assertEqual(len(result.channel_avi_paths), 0)
             np.testing.assert_allclose(result.movie[0], ch2_0.astype(np.float32) + 32768.0)
             np.testing.assert_allclose(result.channel_movies[0][0], ch1_0.astype(np.float32) + 32768.0)
             np.testing.assert_allclose(result.channel_movies[1][0], ch2_0.astype(np.float32) + 32768.0)
-            self.assertTrue(result.color_avi_path.exists())
-            for channel_path in result.channel_avi_paths:
-                self.assertTrue(channel_path.exists())
-            cap = cv2.VideoCapture(str(result.color_avi_path))
+            self.assertIsNone(result.color_avi_path)
+
+            pseudocolor_path = out_dir / "saved_on_demand.avi"
+            core.save_channel_pseudocolor_avi(result.channel_movies, ("green", "red"), str(pseudocolor_path), fs=result.fs)
+            self.assertTrue(pseudocolor_path.exists())
+            cap = cv2.VideoCapture(str(pseudocolor_path))
             ok, frame = cap.read()
             cap.release()
             self.assertTrue(ok)
