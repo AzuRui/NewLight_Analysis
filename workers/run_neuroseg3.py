@@ -1,4 +1,5 @@
 import argparse
+import inspect
 import os
 import sys
 import warnings
@@ -20,6 +21,31 @@ warnings.filterwarnings(
     message="Importing from timm.models.layers is deprecated, please import via timm.layers",
     category=FutureWarning,
 )
+
+
+def _allow_legacy_yolo_checkpoint_loading() -> None:
+    """Keep NeuroSeg3 YOLO .pt loading compatible with PyTorch 2.6+."""
+    try:
+        import torch
+    except Exception:
+        return
+    try:
+        has_weights_only = "weights_only" in inspect.signature(torch.load).parameters
+    except (TypeError, ValueError):
+        has_weights_only = False
+    if not has_weights_only:
+        return
+
+    original_load = torch.load
+
+    def load_with_legacy_yolo_default(*args, **kwargs):
+        kwargs.setdefault("weights_only", False)
+        return original_load(*args, **kwargs)
+
+    torch.load = load_with_legacy_yolo_default
+
+
+_allow_legacy_yolo_checkpoint_loading()
 
 from ultralytics import YOLO
 

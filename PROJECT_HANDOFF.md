@@ -1,6 +1,6 @@
 # NewLight_Analysis Handoff
 
-Last updated: 2026-05-14
+Last updated: 2026-05-29
 
 ## Project
 
@@ -148,6 +148,7 @@ Requirements already discussed:
 - NeuroSeg3 ROI now uses a dedicated dialog with manual detection-confidence input, a weights path chooser, and a fallback checkbox.
 - The GUI keeps NeuroSeg3 mask pixel cutoff fixed at `0.50` for routine use; the backend call still accepts a separate mask threshold if that ever needs to be exposed again.
 - Practical NeuroSeg3 confidence values may be much smaller than the usual human-friendly range; `0.002` was observed as a useful starting point for the current dataset.
+- Packaged NeuroSeg3 uses a compatibility shim in `workers/run_neuroseg3.py` for PyTorch 2.6+ because older YOLO `.pt` checkpoints need `torch.load(..., weights_only=False)`. If NeuroSeg3 fails again, first run `build_release\NewLight_Analysis\check_backends.bat`; it now performs a real temporary-image model prediction, not only a `--help` launch check.
 - The toolbar coordinate readout is themed white for readability on the dark background.
 - `Built-in Auto ROI` now seeds its `Min area` / `Max area` defaults from the current mouse pixel position when that point lies over image content; the estimate uses local connected-component area as a rough guide.
 - The built-in auto ROI dialog labels these fields as `px^2`, and the log now reports an approximate cell area and equivalent diameter so a rough visual cell-size estimate can be converted into the area range more directly.
@@ -204,7 +205,7 @@ Requirements already discussed:
 - `run_NewLight_Analysis.bat` is a source-controlled launcher template copied to both `build_release` and `build_release\NewLight_Analysis`. Keep it robust enough to launch from either location, and to fall back to source `launch.py` from the project root.
 - Current portable EXE output path is `E:\WorkSpace\NewLight_Analysis\build_release\NewLight_Analysis\NewLight_Analysis.exe`; launcher path is `E:\WorkSpace\NewLight_Analysis\build_release\run_NewLight_Analysis.bat`.
 - In PyInstaller 6 onedir builds, data resources live under `build_release\NewLight_Analysis\_internal`. `check_backends.bat` detects that location before calling worker scripts or checking the bundled DeepCAD-RT model.
-- Latest build on 2026-05-14 used `conda run -n caiman_latest cmd /c build_exe.bat /nopause`. Release validation passed: `check_backends.bat` reports bundled Python, NeuroSeg3, CaImAn, and DeepCAD-RT backend checks OK; a deeper `_internal\NewLight_Worker.exe` import check passed for `ultralytics`, `caiman`, `igraph`, `leidenalg`, `deepcad.test_collection`, `atlas_registration_merged_bilateral_midline`, and `csbdeep.utils.normalize`; frozen `analysis_core.run_conda_worker(...)` resolves `_internal\NewLight_Worker.exe` correctly; GUI startup smoke passed.
+- Latest build on 2026-05-29 used `conda run -n caiman_latest cmd /c build_exe.bat /nopause`. Release validation passed: `check_backends.bat` reports bundled Python OK, NeuroSeg3 real model smoke OK, and CaImAn / DeepCAD-RT backend checks OK.
 - `NewLight_Worker.exe` intentionally lives in `_internal` and uses a different console/tool icon from the main GUI. Do not move it back to the release root manually; the PyInstaller spec controls its runtime resource layout.
 - Inno Setup `ISCC.exe` was not installed/found on the build machine during the latest pass, so `build_full_release.bat` would skip installer creation and leave the complete portable folder ready. Install Inno Setup 6 or put `ISCC.exe` on `PATH` to produce the installer from `NewLight_Analysis_setup.iss`.
 

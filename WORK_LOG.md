@@ -1,5 +1,15 @@
 # Work Log
 
+## 2026-05-29
+
+### NeuroSeg3 Packaged Runtime Fix
+
+- Reproduced the packaged NeuroSeg3 failure with a real smoke image and bundled `NewLight_Worker.exe`; the error was PyTorch 2.6+ rejecting the older YOLO `.pt` checkpoint because `torch.load()` now defaults to `weights_only=True`.
+- Updated `workers/run_neuroseg3.py` to load trusted NeuroSeg3 YOLO checkpoints with the legacy `weights_only=False` behavior when that PyTorch argument exists.
+- Strengthened `check_backends.bat` so NeuroSeg3 validation creates a temporary image, loads the bundled `yolov8s-seg.pt`, runs prediction, and verifies a `.npz` mask output instead of only checking `--help`.
+- Rebuilt the portable release with `conda run -n caiman_latest cmd /c build_exe.bat /nopause`.
+- Verified `build_release\NewLight_Analysis\check_backends.bat`: bundled Python imports OK; NeuroSeg3 real model smoke OK; CaImAn and DeepCAD-RT help checks OK.
+
 ## 2026-05-14
 
 ### Portable EXE Build Script Refresh
