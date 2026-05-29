@@ -96,9 +96,8 @@ copy /y check_backends.bat build_release\NewLight_Analysis\check_backends.bat >n
 copy /y setup_caiman_latest.bat build_release\NewLight_Analysis\setup_caiman_latest.bat >nul
 
 echo Writing release launcher...
-> build_release\Run_NewLight_Analysis.bat echo @echo off
->> build_release\Run_NewLight_Analysis.bat echo cd /d "%%~dp0NewLight_Analysis"
->> build_release\Run_NewLight_Analysis.bat echo start "" "NewLight_Analysis.exe"
+copy /y run_NewLight_Analysis.bat build_release\run_NewLight_Analysis.bat >nul
+copy /y run_NewLight_Analysis.bat build_release\NewLight_Analysis\run_NewLight_Analysis.bat >nul
 
 echo.
 echo Build complete:

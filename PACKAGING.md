@@ -32,7 +32,7 @@ Output:
 ```text
 E:\WorkSpace\NewLight_Analysis\build_release\NewLight_Analysis\NewLight_Analysis.exe
 E:\WorkSpace\NewLight_Analysis\build_release\NewLight_Analysis\_internal\NewLight_Worker.exe
-E:\WorkSpace\NewLight_Analysis\build_release\Run_NewLight_Analysis.bat
+E:\WorkSpace\NewLight_Analysis\build_release\run_NewLight_Analysis.bat
 ```
 
 ## Distribution
@@ -66,6 +66,11 @@ The build also patches frozen OpenCV loader config files after PyInstaller
 collection. This removes conda build-machine paths from `_internal\cv2` and
 keeps `cv2` import self-contained on other computers.
 
+PyTorch/DeepCAD-RT CUDA builds also need the full conda CUDA/cuDNN runtime from
+`Library\bin`. The spec explicitly collects cuDNN split DLLs, NVRTC, cuFFT
+wrappers, and related CUDA runtime DLLs. `check_backends.bat` verifies this by
+printing CUDA and cuDNN versions from the bundled worker.
+
 On target machines, run this from inside the release folder:
 
 ```powershell
@@ -73,7 +78,8 @@ build_release\NewLight_Analysis\check_backends.bat
 ```
 
 Expected result: bundled Python imports succeed, and NeuroSeg3, CaImAn, and
-DeepCAD-RT backend `--help` checks report OK.
+DeepCAD-RT backend `--help` checks report OK. The bundled Python section should
+also print a non-empty `cuDNN` version.
 
 DeepCAD-RT denoising still requires a CUDA-capable NVIDIA GPU and compatible
 driver at runtime. The model and Python code are bundled, but the target machine

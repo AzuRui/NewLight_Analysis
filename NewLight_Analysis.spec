@@ -2,6 +2,7 @@
 
 import importlib.util
 import runpy
+import sys
 from pathlib import Path
 
 from PyInstaller.config import CONF
@@ -12,11 +13,42 @@ WORKSPACE = ROOT.parent
 PYINSTALLER_DIR = Path(importlib.util.find_spec('PyInstaller').origin).parent
 WORKER_ICON = PYINSTALLER_DIR / 'bootloader' / 'images' / 'icon-console.ico'
 CV2_PATCH_TOOL = ROOT / 'tools' / 'patch_frozen_cv2.py'
+CUDA_RUNTIME_DLL_PATTERNS = [
+    'c10_cuda.dll',
+    'torch_cuda.dll',
+    'caffe2_nvrtc.dll',
+    'cublas*.dll',
+    'cudart*.dll',
+    'cudnn*.dll',
+    'cufft*.dll',
+    'cufftw*.dll',
+    'cusolver*.dll',
+    'cusolverMg*.dll',
+    'cusparse*.dll',
+    'nvrtc*.dll',
+    'nvrtc-builtins*.dll',
+]
 
 
 def patch_frozen_cv2_config(app_root):
     namespace = runpy.run_path(str(CV2_PATCH_TOOL))
     namespace['patch_frozen_cv2_config'](app_root)
+
+
+def collect_conda_cuda_runtime_dlls():
+    library_bin = Path(sys.prefix) / 'Library' / 'bin'
+    if not library_bin.exists():
+        return []
+    seen = set()
+    binaries = []
+    for pattern in CUDA_RUNTIME_DLL_PATTERNS:
+        for dll in sorted(library_bin.glob(pattern)):
+            key = dll.name.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            binaries.append((str(dll), '.'))
+    return binaries
 
 
 hiddenimports = [
@@ -41,6 +73,7 @@ hiddenimports = [
     'leidenalg',
 ]
 hiddenimports += collect_submodules('ultralytics')
+cuda_binaries = collect_conda_cuda_runtime_dlls()
 datas = [
     ('xhr.ico', '.'),
     ('README.md', '.'),
@@ -73,7 +106,7 @@ if ipyparallel_spec and ipyparallel_spec.origin:
 a = Analysis(
     ['launch.py'],
     pathex=[str(ROOT), str(WORKSPACE / 'NeuroSeg3'), str(WORKSPACE / 'DeepCAD-RT' / 'DeepCAD_RT_pytorch')],
-    binaries=[],
+    binaries=cuda_binaries,
     datas=datas,
     hiddenimports=hiddenimports,
     hookspath=[],

@@ -458,3 +458,18 @@
 - Re-ran `cmd /c build_exe.bat /nopause`; build succeeded and produced `build_release\NewLight_Analysis\NewLight_Analysis.exe`.
 - Verified the release worker imports `numpy`, `scipy`, `cv2`, `tifffile`, `pandas`, and `matplotlib`, with OpenCV `4.13.0`.
 - Verified `build_release\NewLight_Analysis\check_backends.bat` reports bundled Python, NeuroSeg3, CaImAn, and DeepCAD-RT backend checks OK.
+
+### Packaged DeepCAD-RT cuDNN Runtime Fix
+
+- Reproduced the packaged DeepCAD-RT/CUDA failure with `_internal\NewLight_Worker.exe -c "import torch; print(torch.backends.cudnn.version())"`; the frozen worker failed with `Invalid handle. Cannot load symbol cudnnGetVersion`.
+- Confirmed the source `caiman_latest` environment returned cuDNN version `92101`, so the problem was packaging rather than the two-photon folder converter or DeepCAD model.
+- Found that the portable bundle contained only `cudnn64_9.dll`, while conda's cuDNN 9 runtime also needs split DLLs such as `cudnn_ops64_9.dll`, `cudnn_graph64_9.dll`, `cudnn_adv64_9.dll`, and the engine DLLs.
+- Updated `NewLight_Analysis.spec` to explicitly collect CUDA/cuDNN runtime DLLs from the build environment's `Library\bin`.
+- Updated `check_backends.bat` so the bundled Python check now imports `torch` and prints both `torch.version.cuda` and `torch.backends.cudnn.version()`.
+- Removed the modal DeepCAD-RT preview error popup; preview failures now remain in the bottom status line and Run Log.
+- Replaced generated launcher echo lines with a robust `run_NewLight_Analysis.bat` template and copy it both beside the release folder and inside `build_release\NewLight_Analysis`.
+- Re-ran `cmd /c build_exe.bat /nopause`; build succeeded.
+- Verified the rebuilt bundle includes cuDNN split DLLs, `nvrtc`, `cufftw`, `cusolverMg`, and `caffe2_nvrtc`.
+- Verified `_internal\NewLight_Worker.exe` reports PyTorch `2.10.0`, CUDA `13.0`, cuDNN `92101`, and `torch.cuda.is_available() == True`.
+- Verified `build_release\NewLight_Analysis\check_backends.bat` passes bundled Python, NeuroSeg3, CaImAn, and DeepCAD-RT checks.
+- Verified `run_NewLight_Analysis.bat` launches the packaged app from both `build_release` and `build_release\NewLight_Analysis`.

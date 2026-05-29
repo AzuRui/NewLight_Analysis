@@ -1965,7 +1965,6 @@ class NewLightApp:
         if payload.get("error"):
             self.deepcad_last_error = payload["error"]
             self.log(f"DeepCAD-RT preview failed: {payload['error']}")
-            messagebox.showerror("DeepCAD-RT", self.worker_error_summary(payload["error"]))
             return
         self.deepcad_denoised_movie = payload["movie"]
         self.deepcad_cache_movie_id = id(self.state.movie)

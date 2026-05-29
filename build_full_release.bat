@@ -96,9 +96,8 @@ xcopy /e /i /y dist\NewLight_Analysis build_release\NewLight_Analysis >nul
 copy /y check_backends.bat build_release\NewLight_Analysis\check_backends.bat >nul
 copy /y setup_caiman_latest.bat build_release\NewLight_Analysis\setup_caiman_latest.bat >nul
 
-> build_release\Run_NewLight_Analysis.bat echo @echo off
->> build_release\Run_NewLight_Analysis.bat echo cd /d "%%~dp0NewLight_Analysis"
->> build_release\Run_NewLight_Analysis.bat echo start "" "NewLight_Analysis.exe"
+copy /y run_NewLight_Analysis.bat build_release\run_NewLight_Analysis.bat >nul
+copy /y run_NewLight_Analysis.bat build_release\NewLight_Analysis\run_NewLight_Analysis.bat >nul
 
 set "ISCC="
 where ISCC.exe >nul 2>nul

@@ -8,7 +8,7 @@ if exist "%RESOURCE_DIR%\NewLight_Worker.exe" set "WORKER_PY=%RESOURCE_DIR%\NewL
 if exist "%CD%\NewLight_Worker.exe" set "WORKER_PY=%CD%\NewLight_Worker.exe"
 
 echo Bundled Python:
-"%WORKER_PY%" -c "import sys, numpy, scipy, cv2, tifffile, pandas, matplotlib; print(sys.executable); print('bundled imports OK')"
+"%WORKER_PY%" -c "import sys, numpy, scipy, cv2, tifffile, pandas, matplotlib, torch; print(sys.executable); print('bundled imports OK'); print('torch CUDA:', torch.version.cuda); print('cuDNN:', torch.backends.cudnn.version())"
 if errorlevel 1 echo Bundled Python check failed.
 echo.
 echo NeuroSeg3 backend:
