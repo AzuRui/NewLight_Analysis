@@ -79,8 +79,13 @@ class TwoPhotonConverterTests(unittest.TestCase):
         ch1 = np.array([[0, 10], [20, 30]], dtype=np.float32)
         ch2 = np.array([[30, 20], [10, 0]], dtype=np.float32)
 
+        rgb = core.pseudocolor_rgb(ch1, ch2, (0, 30), (0, 30))
         bgr = core.pseudocolor_bgr(ch1, ch2, (0, 30), (0, 30))
 
+        self.assertEqual(rgb.shape, (2, 2, 3))
+        self.assertEqual(int(rgb[0, 1, 0]), 170)
+        self.assertEqual(int(rgb[0, 1, 1]), 85)
+        self.assertTrue(np.all(rgb[:, :, 2] == 0))
         self.assertEqual(bgr.shape, (2, 2, 3))
         self.assertEqual(int(bgr[0, 1, 1]), 85)
         self.assertEqual(int(bgr[0, 1, 2]), 170)
@@ -112,8 +117,14 @@ class TwoPhotonConverterTests(unittest.TestCase):
             result = core.convert_two_photon_folder_to_movie(folder, out_dir)
 
             self.assertEqual(result.movie.shape, (2, 2, 3))
+            self.assertEqual(len(result.channel_movies), 2)
+            self.assertEqual(len(result.channel_avi_paths), 2)
             np.testing.assert_allclose(result.movie[0], ch2_0.astype(np.float32) + 32768.0)
+            np.testing.assert_allclose(result.channel_movies[0][0], ch1_0.astype(np.float32) + 32768.0)
+            np.testing.assert_allclose(result.channel_movies[1][0], ch2_0.astype(np.float32) + 32768.0)
             self.assertTrue(result.color_avi_path.exists())
+            for channel_path in result.channel_avi_paths:
+                self.assertTrue(channel_path.exists())
             cap = cv2.VideoCapture(str(result.color_avi_path))
             ok, frame = cap.read()
             cap.release()
@@ -121,6 +132,8 @@ class TwoPhotonConverterTests(unittest.TestCase):
             self.assertGreater(float(frame[:, :, 1].mean()), 0.0)
             self.assertGreater(float(frame[:, :, 2].mean()), 0.0)
             result.movie._mmap.close()
+            for channel_movie in result.channel_movies:
+                channel_movie._mmap.close()
 
 
 if __name__ == "__main__":

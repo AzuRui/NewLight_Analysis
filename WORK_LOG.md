@@ -473,3 +473,18 @@
 - Verified `_internal\NewLight_Worker.exe` reports PyTorch `2.10.0`, CUDA `13.0`, cuDNN `92101`, and `torch.cuda.is_available() == True`.
 - Verified `build_release\NewLight_Analysis\check_backends.bat` passes bundled Python, NeuroSeg3, CaImAn, and DeepCAD-RT checks.
 - Verified `run_NewLight_Analysis.bat` launches the packaged app from both `build_release` and `build_release\NewLight_Analysis`.
+
+### Two-Photon Channel Display And Export
+
+- Updated two-photon folder conversion to keep Ch1 and Ch2 as separate temporary channel movies in addition to the analysis movie.
+- The converter now writes temporary per-channel AVIs (`converted_ch1.avi`, `converted_ch2.avi` when Ch2 exists) and a pseudocolor preview AVI.
+- GUI display now rebuilds RGB pseudocolor frames/projections from the current channel movies, so preprocessing operations such as smoothing, background subtraction, bleach correction, contrast enhancement, and built-in rigid motion preserve red/green display instead of falling back to grayscale.
+- Preprocessing operations are applied to each converted channel movie; the analysis movie is recombined from the processed channels afterward.
+- Undo restores the converted channel movies alongside the analysis movie.
+- `Save Current Movie` now exports dual-channel two-photon sources as separate AVI files named from the selected base path, for example `result_ch1.avi` and `result_ch2.avi`, instead of saving the merged pseudocolor AVI.
+- Added `analysis_core.pseudocolor_rgb(...)` for display and kept `pseudocolor_bgr(...)` for OpenCV AVI writing.
+- Updated `tests\test_two_photon_converter.py` for RGB/BGR channel mapping and generated per-channel AVI/channel movie outputs.
+- Verified `conda run -n caiman_latest python -B -m unittest tests.test_two_photon_converter tests.test_baseline`.
+- Verified `conda run -n caiman_latest python -m py_compile NewLight_Analysis.py analysis_core.py`.
+- Rebuilt the portable app with `cmd /c build_exe.bat /nopause`; output is `build_release\NewLight_Analysis\NewLight_Analysis.exe`.
+- Verified bundled `check_backends.bat` still passes and bundled `analysis_core` exposes the new pseudocolor display helper.

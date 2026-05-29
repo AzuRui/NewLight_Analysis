@@ -1528,6 +1528,7 @@ class NewLightApp:
         self.deepcad_request_token = 0
         self.display_source = ("projection", "mean")
         self._converted_frame_cache = (None, None, None)
+        self._converted_projection_cache = {}
         self._view_limits = None
         self._view_is_fit = True
         self._view_lock = False
@@ -1854,19 +1855,25 @@ class NewLightApp:
         return path
 
     def release_movie_resources(self):
-        movie = getattr(self.state, "movie", None)
-        mmap_obj = getattr(movie, "_mmap", None)
-        if mmap_obj is not None:
-            try:
-                mmap_obj.close()
-            except Exception:
-                pass
+        movies = [getattr(self.state, "movie", None)]
+        movies.extend(getattr(self.state, "converted_channel_movies", ()) or ())
+        for movie in movies:
+            mmap_obj = getattr(movie, "_mmap", None)
+            if mmap_obj is not None:
+                try:
+                    mmap_obj.close()
+                except Exception:
+                    pass
         self._converted_frame_cache = (None, None, None)
+        self._converted_projection_cache = {}
 
     def clear_converted_color_source(self):
         self.state.converted_color_avi_path = ""
         self.state.converted_source_folder = ""
+        self.state.converted_channel_avi_paths = ()
+        self.state.converted_channel_movies = ()
         self._converted_frame_cache = (None, None, None)
+        self._converted_projection_cache = {}
 
     def acceleration(self):
         return self.acceleration_var.get()
@@ -1982,10 +1989,10 @@ class NewLightApp:
             return img
         source = getattr(self, "display_source", ("custom", None))
         if not self.deepcad_enabled_var.get():
-            color = self.converted_color_frame(source)
+            color = self.converted_color_image(source)
             return color if color is not None else img
         if not self.deepcad_cache_is_current():
-            color = self.converted_color_frame(source)
+            color = self.converted_color_image(source)
             return color if color is not None else img
         weight = self.deepcad_weight()
         if source[0] == "frame":
@@ -2002,7 +2009,35 @@ class NewLightApp:
             return core.blend_images(img, self.deepcad_projection_cache[mode], weight)
         return img
 
-    def converted_color_frame(self, source):
+    def converted_color_image(self, source):
+        if not source:
+            return None
+        channel_movies = tuple(movie for movie in self.state.converted_channel_movies if movie is not None)
+        if channel_movies:
+            if source[0] == "frame":
+                frame = min(max(0, int(source[1])), channel_movies[0].shape[0] - 1)
+                cached_path, cached_frame, cached_image = self._converted_frame_cache
+                cache_key = ("channels", tuple(id(movie) for movie in channel_movies))
+                if cached_path == cache_key and cached_frame == frame:
+                    return cached_image
+                ch1 = channel_movies[0][frame]
+                ch2 = channel_movies[1][frame] if len(channel_movies) > 1 else None
+                image = core.pseudocolor_rgb(ch1, ch2)
+                self._converted_frame_cache = (cache_key, frame, image)
+                return image
+            if source[0] == "projection":
+                mode = source[1]
+                cache_key = (tuple(id(movie) for movie in channel_movies), mode, self.acceleration())
+                if cache_key not in self._converted_projection_cache:
+                    ch1 = core.compute_projection(channel_movies[0], mode, acceleration=self.acceleration())
+                    ch2 = (
+                        core.compute_projection(channel_movies[1], mode, acceleration=self.acceleration())
+                        if len(channel_movies) > 1
+                        else None
+                    )
+                    self._converted_projection_cache[cache_key] = core.pseudocolor_rgb(ch1, ch2)
+                return self._converted_projection_cache[cache_key]
+            return None
         if source[0] != "frame" or not self.state.converted_color_avi_path:
             return None
         path = self.state.converted_color_avi_path
@@ -2041,7 +2076,8 @@ class NewLightApp:
 
     def push_history(self, label):
         if self.state.movie is not None:
-            self.state.history.append((label, self.state.movie.copy()))
+            channel_snapshot = tuple(np.asarray(movie).copy() for movie in self.state.converted_channel_movies)
+            self.state.history.append((label, self.state.movie.copy(), channel_snapshot))
             if len(self.state.history) > 12:
                 self.state.history.pop(0)
 
@@ -2083,9 +2119,13 @@ class NewLightApp:
         if not self.state.history:
             self.log("Nothing to undo.")
             return
-        label, movie = self.state.history.pop()
+        entry = self.state.history.pop()
+        label, movie = entry[0], entry[1]
         self.state.movie = movie
-        self.clear_converted_color_source()
+        if len(entry) > 2:
+            self.state.converted_channel_movies = tuple(entry[2])
+        self._converted_frame_cache = (None, None, None)
+        self._converted_projection_cache = {}
         self.clear_deepcad_cache()
         self.recompute_baseline_image()
         self.update_frame_controls()
@@ -2142,12 +2182,15 @@ class NewLightApp:
         self.release_movie_resources()
         self.state = core.AnalysisState(
             movie=result.movie,
+            converted_channel_movies=result.channel_movies,
             fs=result.fs,
             source_path=str(result.source_folder),
             converted_color_avi_path=str(result.color_avi_path),
+            converted_channel_avi_paths=tuple(str(path) for path in result.channel_avi_paths),
             converted_source_folder=str(result.source_folder),
         )
         self._converted_frame_cache = (None, None, None)
+        self._converted_projection_cache = {}
         self.clear_deepcad_cache()
         self.fs_var.set(f"{result.fs:.6g}")
         self.apply_protocol(update_baseline=False)
@@ -2158,7 +2201,8 @@ class NewLightApp:
         self.log(
             f"Converted {result.source_folder.name}: {result.frames} frames, "
             f"{result.protocol.width}x{result.protocol.height}, {result.fs:.3g} Hz, channels={channels}. "
-            f"Temporary pseudocolor AVI: {result.color_avi_path}"
+            f"Temporary channel AVIs: {', '.join(str(path) for path in result.channel_avi_paths)}. "
+            f"Temporary pseudocolor preview AVI: {result.color_avi_path}"
         )
 
     def open_stimulus(self):
@@ -2703,6 +2747,29 @@ class NewLightApp:
     def save_movie_to_path(self, movie, path):
         core.save_movie(movie, str(path), fs=self.state.fs)
 
+    def save_converted_channels_to_path(self, path):
+        channel_movies = tuple(movie for movie in self.state.converted_channel_movies if movie is not None)
+        if len(channel_movies) >= 2:
+            saved = []
+            for idx, movie in enumerate(channel_movies, start=1):
+                channel_path = path.with_name(f"{path.stem}_ch{idx}{path.suffix}")
+                self.save_movie_to_path(movie, channel_path)
+                saved.append(channel_path)
+            self.log("Saved separate channel AVIs: " + ", ".join(str(p) for p in saved))
+            return True
+        if len(self.state.converted_channel_avi_paths) >= 2:
+            saved = []
+            for idx, raw_path in enumerate(self.state.converted_channel_avi_paths, start=1):
+                src = Path(raw_path)
+                if not src.exists():
+                    return False
+                channel_path = path.with_name(f"{path.stem}_ch{idx}{path.suffix}")
+                shutil.copy2(src, channel_path)
+                saved.append(channel_path)
+            self.log("Saved separate channel AVIs: " + ", ".join(str(p) for p in saved))
+            return True
+        return False
+
     def save_current_movie(self):
         if not self.require_movie():
             return
@@ -2710,6 +2777,8 @@ class NewLightApp:
         if path is None:
             return
         path.parent.mkdir(parents=True, exist_ok=True)
+        if self.save_converted_channels_to_path(path):
+            return
         if not self.deepcad_enabled_var.get():
             if self.state.converted_color_avi_path and Path(self.state.converted_color_avi_path).exists():
                 shutil.copy2(self.state.converted_color_avi_path, path)
@@ -2766,8 +2835,14 @@ class NewLightApp:
         try:
             self.apply_protocol(update_baseline=False)
             self.push_history(label)
-            self.state.movie = func(self.state.movie)
-            self.clear_converted_color_source()
+            if self.state.converted_channel_movies:
+                processed_channels = tuple(func(movie) for movie in self.state.converted_channel_movies)
+                self.state.converted_channel_movies = processed_channels
+                self.state.movie = core.two_photon_analysis_movie(processed_channels)
+                self._converted_frame_cache = (None, None, None)
+                self._converted_projection_cache = {}
+            else:
+                self.state.movie = func(self.state.movie)
             self.clear_deepcad_cache()
             self.recompute_baseline_image()
             self.update_frame_controls()

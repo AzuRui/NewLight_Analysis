@@ -82,7 +82,9 @@ class AnalysisState:
     source_path: str = ""
     converted_color_avi_path: str = ""
     converted_source_folder: str = ""
-    history: list[tuple[str, np.ndarray]] = field(default_factory=list)
+    converted_channel_avi_paths: tuple[str, ...] = field(default_factory=tuple)
+    converted_channel_movies: tuple[np.ndarray, ...] = field(default_factory=tuple)
+    history: list[tuple] = field(default_factory=list)
     last_message: str = ""
 
 
@@ -101,8 +103,10 @@ class TwoPhotonProtocol:
 @dataclass
 class ConvertedTwoPhotonMovie:
     movie: np.ndarray
+    channel_movies: tuple[np.ndarray, ...]
     fs: float
     color_avi_path: Path
+    channel_avi_paths: tuple[Path, ...]
     source_folder: Path
     protocol: TwoPhotonProtocol
     frames: int
@@ -407,6 +411,15 @@ def pseudocolor_bgr(
     ch1_limits: tuple[float, float] | None = None,
     ch2_limits: tuple[float, float] | None = None,
 ) -> np.ndarray:
+    return cv2.cvtColor(pseudocolor_rgb(ch1, ch2, ch1_limits, ch2_limits), cv2.COLOR_RGB2BGR)
+
+
+def pseudocolor_rgb(
+    ch1: np.ndarray,
+    ch2: np.ndarray | None = None,
+    ch1_limits: tuple[float, float] | None = None,
+    ch2_limits: tuple[float, float] | None = None,
+) -> np.ndarray:
     ch1_arr = np.asarray(ch1, dtype=np.float32)
     if ch1_limits is None:
         ch1_limits = (float(np.nanmin(ch1_arr)), float(np.nanmax(ch1_arr)))
@@ -418,10 +431,18 @@ def pseudocolor_bgr(
         if ch2_limits is None:
             ch2_limits = (float(np.nanmin(ch2_arr)), float(np.nanmax(ch2_arr)))
         red = _scale_channel_to_uint8(ch2_arr, ch2_limits)
-    bgr = np.zeros(ch1_arr.shape + (3,), dtype=np.uint8)
-    bgr[:, :, 1] = green
-    bgr[:, :, 2] = red
-    return bgr
+    rgb = np.zeros(ch1_arr.shape + (3,), dtype=np.uint8)
+    rgb[:, :, 0] = red
+    rgb[:, :, 1] = green
+    return rgb
+
+
+def two_photon_analysis_movie(channel_movies: tuple[np.ndarray, ...]) -> np.ndarray:
+    if not channel_movies:
+        raise ValueError("No channel movies were provided")
+    if len(channel_movies) == 1:
+        return np.asarray(channel_movies[0], dtype=np.float32)
+    return np.maximum.reduce([np.asarray(movie, dtype=np.float32) for movie in channel_movies])
 
 
 def _sample_channel_limits(tdms_path: Path, protocol: TwoPhotonProtocol, frame_count: int, channel_count: int) -> tuple[tuple[float, float], tuple[float, float]]:
@@ -481,6 +502,31 @@ def convert_two_photon_folder_to_movie(
         dtype=np.float32,
         shape=(frame_count, protocol.height, protocol.width),
     )
+    channel_movies: list[np.ndarray] = []
+    channel_avi_paths: list[Path] = []
+    channel_writers = []
+    for channel_idx in range(channel_count):
+        ch_movie_path = output_dir / f"converted_ch{channel_idx + 1}_movie.npy"
+        channel_movies.append(
+            np.lib.format.open_memmap(
+                ch_movie_path,
+                mode="w+",
+                dtype=np.float32,
+                shape=(frame_count, protocol.height, protocol.width),
+            )
+        )
+        ch_avi_path = output_dir / f"converted_ch{channel_idx + 1}.avi"
+        ch_writer = cv2.VideoWriter(
+            str(ch_avi_path),
+            cv2.VideoWriter_fourcc(*"MJPG"),
+            float(protocol.frame_rate),
+            (protocol.width, protocol.height),
+            isColor=True,
+        )
+        if not ch_writer.isOpened():
+            raise IOError(f"Cannot create AVI video: {ch_avi_path}")
+        channel_avi_paths.append(ch_avi_path)
+        channel_writers.append(ch_writer)
     color_avi_path = output_dir / "converted_pseudocolor.avi"
     writer = cv2.VideoWriter(
         str(color_avi_path),
@@ -496,18 +542,29 @@ def convert_two_photon_folder_to_movie(
         for frame_idx in range(frame_count):
             ch1 = next(slots).astype(np.float32) + 32768.0
             ch2 = next(slots).astype(np.float32) + 32768.0 if channel_count == 2 else None
+            channel_movies[0][frame_idx] = ch1
+            channel_writers[0].write(cv2.cvtColor(_scale_channel_to_uint8(ch1, ch1_limits), cv2.COLOR_GRAY2BGR))
+            if ch2 is not None and len(channel_movies) > 1:
+                channel_movies[1][frame_idx] = ch2
+                channel_writers[1].write(cv2.cvtColor(_scale_channel_to_uint8(ch2, ch2_limits), cv2.COLOR_GRAY2BGR))
             movie[frame_idx] = np.maximum(ch1, ch2) if ch2 is not None else ch1
             writer.write(pseudocolor_bgr(ch1, ch2, ch1_limits, ch2_limits))
             if progress is not None:
                 progress(frame_idx + 1, frame_count)
     finally:
         writer.release()
+        for ch_writer in channel_writers:
+            ch_writer.release()
         movie.flush()
+        for ch_movie in channel_movies:
+            ch_movie.flush()
 
     return ConvertedTwoPhotonMovie(
         movie=movie,
+        channel_movies=tuple(channel_movies),
         fs=float(protocol.frame_rate),
         color_avi_path=color_avi_path,
+        channel_avi_paths=tuple(channel_avi_paths),
         source_folder=folder,
         protocol=protocol,
         frames=frame_count,

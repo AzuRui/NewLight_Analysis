@@ -368,8 +368,10 @@ Folder conversion behavior:
 GUI/runtime notes:
 
 - Current-frame display uses the temporary pseudocolor AVI for converted folders, while projections and analysis remain grayscale.
-- Any movie-altering preprocessing or motion correction clears the temporary pseudocolor source, because it no longer matches the modified analysis movie.
-- `Save Current Movie` now enforces AVI output. For an unmodified converted-folder movie, it copies the temporary pseudocolor AVI to the user-selected `result.avi`.
+- Current-frame and projection display now prefer the stored converted channel movies and rebuild RGB pseudocolor from the current Ch1/Ch2 data. The temporary pseudocolor AVI remains a fallback/preview artifact.
+- Movie-altering preprocessing operations are applied to each converted channel movie when present, and the analysis movie is recombined from the processed channels. This preserves red/green display after smoothing, background subtraction, bleach correction, contrast enhancement, built-in rigid motion, and undo.
+- CaImAn motion still operates on the analysis movie only; do not assume converted channel movies are motion-corrected by that backend unless a dedicated channel-aware CaImAn path is added later.
+- `Save Current Movie` now enforces AVI output. For dual-channel converted-folder movies, it writes separate files from the chosen base path, for example `result_ch1.avi` and `result_ch2.avi`, instead of a merged/pseudocolor AVI. For single-channel converted-folder movies, it can still use the pseudocolor/current movie path.
 - Regression coverage lives in `tests\test_two_photon_converter.py`.
 
 Sample validation:
