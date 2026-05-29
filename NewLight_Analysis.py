@@ -1984,6 +1984,20 @@ class NewLightApp:
                 command=lambda name=color_name: self.set_channel_color(channel_index, name),
             )
             btn.grid(row=idx // 3, column=idx % 3, padx=4, pady=4)
+        delete_btn = tk.Button(
+            popup,
+            text="Delete",
+            width=16,
+            height=1,
+            bg="#7f1d1d",
+            activebackground="#991b1b",
+            fg="#fee2e2",
+            activeforeground="#ffffff",
+            relief="solid",
+            bd=1,
+            command=lambda: self.delete_channel(channel_index),
+        )
+        delete_btn.grid(row=2, column=0, columnspan=3, sticky="ew", padx=4, pady=(8, 4))
         try:
             x = self.root.winfo_pointerx()
             y = self.root.winfo_pointery()
@@ -2006,6 +2020,38 @@ class NewLightApp:
             self.channel_palette_popup.destroy()
         self.redraw(preserve_view=True)
         self.log(f"Ch{channel_index + 1} color: {CHANNEL_COLOR_LABELS[colors[channel_index]]}")
+
+    def delete_channel(self, channel_index):
+        movies = list(self.channel_movies())
+        if channel_index >= len(movies):
+            return
+        colors = list(self.channel_colors())
+        removed_label = f"Ch{channel_index + 1}"
+        movies.pop(channel_index)
+        colors.pop(channel_index)
+        if self.channel_palette_popup is not None and self.channel_palette_popup.winfo_exists():
+            self.channel_palette_popup.destroy()
+        self.clear_channel_render_cache()
+        self.clear_deepcad_cache()
+        if not movies:
+            self.release_movie_resources()
+            self.state = core.AnalysisState(fs=float(self.fs_var.get() or 10.0))
+            self.state.display_image = None
+            self.state.baseline_image = None
+            self.display_source = ("projection", self.projection_mode.get())
+            self.update_frame_controls()
+            self.update_channel_color_buttons()
+            self.redraw(preserve_view=False)
+            self.log(f"Deleted {removed_label}; no channels remain.")
+            return
+        self.state.converted_channel_movies = tuple(movies)
+        self.state.channel_colors = tuple(colors)
+        self.state.movie = core.two_photon_analysis_movie(self.state.converted_channel_movies)
+        self.recompute_baseline_image()
+        self.update_frame_controls()
+        self.update_channel_color_buttons()
+        self.refresh_projection(preserve_view=False)
+        self.log(f"Deleted {removed_label}. Total channels={len(movies)}.")
 
     def acceleration(self):
         return self.acceleration_var.get()

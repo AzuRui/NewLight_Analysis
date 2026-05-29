@@ -371,7 +371,7 @@ Folder conversion behavior:
 GUI/runtime notes:
 
 - The Data tab has `Add Channel Data`. It accepts movie files, two-photon folders, or direct `.tdms` files and appends loaded channels into the next Ch1-Ch5 slots. A two-channel two-photon folder appended after Ch1/Ch2 becomes Ch3/Ch4.
-- The View panel has five square channel color buttons. Loaded channels start gray; unloaded channels are black. Clicking a loaded channel opens six color swatches: green, red, yellow, blue, purple, and gray.
+- The View panel has five square channel color buttons. Loaded channels start gray; unloaded channels are black. Clicking a loaded channel opens six color swatches: green, red, yellow, blue, purple, and gray, plus a `Delete` button for removing that channel and shifting later channels forward.
 - Display and `Save Current Movie` remain grayscale while every loaded channel is gray. If any loaded channel is assigned a non-gray color, current-frame display, projection display, and save output are composed on demand from the current channel colors.
 - Movie-altering preprocessing operations are applied to each converted channel movie when present, and the analysis movie is recombined from the processed channels. This preserves red/green display after smoothing, background subtraction, bleach correction, contrast enhancement, built-in rigid motion, and undo.
 - CaImAn motion still operates on the analysis movie only; after it finishes, the result is treated as a single gray Ch1 movie unless a dedicated channel-aware CaImAn path is added later.
