@@ -2,6 +2,14 @@
 
 ## 2026-05-29
 
+### Source Launcher And Dist-Only EXE Build
+
+- Restored root `run_NewLight_Analysis.bat` to a source-only launcher: it runs `launch.py` from the project root, preferring `conda run -n caiman_latest python`, and no longer probes for packaged EXEs.
+- Updated `build_exe.bat` so portable build output is prepared directly under `dist\NewLight_Analysis`; packaged launchers are generated only inside `dist`, and `build_release` is no longer deleted/recreated by this build path.
+- Updated `build_full_release.bat` so full release launchers are generated separately instead of copying the root source launcher.
+- Rebuilt with `cmd /c build_exe.bat /nopause`; output is `dist\NewLight_Analysis\NewLight_Analysis.exe`.
+- Verified root launcher content is source-only, dist launcher content starts the packaged EXE, and `dist\NewLight_Analysis\check_backends.bat` passes bundled Python, NeuroSeg3, CaImAn, and DeepCAD-RT checks.
+
 ### Multi-Channel Grayscale Default And Optional Pseudocolor
 
 - Changed channel handling so loaded channels stay as grayscale channel movies by default; RGB pseudocolor is composed only for display or save when the user selects a non-gray channel color.

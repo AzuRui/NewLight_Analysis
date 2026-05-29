@@ -71,7 +71,6 @@ if errorlevel 1 (
 echo Cleaning previous build folders...
 if exist build rmdir /s /q build
 if exist dist rmdir /s /q dist
-if exist build_release rmdir /s /q build_release
 
 echo Running PyInstaller...
 %BUILD_PY% -m PyInstaller --noconfirm NewLight_Analysis.spec
@@ -89,24 +88,35 @@ if errorlevel 1 (
   exit /b 1
 )
 
-echo Preparing release folder...
-mkdir build_release
-xcopy /e /i /y dist\NewLight_Analysis build_release\NewLight_Analysis >nul
-copy /y check_backends.bat build_release\NewLight_Analysis\check_backends.bat >nul
-copy /y setup_caiman_latest.bat build_release\NewLight_Analysis\setup_caiman_latest.bat >nul
+echo Preparing dist release files...
+copy /y check_backends.bat dist\NewLight_Analysis\check_backends.bat >nul
+copy /y setup_caiman_latest.bat dist\NewLight_Analysis\setup_caiman_latest.bat >nul
 
-echo Writing release launcher...
-copy /y run_NewLight_Analysis.bat build_release\run_NewLight_Analysis.bat >nul
-copy /y run_NewLight_Analysis.bat build_release\NewLight_Analysis\run_NewLight_Analysis.bat >nul
+echo Writing dist launcher...
+(
+  echo @echo off
+  echo setlocal
+  echo cd /d "%%~dp0"
+  echo if not exist "NewLight_Analysis.exe" ^(
+  echo   echo NewLight_Analysis.exe was not found in:
+  echo   echo   %%CD%%
+  echo   pause
+  echo   exit /b 1
+  echo ^)
+  echo start "" "%%CD%%\NewLight_Analysis.exe"
+  echo endlocal
+) > dist\NewLight_Analysis\run_NewLight_Analysis.bat
 
 echo.
 echo Build complete:
-echo   %CD%\build_release\NewLight_Analysis\NewLight_Analysis.exe
+echo   %CD%\dist\NewLight_Analysis\NewLight_Analysis.exe
 echo.
 echo Notes:
+echo - Source run_NewLight_Analysis.bat always runs launch.py from the project root.
+echo - Packaged launch files are generated only under dist\NewLight_Analysis.
 echo - NewLight_Worker.exe is bundled under _internal for backend worker tasks.
 echo - NeuroSeg3 source/weights, NeuroAlign source, DeepCAD-RT source, and DeepCAD-RT model are bundled.
-echo - Run check_backends.bat inside the release folder on target machines.
+echo - Run check_backends.bat inside dist\NewLight_Analysis on target machines.
 echo.
 if "%PAUSE_ON_EXIT%"=="1" pause
 endlocal

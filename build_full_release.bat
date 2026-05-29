@@ -96,8 +96,33 @@ xcopy /e /i /y dist\NewLight_Analysis build_release\NewLight_Analysis >nul
 copy /y check_backends.bat build_release\NewLight_Analysis\check_backends.bat >nul
 copy /y setup_caiman_latest.bat build_release\NewLight_Analysis\setup_caiman_latest.bat >nul
 
-copy /y run_NewLight_Analysis.bat build_release\run_NewLight_Analysis.bat >nul
-copy /y run_NewLight_Analysis.bat build_release\NewLight_Analysis\run_NewLight_Analysis.bat >nul
+echo Writing portable release launchers...
+(
+  echo @echo off
+  echo setlocal
+  echo set "APP_DIR=%%~dp0NewLight_Analysis"
+  echo if not exist "%%APP_DIR%%\NewLight_Analysis.exe" set "APP_DIR=%%~dp0"
+  echo if not exist "%%APP_DIR%%\NewLight_Analysis.exe" ^(
+  echo   echo NewLight_Analysis.exe was not found.
+  echo   pause
+  echo   exit /b 1
+  echo ^)
+  echo start "" "%%APP_DIR%%\NewLight_Analysis.exe"
+  echo endlocal
+) > build_release\run_NewLight_Analysis.bat
+(
+  echo @echo off
+  echo setlocal
+  echo cd /d "%%~dp0"
+  echo if not exist "NewLight_Analysis.exe" ^(
+  echo   echo NewLight_Analysis.exe was not found in:
+  echo   echo   %%CD%%
+  echo   pause
+  echo   exit /b 1
+  echo ^)
+  echo start "" "%%CD%%\NewLight_Analysis.exe"
+  echo endlocal
+) > build_release\NewLight_Analysis\run_NewLight_Analysis.bat
 
 set "ISCC="
 where ISCC.exe >nul 2>nul
