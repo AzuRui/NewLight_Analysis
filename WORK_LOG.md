@@ -2,6 +2,18 @@
 
 ## 2026-06-30
 
+### Two-Photon Image Shift
+
+- Added automatic interlacing image-shift correction to two-photon folder / `.tdms` conversion.
+- The converter estimates the horizontal odd-line correction shift from Ch1 using a default `+/-10 px` search range and applies the same shift to all loaded channels.
+- Rebuilds the grayscale analysis movie from corrected channels so ROI, dF/F, heatmaps, and save/export use the corrected data.
+- Added a manual `Image Shift` button in the Preprocess tab for rerunning the correction on normal movies or already loaded channel movies.
+- Manual multi-channel correction also estimates from Ch1 and applies the same shift to all channels to avoid weak-channel noise causing inconsistent geometry.
+- Added `tests\test_interlacing_shift.py` for shift estimation, movie correction, and automatic two-photon conversion correction.
+- Added `tests\test_gui_static.py` to guard the Preprocess-tab `Image Shift` button.
+- Verified `conda run -n caiman_latest python -B -m unittest tests.test_interlacing_shift tests.test_two_photon_converter tests.test_baseline tests.test_stimulus_input tests.test_gui_static`.
+- Verified `conda run -n caiman_latest python -m py_compile NewLight_Analysis.py analysis_core.py tests\test_interlacing_shift.py tests\test_gui_static.py`.
+
 ### Workspace Cleanup
 
 - Removed local generated/build/cache/sample-data items from the project root:

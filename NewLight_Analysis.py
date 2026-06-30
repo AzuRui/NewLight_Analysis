@@ -1657,6 +1657,7 @@ class NewLightApp:
         buttons = [
             ("CaImAn Motion", self.caiman_motion),
             ("Rigid Motion (Built-in)", self.builtin_motion),
+            ("Image Shift", self.image_shift),
             ("Gaussian Smooth", self.gaussian_smooth),
             ("Median Filter", self.median_filter),
             ("Background Subtract", self.background_subtract),
@@ -2458,6 +2459,11 @@ class NewLightApp:
             f"{result.protocol.width}x{result.protocol.height}, {result.fs:.3g} Hz, channels={channels}. "
             "Default display/save is grayscale; use the View channel color buttons for pseudocolor."
         )
+        if getattr(result, "interlacing_search_range", 0):
+            self.log(
+                f"Two-photon Image Shift: estimated shift={int(result.interlacing_shift_px)} px "
+                f"(search +/-{int(result.interlacing_search_range)} px), applied to all channels."
+            )
 
     def open_stimulus(self):
         path = filedialog.askopenfilename(filetypes=[("Stimulus", "*.txt *.csv *.dat"), ("All files", "*.*")])
@@ -3134,6 +3140,44 @@ class NewLightApp:
 
     def enhance_contrast(self):
         self.apply_movie_operation("Enhance Contrast", core.enhance_contrast)
+
+    def image_shift(self):
+        vals = self.param_dialog("Image Shift", [("range", "Search range +/- px", 10)])
+        if not vals:
+            return
+        search_range = int(round(float(vals["range"])))
+        if search_range < 0:
+            messagebox.showerror("Image Shift", "Search range must be 0 or greater.")
+            return
+        if not self.require_movie():
+            return
+        try:
+            self.apply_protocol(update_baseline=False)
+            channel_movies = self.channel_movies()
+            source_movie = channel_movies[0] if channel_movies else self.state.movie
+            shift = core.estimate_interlacing_shift_from_movie(source_movie, search_range=search_range, row_parity="odd")
+            if shift == 0:
+                self.log(f"Image Shift: estimated shift=0 px; no correction applied.")
+                return
+            self.push_history("Image Shift")
+            if channel_movies:
+                for movie in channel_movies:
+                    core.apply_interlacing_shift_movie_inplace(movie, shift, row_parity="odd")
+                core.write_analysis_movie_from_channels(self.state.movie, channel_movies)
+                self._converted_frame_cache = (None, None, None)
+                self._converted_projection_cache = {}
+                self.log(f"Image Shift: estimated from Ch1, shift={int(shift)} px, applied to all channels.")
+            else:
+                self.state.movie = core.apply_interlacing_shift_movie(self.state.movie, shift, row_parity="odd")
+                self.log(f"Image Shift: estimated shift={int(shift)} px.")
+            self.clear_deepcad_cache()
+            self.recompute_baseline_image()
+            self.update_frame_controls()
+            self.update_channel_color_buttons()
+            self.refresh_projection(preserve_view=False)
+        except Exception as exc:
+            traceback.print_exc()
+            messagebox.showerror("Image Shift", str(exc))
 
     def builtin_motion(self):
         vals = self.param_dialog("Rigid Motion", [("frames", "Template frames", 100)])

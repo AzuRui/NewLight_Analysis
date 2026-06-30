@@ -112,6 +112,8 @@ class ConvertedTwoPhotonMovie:
     protocol: TwoPhotonProtocol
     frames: int
     channel_count: int
+    interlacing_shift_px: int = 0
+    interlacing_search_range: int = 0
 
 
 @dataclass(frozen=True)
@@ -545,6 +547,7 @@ def convert_two_photon_folder_to_movie(
     folder: str | Path,
     output_dir: str | Path,
     progress=None,
+    interlacing_search_range: int = 10,
 ) -> ConvertedTwoPhotonMovie:
     folder = Path(folder)
     output_dir = Path(output_dir)
@@ -591,6 +594,19 @@ def convert_two_photon_folder_to_movie(
         for ch_movie in channel_movies:
             ch_movie.flush()
 
+    interlacing_search = max(0, int(round(float(interlacing_search_range))))
+    interlacing_shift = 0
+    if interlacing_search > 0 and channel_movies:
+        interlacing_shift = estimate_interlacing_shift_from_movie(
+            channel_movies[0],
+            search_range=interlacing_search,
+            row_parity="odd",
+        )
+        if interlacing_shift != 0:
+            for ch_movie in channel_movies:
+                apply_interlacing_shift_movie_inplace(ch_movie, interlacing_shift, row_parity="odd")
+            write_analysis_movie_from_channels(movie, channel_movies)
+
     return ConvertedTwoPhotonMovie(
         movie=movie,
         channel_movies=tuple(channel_movies),
@@ -601,6 +617,8 @@ def convert_two_photon_folder_to_movie(
         protocol=protocol,
         frames=frame_count,
         channel_count=channel_count,
+        interlacing_shift_px=int(interlacing_shift),
+        interlacing_search_range=int(interlacing_search),
     )
 
 
@@ -953,6 +971,146 @@ def compute_dff(movie: np.ndarray, baseline: np.ndarray | None = None, accelerat
         baseline_gpu = cp.asarray(baseline, dtype=cp.float32)
         return cp.asnumpy((movie_gpu - baseline_gpu[None, :, :]) / (baseline_gpu[None, :, :] + 1e-6)).astype(np.float32)
     return ((movie - baseline[None, :, :]) / (baseline[None, :, :] + 1e-6)).astype(np.float32)
+
+
+def _interlacing_row_start(row_parity: str) -> int:
+    key = str(row_parity or "odd").strip().lower()
+    return 0 if key in {"even", "0"} else 1
+
+
+def _shift_2d_rows(rows: np.ndarray, shift_px: int) -> np.ndarray:
+    rows = np.asarray(rows)
+    shift = int(round(float(shift_px)))
+    out = np.zeros_like(rows)
+    if shift == 0:
+        out[...] = rows
+    elif shift > 0:
+        if shift < rows.shape[1]:
+            out[:, shift:] = rows[:, :-shift]
+    else:
+        shift = abs(shift)
+        if shift < rows.shape[1]:
+            out[:, :-shift] = rows[:, shift:]
+    return out
+
+
+def apply_interlacing_shift_image(image: np.ndarray, shift_px: int, row_parity: str = "odd") -> np.ndarray:
+    arr = np.asarray(image)
+    if arr.ndim != 2:
+        raise ValueError(f"Expected a 2D image, got shape {arr.shape}")
+    shift = int(round(float(shift_px)))
+    out = arr.copy()
+    if shift == 0:
+        return out
+    row_start = _interlacing_row_start(row_parity)
+    out[row_start::2, :] = _shift_2d_rows(arr[row_start::2, :], shift)
+    return out
+
+
+def apply_interlacing_shift_movie(movie: np.ndarray, shift_px: int, row_parity: str = "odd") -> np.ndarray:
+    arr = np.asarray(movie)
+    if arr.ndim != 3:
+        raise ValueError(f"Expected a 3D movie stack, got shape {arr.shape}")
+    shift = int(round(float(shift_px)))
+    out = np.empty_like(arr, dtype=np.float32)
+    for frame_idx, frame in enumerate(arr):
+        out[frame_idx] = apply_interlacing_shift_image(frame, shift, row_parity=row_parity)
+    return out.astype(np.float32, copy=False)
+
+
+def apply_interlacing_shift_movie_inplace(movie: np.ndarray, shift_px: int, row_parity: str = "odd", progress=None) -> None:
+    arr = np.asarray(movie)
+    if arr.ndim != 3:
+        raise ValueError(f"Expected a 3D movie stack, got shape {arr.shape}")
+    shift = int(round(float(shift_px)))
+    if shift == 0:
+        return
+    for frame_idx in range(arr.shape[0]):
+        arr[frame_idx] = apply_interlacing_shift_image(arr[frame_idx], shift, row_parity=row_parity)
+        if progress is not None:
+            progress(frame_idx + 1, arr.shape[0])
+    flush = getattr(movie, "flush", None)
+    if callable(flush):
+        flush()
+
+
+def estimate_interlacing_shift(image: np.ndarray, search_range: int = 10, row_parity: str = "odd") -> int:
+    arr = np.asarray(image, dtype=np.float32)
+    if arr.ndim != 2:
+        raise ValueError(f"Expected a 2D image, got shape {arr.shape}")
+    h, w = arr.shape
+    if h < 4 or w < 8:
+        return 0
+    search = max(0, int(round(float(search_range))))
+    search = min(search, max(0, w // 4))
+    if search <= 0:
+        return 0
+    row_start = _interlacing_row_start(row_parity)
+    rows = np.arange(row_start, h, 2, dtype=int)
+    rows = rows[(rows > 0) & (rows < h - 1)]
+    if rows.size == 0:
+        return 0
+    target = (arr[rows - 1, :] + arr[rows + 1, :]) * 0.5
+    source = arr[rows, :]
+    margin = min(max(search + 2, 2), max(0, (w - 4) // 2))
+    col_slice = slice(margin, w - margin) if w - 2 * margin >= 4 else slice(0, w)
+    target = target[:, col_slice]
+    best_shift = 0
+    best_score = -np.inf
+    for shift in range(-search, search + 1):
+        shifted = _shift_2d_rows(source, shift)[:, col_slice]
+        valid = np.isfinite(shifted) & np.isfinite(target)
+        if np.count_nonzero(valid) < 8:
+            continue
+        a = shifted[valid].astype(np.float64, copy=False)
+        b = target[valid].astype(np.float64, copy=False)
+        a -= float(a.mean())
+        b -= float(b.mean())
+        denom = float(np.linalg.norm(a) * np.linalg.norm(b))
+        score = float(np.dot(a, b) / denom) if denom > 0 else -np.inf
+        if score > best_score + 1e-9 or (abs(score - best_score) <= 1e-9 and abs(shift) < abs(best_shift)):
+            best_score = score
+            best_shift = shift
+    return int(best_shift)
+
+
+def estimate_interlacing_shift_from_movie(
+    movie: np.ndarray,
+    search_range: int = 10,
+    row_parity: str = "odd",
+    max_frames: int = 200,
+) -> int:
+    arr = np.asarray(movie)
+    if arr.ndim != 3:
+        raise ValueError(f"Expected a 3D movie stack, got shape {arr.shape}")
+    n_frames = arr.shape[0]
+    if n_frames <= 0:
+        return 0
+    sample_count = min(max(1, int(max_frames)), n_frames)
+    indices = np.linspace(0, n_frames - 1, sample_count, dtype=int)
+    projection = np.zeros(arr.shape[1:], dtype=np.float64)
+    for idx in indices:
+        projection += np.asarray(arr[int(idx)], dtype=np.float32)
+    projection /= float(sample_count)
+    return estimate_interlacing_shift(projection.astype(np.float32), search_range=search_range, row_parity=row_parity)
+
+
+def write_analysis_movie_from_channels(movie: np.ndarray, channel_movies: tuple[np.ndarray, ...] | list[np.ndarray]) -> None:
+    channels = [np.asarray(channel) for channel in channel_movies if channel is not None]
+    if not channels:
+        raise ValueError("No channel movies were provided")
+    target = np.asarray(movie)
+    if any(channel.shape != target.shape for channel in channels):
+        shapes = ", ".join(str(channel.shape) for channel in channels)
+        raise ValueError(f"Channel movies must match analysis movie shape {target.shape}, got: {shapes}")
+    for frame_idx in range(target.shape[0]):
+        if len(channels) == 1:
+            target[frame_idx] = channels[0][frame_idx]
+        else:
+            target[frame_idx] = np.maximum.reduce([channel[frame_idx] for channel in channels])
+    flush = getattr(movie, "flush", None)
+    if callable(flush):
+        flush()
 
 
 def available_neuroseg3_weights() -> list[str]:
