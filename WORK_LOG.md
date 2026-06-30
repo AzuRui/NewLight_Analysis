@@ -2,6 +2,13 @@
 
 ## 2026-06-30
 
+### Portable EXE Rebuild
+
+- Rebuilt the portable app with `cmd /c build_exe.bat /nopause`.
+- Output folder: `E:\WorkSpace\NewLight_Analysis\dist\NewLight_Analysis`.
+- Verified `dist\NewLight_Analysis\check_backends.bat`: bundled Python imports OK; NeuroSeg3 real model smoke OK; CaImAn and DeepCAD-RT backend entry checks OK.
+- Confirmed bundled runtime resources include `_internal\NewLight_Worker.exe`, `DeepCADRT_Model\E_02_Iter_6416.pth`, NeuroSeg3 `yolov8s-seg.pt`, DeepCAD-RT source, NeuroAlign source, and worker scripts.
+
 ### External Stimulus Input Sampling Rate
 
 - Inspected `E:\WorkSpace\NewLight_Analysis\2\data_user input.txt`: it has four tab-separated columns (`E-phys`, `Respiration`, `Stim. Marker`, `(empty)`) and 3,120,000 numeric samples.
