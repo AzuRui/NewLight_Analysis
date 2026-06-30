@@ -23,6 +23,7 @@ import numpy as np
 from PIL import Image, ImageTk
 
 import analysis_core as core
+import ui_background
 
 
 THEME = {
@@ -1557,12 +1558,14 @@ class NewLightApp:
         self.user_settings = load_user_settings()
         self.last_atlas_reference_json = ""
         self.last_neuroalign_output_dir = ""
+        self.window_background = None
         self._build_ui()
         self._poll_worker()
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
         self.root.after(600, self.check_cuda_status_quick)
 
     def _build_ui(self):
+        self.window_background = ui_background.WindowBackground(self.root, APP_DIR / "background.png")
         self.root.configure(bg=THEME["bg"])
         self.root.columnconfigure(1, weight=1)
         self.root.rowconfigure(0, weight=1)

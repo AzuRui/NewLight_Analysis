@@ -2,6 +2,16 @@
 
 ## 2026-06-30
 
+### Window Background Image
+
+- Added a full-window background layer using `background.png` at the project root.
+- The background now fills the entire application window using centered cover-crop resizing, so the image preserves aspect ratio while filling the available space.
+- Added a dedicated `ui_background.py` helper to keep the resize/crop logic isolated from the main GUI file.
+- Bundling now includes `background.png` in `NewLight_Analysis.spec` so the packaged EXE keeps the same window background.
+- Added regression coverage in `tests\test_background_image.py` for cover-crop behavior and background-path lookup.
+- Verified `conda run -n caiman_latest python -B -m unittest tests.test_background_image tests.test_gui_static`.
+- Verified `conda run -n caiman_latest python -m py_compile NewLight_Analysis.py ui_background.py tests\test_background_image.py`.
+
 ### Two-Photon Image Shift
 
 - Added automatic interlacing image-shift correction to two-photon folder / `.tdms` conversion.

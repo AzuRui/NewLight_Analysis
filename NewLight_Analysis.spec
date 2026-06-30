@@ -76,6 +76,7 @@ hiddenimports += collect_submodules('ultralytics')
 cuda_binaries = collect_conda_cuda_runtime_dlls()
 datas = [
     ('xhr.ico', '.'),
+    ('background.png', '.'),
     ('README.md', '.'),
     ('DESIGN_NOTES.md', '.'),
     ('PACKAGING.md', '.'),
