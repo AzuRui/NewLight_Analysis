@@ -394,6 +394,29 @@ Sample validation:
 
 ## Workspace Cleanup State
 
+The latest cleanup was performed on 2026-06-30.
+
+Removed from the project root:
+
+- `build`
+- `build_release`
+- root/source `__pycache__` folders
+- `.codegraph`
+- local sample dataset folder `2`
+- local sample archive `Example.zip`
+
+Preserved items:
+
+- source files, tests, workers, bundled compatibility modules, DeepCADRT model files, PyInstaller/Inno Setup scripts, project documentation, git metadata, and the current `dist\NewLight_Analysis` portable release folder
+- external development dependencies under `E:\WorkSpace`, including `2cafe_analysis`, `DeepCAD-RT`, `CaImAn`, `NeuroSeg3`, and the external two-photon converter reference folder
+
+Notes:
+
+- `dist\NewLight_Analysis` is intentionally kept because it is the latest portable build for other-computer testing and accounts for most of the remaining project size.
+- If the user later wants a strict source-only tree, confirm first and then move or delete `dist\NewLight_Analysis`.
+- `.codegraph`, `2`, and `Example.zip` are now ignored if recreated locally.
+- The old tracked manual files under `dist\NewLight_Analysis` were already deleted in the working tree before this cleanup and were left in that state.
+
 A conservative cleanup was performed on 2026-05-21. No files were permanently deleted. Generated/cache/runtime folders were moved out of the workspace to:
 
 ```text

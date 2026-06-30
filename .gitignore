@@ -11,6 +11,7 @@ env/
 # IDE / local editor state
 .idea/
 .vscode/
+.codegraph/
 
 # Build and packaging outputs
 build/
@@ -36,6 +37,8 @@ tmp/
 *.tiff
 *.npz
 *.npy
+2/
+Example.zip
 
 # OS metadata
 Thumbs.db

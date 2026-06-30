@@ -2,6 +2,20 @@
 
 ## 2026-06-30
 
+### Workspace Cleanup
+
+- Removed local generated/build/cache/sample-data items from the project root:
+  - `build` (~414 MB)
+  - `build_release` (~4.2 GB)
+  - root/source `__pycache__` folders
+  - `.codegraph`
+  - local sample dataset folder `2` (~4.9 GB)
+  - local sample archive `Example.zip` (~106 MB)
+- Preserved source files, tests, workers, packaging scripts, DeepCADRT model files, git metadata, and the current portable release at `dist\NewLight_Analysis`.
+- Left `dist\NewLight_Analysis` intact because it is the latest portable build for other-computer testing.
+- Updated `.gitignore` to ignore `.codegraph`, the local sample dataset folder `2`, and `Example.zip` if they reappear.
+- Left the pre-existing tracked deletion state for old `dist\NewLight_Analysis` manual files unchanged.
+
 ### Portable EXE Rebuild
 
 - Rebuilt the portable app with `cmd /c build_exe.bat /nopause`.
