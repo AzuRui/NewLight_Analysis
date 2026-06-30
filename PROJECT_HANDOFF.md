@@ -263,6 +263,14 @@ The old Data-tab `Export Analysis` one-shot report button has been removed. The 
 
 Stimulus-response analysis now lives in the Analysis tab as `Stimulus Event Average`.
 
+Stimulus input loading details:
+
+- `Open Stimulus` uses `analysis_core.read_stimulus_file_info(...)`.
+- Text/CSV stimulus files may be single-column numeric files or multi-column files with headers, such as two-photon `data_user input.txt`.
+- For multi-column inputs, the loader scores columns by pulse-like TTL behavior and gives a small name bonus for labels containing `stim`, `trigger`, `marker`, or `ttl`. This avoids blindly selecting `Stim. Marker` when another column has the actual high-voltage trigger pulses.
+- If the stimulus file is in a two-photon folder with `protocol*.txt`, the loader infers `Stim Hz` as `numeric sample count / Recording time` and writes that value into the Protocol `Stim Hz` field. Users can still override it manually if the protocol timing is not valid.
+- In the inspected sample `E:\WorkSpace\NewLight_Analysis\2`, `data_user input.txt` has 3,120,000 samples and protocol recording time is 130 s, giving 24,000 Hz. The selected trigger column is `E-phys`, and 30 pulses map to 40 Hz video frames starting near 88, 208, 329, ...
+
 Expected workflow:
 
 1. Load a movie.

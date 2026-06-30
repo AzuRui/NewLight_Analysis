@@ -2464,8 +2464,14 @@ class NewLightApp:
         if not path:
             return
         try:
-            self.state.stimulus = core.read_stimulus_file(path)
-            self.log(f"Loaded stimulus {Path(path).name}: {self.state.stimulus.size} points")
+            info = core.read_stimulus_file_info(path)
+            self.state.stimulus = info.signal
+            if info.fs is not None and info.fs > 0:
+                self.state.stimulus_fs = float(info.fs)
+                self.stim_fs_var.set(f"{info.fs:.6g}")
+            column = f", column={info.column_name}" if info.column_name else ""
+            fs_note = f", Stim Hz={self.state.stimulus_fs:.6g}" if self.state.stimulus_fs > 0 else ""
+            self.log(f"Loaded stimulus {Path(path).name}: {self.state.stimulus.size} points{column}{fs_note}")
         except Exception as exc:
             messagebox.showerror("Stimulus open failed", str(exc))
 

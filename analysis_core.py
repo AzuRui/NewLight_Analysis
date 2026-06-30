@@ -114,6 +114,15 @@ class ConvertedTwoPhotonMovie:
     channel_count: int
 
 
+@dataclass(frozen=True)
+class StimulusFileData:
+    signal: np.ndarray
+    fs: float | None = None
+    column_name: str = ""
+    columns: tuple[str, ...] = field(default_factory=tuple)
+    sample_count: int = 0
+
+
 def get_cupy():
     global _CUPY_CACHE
     if _CUPY_CACHE is False:
@@ -623,6 +632,123 @@ def read_stimulus_file(path: str) -> np.ndarray:
         raise ValueError(f"Unsupported stimulus file: {ext}")
     data = np.asarray(data, dtype=np.float32).reshape(-1)
     return data[np.isfinite(data)]
+
+
+def _line_has_text_header(line: str) -> bool:
+    parts = re.split(r"[\t,; ]+", line.strip())
+    parts = [part for part in parts if part]
+    if not parts:
+        return False
+    numeric = 0
+    for part in parts:
+        try:
+            float(part)
+            numeric += 1
+        except Exception:
+            pass
+    return numeric < len(parts)
+
+
+def _count_numeric_rows(path: Path) -> int:
+    count = 0
+    with path.open("rb") as f:
+        first = f.readline()
+        try:
+            first_text = first.decode("utf-8", "ignore")
+        except Exception:
+            first_text = ""
+        header = _line_has_text_header(first_text)
+        if first and not header:
+            count += 1
+        for chunk in iter(lambda: f.read(1024 * 1024 * 8), b""):
+            count += chunk.count(b"\n")
+    return max(0, count)
+
+
+def infer_stimulus_fs_from_folder(path: str | Path, sample_count: int) -> float | None:
+    if sample_count <= 0:
+        return None
+    folder = Path(path).parent
+    try:
+        protocol = read_two_photon_protocol(folder)
+    except Exception:
+        return None
+    if protocol.recording_time_s <= 0:
+        return None
+    fs = float(sample_count) / float(protocol.recording_time_s)
+    return fs if fs > 0 else None
+
+
+def _score_stimulus_column(values: np.ndarray) -> float:
+    col = np.asarray(values, dtype=np.float32)
+    finite = col[np.isfinite(col)]
+    if finite.size < 3:
+        return -np.inf
+    p1, p5, p50, p95, p99, p999 = np.percentile(finite, [1, 5, 50, 95, 99, 99.9])
+    pulse_strength = float(max(p999 - p50, p99 - p50, 0.0))
+    tail_jump = float(max(p999 - p99, p99 - p95, p95 - p50, 0.0))
+    noise = float(max(np.median(np.abs(finite - p50)) * 1.4826, (p95 - p5) / 3.29, np.finfo(np.float32).eps))
+    if pulse_strength <= 0 or noise <= 0:
+        return -np.inf
+    auto_thr = max(float(p50 + 5.0 * noise), float(p99))
+    above = col > auto_thr
+    edge_count = int(np.count_nonzero(np.diff(np.concatenate(([False], above, [False])).astype(np.int8)) == 1))
+    duty = float(np.mean(above))
+    duty_penalty = 0.0 if 0.0001 <= duty <= 0.25 else 25.0
+    return pulse_strength * 100.0 + tail_jump * 50.0 + np.log1p(pulse_strength / noise) * 5.0 + min(edge_count, 500) * 0.25 - duty_penalty
+
+
+def _best_stimulus_column(data: np.ndarray, columns: tuple[str, ...]) -> int:
+    if data.ndim == 1:
+        return 0
+    lower_names = [name.strip().lower() for name in columns]
+    scores = [_score_stimulus_column(data[:, idx]) for idx in range(data.shape[1])]
+    for idx, name in enumerate(lower_names):
+        if any(keyword in name for keyword in ("stim", "trigger", "marker", "ttl")):
+            scores[idx] += 1.0
+    return int(np.nanargmax(scores))
+
+
+def read_stimulus_file_info(path: str | Path) -> StimulusFileData:
+    path = Path(path)
+    ext = path.suffix.lower()
+    if ext == ".csv":
+        df = pd.read_csv(path)
+        numeric = df.select_dtypes(include=[np.number])
+        if numeric.empty:
+            raise ValueError("Stimulus CSV does not contain numeric columns")
+        data2 = numeric.to_numpy(dtype=np.float32)
+        columns = tuple(str(col) for col in numeric.columns)
+        col_idx = _best_stimulus_column(data2, columns)
+        signal_data = data2[:, col_idx]
+        sample_count = int(data2.shape[0])
+        fs = infer_stimulus_fs_from_folder(path, sample_count)
+        return StimulusFileData(signal=signal_data[np.isfinite(signal_data)], fs=fs, column_name=columns[col_idx], columns=columns, sample_count=sample_count)
+    if ext in {".txt", ".dat"}:
+        with path.open("r", encoding="utf-8", errors="replace") as f:
+            first_line = f.readline()
+        has_header = _line_has_text_header(first_line)
+        delimiter = "\t" if "\t" in first_line else None
+        data = np.loadtxt(path, dtype=np.float32, skiprows=1 if has_header else 0, delimiter=delimiter)
+        arr = np.asarray(data, dtype=np.float32)
+        if arr.ndim == 1:
+            signal_data = arr
+            columns = ()
+            col_idx = 0
+        else:
+            columns = tuple(part.strip() for part in re.split(r"\t|,", first_line.strip()) if part.strip()) if has_header else tuple(f"Column {i + 1}" for i in range(arr.shape[1]))
+            if len(columns) < arr.shape[1]:
+                columns = tuple(list(columns) + [f"Column {i + 1}" for i in range(len(columns), arr.shape[1])])
+            col_idx = _best_stimulus_column(arr, columns)
+            signal_data = arr[:, col_idx]
+        sample_count = int(arr.shape[0])
+        fs = infer_stimulus_fs_from_folder(path, sample_count)
+        column_name = columns[col_idx] if columns else ""
+        finite_signal = signal_data[np.isfinite(signal_data)]
+        return StimulusFileData(signal=finite_signal.astype(np.float32), fs=fs, column_name=column_name, columns=columns, sample_count=sample_count)
+    signal_data = read_stimulus_file(str(path))
+    fs = infer_stimulus_fs_from_folder(path, signal_data.size)
+    return StimulusFileData(signal=signal_data, fs=fs, sample_count=int(signal_data.size))
 
 
 def save_movie_tiff(movie: np.ndarray, path: str) -> None:

@@ -1,5 +1,16 @@
 # Work Log
 
+## 2026-06-30
+
+### External Stimulus Input Sampling Rate
+
+- Inspected `E:\WorkSpace\NewLight_Analysis\2\data_user input.txt`: it has four tab-separated columns (`E-phys`, `Respiration`, `Stim. Marker`, `(empty)`) and 3,120,000 numeric samples.
+- Read the same folder's protocol recording time as 130 s, so the external input sampling rate is inferred as 24,000 Hz for this dataset.
+- Updated stimulus loading to handle multi-column text/CSV files with headers, automatically select the most pulse-like TTL column, and infer `Stim Hz` from the folder protocol when possible.
+- For the inspected dataset, the selected column is `E-phys`; trigger detection finds 30 pulses starting at sample 53,029, mapping to video frames 88, 208, 329, ... at 40 Hz.
+- Added regression coverage for multi-column `data_user input.txt`-style files, column selection, inferred stimulus sampling rate, and trigger detection.
+- Verified Python compilation and `python -m unittest tests.test_stimulus_input tests.test_two_photon_converter tests.test_baseline`.
+
 ## 2026-05-29
 
 ### Source Launcher And Dist-Only EXE Build
