@@ -13,6 +13,19 @@ class GuiStaticTests(unittest.TestCase):
             source.index('("Image Shift", self.image_shift)'),
         )
 
+    def test_main_surfaces_render_background_image_themselves(self):
+        source = Path("NewLight_Analysis.py").read_text(encoding="utf-8")
+
+        self.assertIn("side = ui_background.BackgroundPane", source)
+        self.assertIn("main = ui_background.BackgroundPane", source)
+
+    def test_empty_preview_draws_window_background(self):
+        source = Path("NewLight_Analysis.py").read_text(encoding="utf-8")
+
+        self.assertIn("def draw_empty_preview_background", source)
+        self.assertIn("self.draw_empty_preview_background()", source)
+        self.assertIn("self.redraw(preserve_view=False)", source)
+
 
 if __name__ == "__main__":
     unittest.main()

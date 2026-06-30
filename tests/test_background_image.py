@@ -34,6 +34,9 @@ class BackgroundImageTests(unittest.TestCase):
 
             self.assertEqual(result, found)
 
+    def test_background_pane_symbol_is_available_for_visible_ui_surfaces(self):
+        self.assertTrue(hasattr(ui_background, "BackgroundPane"))
+
 
 if __name__ == "__main__":
     unittest.main()

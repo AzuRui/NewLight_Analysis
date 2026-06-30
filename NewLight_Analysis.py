@@ -1560,6 +1560,7 @@ class NewLightApp:
         self.last_neuroalign_output_dir = ""
         self.window_background = None
         self._build_ui()
+        self.redraw(preserve_view=False)
         self._poll_worker()
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
         self.root.after(600, self.check_cuda_status_quick)
@@ -1570,14 +1571,20 @@ class NewLightApp:
         self.root.columnconfigure(1, weight=1)
         self.root.rowconfigure(0, weight=1)
 
-        side = ttk.Frame(self.root, padding=10, style="Sidebar.TFrame")
+        side = ui_background.BackgroundPane(
+            self.root,
+            APP_DIR / "background.png",
+            fallback_bg=THEME["panel"],
+            overlay_color=THEME["panel"],
+            overlay_alpha=0.45,
+        )
         side.grid(row=0, column=0, sticky="ns")
         side.columnconfigure(0, weight=1)
 
-        StarfieldCanvas(side).grid(row=0, column=0, sticky="ew", pady=(0, 12))
+        StarfieldCanvas(side).grid(row=0, column=0, sticky="ew", padx=10, pady=(10, 12))
 
         tabs = ttk.Notebook(side)
-        tabs.grid(row=1, column=0, sticky="nsew")
+        tabs.grid(row=1, column=0, sticky="nsew", padx=10, pady=(0, 10))
         flow_tab = ttk.Frame(tabs, padding=4)
         pre_tab = ttk.Frame(tabs, padding=4)
         roi_tab = ttk.Frame(tabs, padding=4)
@@ -1710,7 +1717,13 @@ class NewLightApp:
         ttk.Button(export_box, text="Export ROI Snapshot", command=self.export_roi_snapshot).grid(row=5, column=0, sticky="ew", pady=2)
         ttk.Button(export_box, text="Export Summary JSON", command=self.export_summary_json).grid(row=6, column=0, sticky="ew", pady=2)
 
-        main = ttk.Frame(self.root, padding=(0, 10, 10, 10), style="Work.TFrame")
+        main = ui_background.BackgroundPane(
+            self.root,
+            APP_DIR / "background.png",
+            fallback_bg=THEME["bg"],
+            overlay_color=THEME["bg"],
+            overlay_alpha=0.32,
+        )
         main.grid(row=0, column=1, sticky="nsew")
         main.columnconfigure(0, weight=1)
         main.rowconfigure(0, weight=1)
@@ -1726,7 +1739,7 @@ class NewLightApp:
         self.ax.callbacks.connect("ylim_changed", self._on_axes_limits_changed)
         self.canvas = FigureCanvasTkAgg(self.fig, master=main)
         self.canvas.get_tk_widget().configure(bg="#020617", highlightthickness=1, highlightbackground=THEME["border"])
-        self.canvas.get_tk_widget().grid(row=0, column=0, sticky="nsew")
+        self.canvas.get_tk_widget().grid(row=0, column=0, sticky="nsew", padx=(0, 10), pady=(10, 0))
         self.canvas.mpl_connect("resize_event", self.on_canvas_resize)
         self.nav_toolbar = ImageToolbar(self.canvas, main, pack_toolbar=False)
         self.nav_toolbar.configure(background=THEME["panel"])
@@ -1740,10 +1753,10 @@ class NewLightApp:
             self.nav_toolbar._message_label.configure(background=THEME["panel"], foreground="#ffffff")
         except tk.TclError:
             pass
-        self.nav_toolbar.grid(row=1, column=0, sticky="ew")
+        self.nav_toolbar.grid(row=1, column=0, sticky="ew", padx=(0, 10))
 
         bottom = ttk.Frame(main, style="Toolbar.TFrame")
-        bottom.grid(row=2, column=0, sticky="ew", pady=(6, 0))
+        bottom.grid(row=2, column=0, sticky="ew", padx=(0, 10), pady=(6, 0))
         bottom.columnconfigure(9, weight=1)
         ttk.Button(bottom, text="Undo", command=self.undo).grid(row=0, column=0, padx=3)
         ttk.Radiobutton(bottom, text="Inspect", variable=self.mode, value="inspect").grid(row=0, column=1, padx=3)
@@ -1755,7 +1768,7 @@ class NewLightApp:
         ttk.Label(bottom, textvariable=self.status).grid(row=0, column=9, sticky="e")
 
         frame_bar = ttk.Frame(main, style="Toolbar.TFrame")
-        frame_bar.grid(row=3, column=0, sticky="ew", pady=(6, 0))
+        frame_bar.grid(row=3, column=0, sticky="ew", padx=(0, 10), pady=(6, 0))
         frame_bar.columnconfigure(1, weight=1)
         ttk.Label(frame_bar, text="Frame").grid(row=0, column=0, padx=(0, 6))
         self.frame_scale = ttk.Scale(frame_bar, from_=0, to=0, orient="horizontal", command=self.on_frame_slider)
@@ -1763,7 +1776,7 @@ class NewLightApp:
         ttk.Label(frame_bar, textvariable=self.frame_label_var, width=14).grid(row=0, column=2, padx=(6, 0))
 
         log_box = ttk.LabelFrame(main, text="Run Log", padding=4)
-        log_box.grid(row=4, column=0, sticky="ew", pady=(8, 0))
+        log_box.grid(row=4, column=0, sticky="ew", padx=(0, 10), pady=(8, 10))
         self.log_text = tk.Text(log_box, height=7, wrap="word")
         self.log_text.configure(bg=THEME["entry"], fg=THEME["text"], insertbackground=THEME["accent"], relief="flat", highlightthickness=1, highlightbackground=THEME["border"])
         self.log_text.pack(fill="both", expand=True)
@@ -1777,7 +1790,7 @@ class NewLightApp:
         if self.state.display_image is not None or self.state.baseline_image is not None:
             self.redraw(preserve_view=True)
         else:
-            self.canvas.draw_idle()
+            self.redraw(preserve_view=False)
 
     def update_frame_controls(self):
         if self.state.movie is None:
@@ -2688,6 +2701,8 @@ class NewLightApp:
                 self.ax.set_ylim(*view_limits[1])
             finally:
                 self._view_lock = False
+        else:
+            self.draw_empty_preview_background()
         if extra is not None:
             self.ax.imshow(extra, alpha=0.55, interpolation="nearest", origin="upper", aspect="auto")
         if self.current_polygon:
@@ -2696,6 +2711,26 @@ class NewLightApp:
             if len(self.current_polygon) >= 3 and not self.freehand_drawing:
                 self.ax.plot([xs[-1], xs[0]], [ys[-1], ys[0]], color="cyan", linewidth=1.0, linestyle="--")
         self.canvas.draw_idle()
+
+    def draw_empty_preview_background(self):
+        path = ui_background.default_background_path()
+        if path is None:
+            return
+        try:
+            widget = self.canvas.get_tk_widget()
+            width = max(2, int(widget.winfo_width()))
+            height = max(2, int(widget.winfo_height()))
+            if width <= 2 or height <= 2:
+                width, height = 900, 650
+            with Image.open(path) as src:
+                fitted = ui_background.cover_crop_image(src, (width, height))
+            fitted = ui_background.tint_image(fitted, THEME["bg"], 0.18)
+            self.ax.set_position([0, 0, 1, 1])
+            self.ax.imshow(np.asarray(fitted), origin="upper", aspect="auto")
+            self.ax.set_xlim(-0.5, width - 0.5)
+            self.ax.set_ylim(height - 0.5, -0.5)
+        except Exception:
+            pass
 
     def on_press(self, event):
         if event.inaxes == self.ax and event.xdata is not None and event.ydata is not None:

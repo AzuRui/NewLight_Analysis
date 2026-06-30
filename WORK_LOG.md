@@ -572,3 +572,13 @@
 - Verified `conda run -n caiman_latest python -m py_compile NewLight_Analysis.py analysis_core.py`.
 - Rebuilt the portable app with `cmd /c build_exe.bat /nopause`; output is `build_release\NewLight_Analysis\NewLight_Analysis.exe`.
 - Verified bundled `check_backends.bat` still passes and bundled `analysis_core` exposes the new pseudocolor display helper.
+
+### Source UI Background Visibility Fix
+
+- Diagnosed why launching with `run_NewLight_Analysis.bat` appeared unchanged after adding `background.png`: the batch launcher was correctly running `launch.py` from source, but Tk/ttk frames, notebooks, label frames, and the Matplotlib preview canvas are opaque and covered the root-level background layer.
+- Added `ui_background.BackgroundPane`, a reusable `tk.Frame` subclass that renders `background.png` directly inside large visible panes with centered cover-crop resizing and optional dark tinting for readability.
+- Changed the left sidebar and right work area from opaque `ttk.Frame` containers to `BackgroundPane`, preserving the existing margins and control layout.
+- Added an empty-preview background renderer so the large video display area also shows the selected background image before a movie is loaded; startup and resize now call `redraw(preserve_view=False)` when there is no movie image.
+- Added regression checks in `tests\test_background_image.py` and `tests\test_gui_static.py` so future UI changes keep visible background panes and the empty preview background.
+- Verified `conda run -n caiman_latest python -B -m unittest tests.test_background_image tests.test_gui_static`.
+- Verified `conda run -n caiman_latest python -m py_compile NewLight_Analysis.py ui_background.py tests\test_background_image.py tests\test_gui_static.py`.
