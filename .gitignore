@@ -37,6 +37,9 @@ tmp/
 *.tiff
 *.npz
 *.npy
+
+# Protected local validation samples.
+# Ignored by Git, but do not delete/move during cleanup unless the user explicitly asks.
 2/
 Example.zip
 

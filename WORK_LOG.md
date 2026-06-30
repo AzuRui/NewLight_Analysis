@@ -15,6 +15,7 @@
 - Left `dist\NewLight_Analysis` intact because it is the latest portable build for other-computer testing.
 - Updated `.gitignore` to ignore `.codegraph`, the local sample dataset folder `2`, and `Example.zip` if they reappear.
 - Left the pre-existing tracked deletion state for old `dist\NewLight_Analysis` manual files unchanged.
+- Correction after user feedback: validation sample data must be treated as protected. Future cleanup must not delete or move any validation samples, even when they are untracked or large, unless the user explicitly names them for removal.
 
 ### Portable EXE Rebuild
 

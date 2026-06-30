@@ -415,6 +415,7 @@ Notes:
 - `dist\NewLight_Analysis` is intentionally kept because it is the latest portable build for other-computer testing and accounts for most of the remaining project size.
 - If the user later wants a strict source-only tree, confirm first and then move or delete `dist\NewLight_Analysis`.
 - `.codegraph`, `2`, and `Example.zip` are now ignored if recreated locally.
+- Validation sample data is protected. Do not delete, move, or clean sample folders/files used for verification, even if they are large and untracked, unless the user explicitly names those samples for removal.
 - The old tracked manual files under `dist\NewLight_Analysis` were already deleted in the working tree before this cleanup and were left in that state.
 
 A conservative cleanup was performed on 2026-05-21. No files were permanently deleted. Generated/cache/runtime folders were moved out of the workspace to:
