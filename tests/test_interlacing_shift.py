@@ -80,6 +80,16 @@ class InterlacingShiftTests(unittest.TestCase):
         np.testing.assert_allclose(corrected[0, :, 8:-8], base[:, 8:-8], atol=1e-4)
         np.testing.assert_allclose(corrected[1, :, 8:-8], base[:, 8:-8] + 5.0, atol=1e-4)
 
+    def test_interlacing_shift_fills_exposed_edges_from_nearest_edge(self):
+        image = np.full((6, 12), 32768.0, dtype=np.float32)
+        image[1::2, :] += np.arange(12, dtype=np.float32)
+
+        shifted = core.apply_interlacing_shift_image(image, 3, row_parity="odd")
+
+        self.assertEqual(float(shifted.min()), 32768.0)
+        np.testing.assert_allclose(shifted[1, :3], image[1, 0])
+        np.testing.assert_allclose(shifted[3, :3], image[3, 0])
+
     def test_two_photon_conversion_auto_corrects_interlacing_shift_from_ch1(self):
         with tempfile.TemporaryDirectory() as tmp:
             folder = Path(tmp) / "two_photon"

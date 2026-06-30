@@ -13,6 +13,9 @@
 - Added `tests\test_gui_static.py` to guard the Preprocess-tab `Image Shift` button.
 - Verified `conda run -n caiman_latest python -B -m unittest tests.test_interlacing_shift tests.test_two_photon_converter tests.test_baseline tests.test_stimulus_input tests.test_gui_static`.
 - Verified `conda run -n caiman_latest python -m py_compile NewLight_Analysis.py analysis_core.py tests\test_interlacing_shift.py tests\test_gui_static.py`.
+- Fixed the first-pass edge fill behavior: exposed pixels after horizontal odd-line shifting now use the nearest valid row-edge value instead of `0`, preventing the two-photon `+32768` display range from being crushed and making the image look washed out.
+- Verified `conda run -n caiman_latest python -B -m unittest tests.test_interlacing_shift tests.test_two_photon_converter`.
+- Verified `conda run -n caiman_latest python -m py_compile analysis_core.py tests\test_interlacing_shift.py`.
 
 ### Workspace Cleanup
 

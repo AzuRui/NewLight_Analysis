@@ -981,16 +981,22 @@ def _interlacing_row_start(row_parity: str) -> int:
 def _shift_2d_rows(rows: np.ndarray, shift_px: int) -> np.ndarray:
     rows = np.asarray(rows)
     shift = int(round(float(shift_px)))
-    out = np.zeros_like(rows)
+    out = np.empty_like(rows)
     if shift == 0:
         out[...] = rows
     elif shift > 0:
         if shift < rows.shape[1]:
             out[:, shift:] = rows[:, :-shift]
+            out[:, :shift] = rows[:, :1]
+        else:
+            out[...] = rows[:, :1]
     else:
         shift = abs(shift)
         if shift < rows.shape[1]:
             out[:, :-shift] = rows[:, shift:]
+            out[:, -shift:] = rows[:, -1:]
+        else:
+            out[...] = rows[:, -1:]
     return out
 
 

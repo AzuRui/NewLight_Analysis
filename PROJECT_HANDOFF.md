@@ -371,7 +371,7 @@ Folder conversion behavior:
 - Each TDMS image slot is restored as a `height x width` `int16` frame.
 - The analysis movie stores `float32(frame + 32768)`, matching the LabVIEW thumbnail/TIFF offset convention and keeping dF/F baseline values positive.
 - If protocol channels and TDMS slot count indicate Ch1/Ch2 frame interleaving, adjacent slots are read as Ch1 and Ch2 for each time point.
-- Two-photon conversion automatically runs interlacing image-shift correction after channel memmaps are written. It estimates the horizontal odd-line correction shift from Ch1 with a default `+/-10 px` search range, applies the same shift to all channels, and rebuilds the grayscale analysis movie from the corrected channels.
+- Two-photon conversion automatically runs interlacing image-shift correction after channel memmaps are written. It estimates the horizontal odd-line correction shift from Ch1 with a default `+/-10 px` search range, applies the same shift to all channels, and rebuilds the grayscale analysis movie from the corrected channels. Exposed edge pixels after shifting are filled from the nearest valid row edge, not `0`, because converted two-photon data uses a `+32768` offset and zero-fill crushes display contrast.
 - Ch1-Ch5 are stored as grayscale channel movies; all channels default to gray in the UI.
 - No default `converted_pseudocolor.avi` is generated. Pseudocolor is composed only for the current display frame/projection or while saving.
 - A temporary `converted_movie.npy` memmap is used as the grayscale analysis movie to avoid holding an extra RGB movie in RAM.
