@@ -26,6 +26,13 @@ class GuiStaticTests(unittest.TestCase):
         self.assertIn("self.draw_empty_preview_background()", source)
         self.assertIn("self.redraw(preserve_view=False)", source)
 
+    def test_logo_starfield_uses_small_quiet_points(self):
+        source = Path("NewLight_Analysis.py").read_text(encoding="utf-8")
+
+        self.assertIn("for _ in range(24):", source)
+        self.assertIn('"r": rng.choice([0.45, 0.55, 0.65])', source)
+        self.assertNotIn('r = s["r"] + (1 if pulse > 0.96 else 0)', source)
+
 
 if __name__ == "__main__":
     unittest.main()

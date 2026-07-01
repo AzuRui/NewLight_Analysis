@@ -293,13 +293,13 @@ class StarfieldCanvas(tk.Canvas):
         super().__init__(master, width=width, height=height, highlightthickness=0, bd=0, bg=THEME["panel"])
         rng = random.Random(202505)
         self.stars = []
-        for _ in range(34):
+        for _ in range(24):
             self.stars.append({
                 "x": rng.randint(4, width - 4),
                 "y": rng.randint(4, height - 4),
-                "r": rng.choice([1, 1, 1, 2]),
+                "r": rng.choice([0.45, 0.55, 0.65]),
                 "phase": rng.random() * 6.28,
-                "speed": rng.uniform(0.018, 0.055),
+                "speed": rng.uniform(0.012, 0.038),
                 "tone": rng.choice([THEME["accent"], THEME["accent_2"], "#93c5fd", "#67e8f9"]),
             })
         self.t = 0.0
@@ -321,12 +321,12 @@ class StarfieldCanvas(tk.Canvas):
             x = int((s["x"] / 270) * w)
             y = int((s["y"] / 112) * h)
             pulse = 0.5 + 0.5 * np.sin(self.t * s["speed"] + s["phase"])
-            color = s["tone"] if pulse > 0.58 else "#24415f"
-            r = s["r"] + (1 if pulse > 0.96 else 0)
+            color = s["tone"] if pulse > 0.70 else "#24415f"
+            r = s["r"]
             self.create_oval(x - r, y - r, x + r, y + r, fill=color, outline="")
-            if pulse > 0.985 and idx % 11 == 0:
-                self.create_line(x - 5, y, x + 5, y, fill=color)
-                self.create_line(x, y - 5, x, y + 5, fill=color)
+            if pulse > 0.992 and idx % 13 == 0:
+                self.create_line(x - 2, y, x + 2, y, fill=color)
+                self.create_line(x, y - 2, x, y + 2, fill=color)
         self.create_text(16, 26, anchor="w", text="NewLight_Analysis", fill="#f8fafc", font=("Segoe UI Semibold", 17))
         self.create_text(16, 54, anchor="w", text="Neurosurgical Imaging Workstation", fill=THEME["accent"], font=("Segoe UI", 9))
         self.create_text(16, 80, anchor="w", text="ROI | Motion | dF/F | Heatmap", fill=THEME["muted"], font=("Segoe UI", 9))

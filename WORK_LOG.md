@@ -582,3 +582,13 @@
 - Added regression checks in `tests\test_background_image.py` and `tests\test_gui_static.py` so future UI changes keep visible background panes and the empty preview background.
 - Verified `conda run -n caiman_latest python -B -m unittest tests.test_background_image tests.test_gui_static`.
 - Verified `conda run -n caiman_latest python -m py_compile NewLight_Analysis.py ui_background.py tests\test_background_image.py tests\test_gui_static.py`.
+
+### Logo Starfield Quieting
+
+- Reduced the animated logo starfield from 34 points to 24 points.
+- Changed star radii from integer 1-2 px dots to smaller 0.45-0.65 px dots.
+- Raised the bright-pulse threshold and slowed pulse speed so fewer points flash at once.
+- Removed the temporary high-brightness radius growth and reduced rare sparkle cross-lines from 10 px spans to 4 px spans.
+- Added `tests\test_gui_static.py` coverage to keep the logo starfield using small, quiet points.
+- Verified `conda run -n caiman_latest python -B -m unittest tests.test_gui_static`.
+- Verified `conda run -n caiman_latest python -m py_compile NewLight_Analysis.py tests\test_gui_static.py`.
