@@ -1641,9 +1641,6 @@ class NewLightApp:
         self.active_parameter_panel_id = None
         self.roi_table_images = []
         self.highlighted_roi_index = None
-        self.roi_highlight_flash_on = False
-        self._roi_highlight_after_id = None
-        self._roi_highlight_steps_remaining = 0
         self._view_limits = None
         self._view_is_fit = True
         self._view_lock = False
@@ -2474,14 +2471,6 @@ class NewLightApp:
         )
 
     def clear_roi_highlight(self, redraw=True):
-        if self._roi_highlight_after_id is not None:
-            try:
-                self.root.after_cancel(self._roi_highlight_after_id)
-            except tk.TclError:
-                pass
-        self._roi_highlight_after_id = None
-        self._roi_highlight_steps_remaining = 0
-        self.roi_highlight_flash_on = False
         self.highlighted_roi_index = None
         if redraw:
             self.redraw(preserve_view=True)
@@ -2491,29 +2480,8 @@ class NewLightApp:
         if index < 0 or index >= len(self.state.roi_masks):
             self.clear_roi_highlight()
             return
-        if self._roi_highlight_after_id is not None:
-            try:
-                self.root.after_cancel(self._roi_highlight_after_id)
-            except tk.TclError:
-                pass
         self.highlighted_roi_index = index
-        self.roi_highlight_flash_on = True
-        self._roi_highlight_steps_remaining = 4
         self.redraw(preserve_view=True)
-        self._roi_highlight_after_id = self.root.after(120, self._advance_roi_highlight_flash)
-
-    def _advance_roi_highlight_flash(self):
-        self._roi_highlight_after_id = None
-        if self.highlighted_roi_index is None:
-            return
-        self._roi_highlight_steps_remaining -= 1
-        if self._roi_highlight_steps_remaining <= 0:
-            self.roi_highlight_flash_on = False
-            self.redraw(preserve_view=True)
-            return
-        self.roi_highlight_flash_on = not self.roi_highlight_flash_on
-        self.redraw(preserve_view=True)
-        self._roi_highlight_after_id = self.root.after(120, self._advance_roi_highlight_flash)
 
     def refresh_roi_list_if_visible(self):
         if self.active_parameter_panel_id == "roi_list":
@@ -3711,7 +3679,6 @@ class NewLightApp:
                 self.state.roi_masks,
                 self.state.roi_names,
                 highlighted_index=self.highlighted_roi_index,
-                highlight_flash=self.roi_highlight_flash_on,
             )
             self._view_lock = True
             try:

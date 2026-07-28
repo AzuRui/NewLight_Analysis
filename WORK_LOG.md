@@ -683,12 +683,12 @@
 ### ROI List Selection Highlight
 
 - Connected the embedded ROI list to the main image overlay. Selecting a row
-  flashes that ROI boundary in white for about half a second, then keeps its
-  assigned color at `3 px` thickness until another ROI is selected.
+  immediately keeps that ROI boundary in its assigned color at `3 px`
+  thickness until another ROI is selected.
 - The selected ROI number is also enlarged and bolded. Other ROI outlines keep
   their existing stable colors and `1 px` thickness.
-- Closing/replacing the ROI list or changing the ROI collection cancels pending
-  flash callbacks and clears the highlight, preventing stale indices.
+- Closing/replacing the ROI list or changing the ROI collection clears the
+  highlight, preventing stale indices.
 - Added overlay rendering and GUI binding regressions plus a real Tk selection
   smoke test. Final verification: `171 passed`; focused tests `41 passed`;
   compilation and `git diff --check` passed. No EXE was built.

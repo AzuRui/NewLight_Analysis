@@ -2395,7 +2395,6 @@ def draw_roi_overlay(
     roi_masks: list[np.ndarray],
     roi_names: list[str],
     highlighted_index: int | None = None,
-    highlight_flash: bool = False,
 ) -> np.ndarray:
     base = (normalize_image(image) * 255).astype(np.uint8)
     rgb = cv2.cvtColor(base, cv2.COLOR_GRAY2RGB)
@@ -2404,8 +2403,8 @@ def draw_roi_overlay(
     for i, mask in enumerate(roi_masks):
         contours = measure.find_contours(mask.astype(np.uint8), 0.5)
         highlighted = highlighted_index is not None and i == int(highlighted_index)
-        color = (255, 255, 255) if highlighted and highlight_flash else roi_color_uint8(i)
-        thickness = 4 if highlighted and highlight_flash else (3 if highlighted else 1)
+        color = roi_color_uint8(i)
+        thickness = 3 if highlighted else 1
         for contour in contours:
             pts = np.round(contour[:, ::-1]).astype(np.int32)
             cv2.polylines(rgb, [pts], True, color, thickness, cv2.LINE_AA)

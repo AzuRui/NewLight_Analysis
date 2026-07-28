@@ -359,9 +359,10 @@ class GuiStaticTests(unittest.TestCase):
         self.assertIn('iid=f"roi_{roi_row[\'index\']}"', panel)
         self.assertIn('"on_select": self.select_roi_from_list', source)
         self.assertIn("self.highlighted_roi_index = index", selection)
-        self.assertIn("self.root.after", selection)
+        self.assertNotIn("self.root.after", selection)
+        self.assertNotIn("roi_highlight_flash_on", source)
+        self.assertNotIn("_advance_roi_highlight_flash", source)
         self.assertIn("highlighted_index=self.highlighted_roi_index", redraw)
-        self.assertIn("highlight_flash=self.roi_highlight_flash_on", redraw)
 
     def test_roi_list_refreshes_after_roi_mutations(self):
         source = Path("NewLight_Analysis.py").read_text(encoding="utf-8")

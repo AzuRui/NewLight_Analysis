@@ -550,14 +550,13 @@ For future updates:
 
 - `show_roi_list()` supplies stable zero-based indices to the embedded
   `roi_table`. `<<TreeviewSelect>>` calls `select_roi_from_list(index)`.
-- The selected ROI flashes with a white `4 px` boundary for approximately
-  `480 ms`, then remains highlighted in its assigned color with a `3 px`
-  boundary and larger label. Normal ROI boundaries remain `1 px`.
-- Highlight state is held by `highlighted_roi_index` and
-  `roi_highlight_flash_on`. Leaving the ROI-list panel or mutating the ROI list
-  cancels its Tk `after` callback and clears the selection safely.
-- `analysis_core.draw_roi_overlay()` accepts optional `highlighted_index` and
-  `highlight_flash`; default callers and exported snapshots remain unchanged.
+- The selected ROI remains highlighted in its assigned color with a `3 px`
+  boundary and larger label. Normal ROI boundaries remain `1 px`; there is no
+  flashing, color switching, or timed callback.
+- Highlight state is held only by `highlighted_roi_index`. Leaving the ROI-list
+  panel or mutating the ROI list clears the selection safely.
+- `analysis_core.draw_roi_overlay()` accepts optional `highlighted_index`;
+  default callers and exported snapshots remain unchanged.
 - Current source verification is `171 passed`, with `41 passed` in the focused
   ROI color/GUI suite and a successful real Tk selection smoke test. No EXE was
   rebuilt.

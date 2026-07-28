@@ -35,7 +35,7 @@ class RoiColorTests(unittest.TestCase):
         self.assertTrue(polylines.called)
         self.assertEqual(polylines.call_args.args[3], core.roi_color_uint8(0))
 
-    def test_selected_roi_overlay_is_thicker_and_flash_state_is_white(self):
+    def test_selected_roi_overlay_is_thicker_without_changing_its_color(self):
         image = np.zeros((32, 32), dtype=np.float32)
         mask = np.zeros((32, 32), dtype=bool)
         mask[8:24, 9:23] = True
@@ -43,18 +43,11 @@ class RoiColorTests(unittest.TestCase):
 
         regular = core.draw_roi_overlay(image, [mask], ["ROI1"])
         selected = core.draw_roi_overlay(image, [mask], ["ROI1"], highlighted_index=0)
-        flashed = core.draw_roi_overlay(
-            image,
-            [mask],
-            ["ROI1"],
-            highlighted_index=0,
-            highlight_flash=True,
-        )
 
         regular_pixels = np.count_nonzero(np.all(regular == color, axis=2))
         selected_pixels = np.count_nonzero(np.all(selected == color, axis=2))
         self.assertGreater(selected_pixels, regular_pixels)
-        self.assertGreater(np.count_nonzero(np.all(flashed == 255, axis=2)), 0)
+        self.assertEqual(np.count_nonzero(np.all(selected == 255, axis=2)), 0)
 
     def test_trace_export_uses_the_shared_roi_colors(self):
         traces = np.arange(18, dtype=np.float32).reshape(6, 3)
