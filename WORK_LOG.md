@@ -592,3 +592,90 @@
 - Added `tests\test_gui_static.py` coverage to keep the logo starfield using small, quiet points.
 - Verified `conda run -n caiman_latest python -B -m unittest tests.test_gui_static`.
 - Verified `conda run -n caiman_latest python -m py_compile NewLight_Analysis.py tests\test_gui_static.py`.
+
+### Adaptive ROI Guidance Design and Plan
+
+- Confirmed the design for iterative user-guided ROI fitting shared by
+  `快速 ROI 分割` and `CaImAn 识别分割`. The feature is calibration over cached
+  candidates, not model-weight training.
+- Current ROI masks are protected examples. The planned boundary refinement is
+  local and free-form; examples cannot disappear, merge, split, or jump to
+  another structure. Protected examples that fail the active quality preset
+  remain in output with a trailing `*` quality marker.
+- The plan combines quality presets, NeuSuite learned confidence, CaImAn SNR /
+  spatial correlation / CNN quality, fixed low-compute convolution responses,
+  shape, local contrast, and temporal features. Manual examples receive more
+  fitting weight than loaded or model-generated examples.
+- Fast ROI area autofill is specified as `0.9 x smallest` and `1.1 x largest`
+  for two or more examples. With one example, only the maximum changes and the
+  existing minimum is retained.
+- Candidate banks are session-local and reusable after the user adds missed
+  ROIs. Movie/preprocessing/model-generation changes invalidate them; ROI-only
+  changes trigger a cheap refit. ROI revisions prevent stale background tasks
+  from overwriting newly drawn examples.
+- Added the reviewed design at
+  `docs/superpowers/specs/2026-07-28-adaptive-roi-guidance-design.md` and a
+  seven-task TDD plan at
+  `docs/superpowers/plans/2026-07-28-adaptive-roi-guidance.md`.
+- This entry records planning only. Production code and tests have not yet been
+  changed for adaptive fitting; the source baseline remains `111 passed`.
+
+### Adaptive ROI Guidance Implementation
+
+- Implemented user-guided calibration for both `快速 ROI 分割` and
+  `CaImAn 识别分割`. This selects/refines cached candidates and never updates
+  NeuSuite, CaImAn, or CNN model weights.
+- Added `高召回 / 均衡 / 高精度 / 自定义` presets. Fixed preset values are
+  Fast confidence `0.10 / 0.25 / 0.40`; CaImAn SNR `1.5 / 2.0 / 2.5`; spatial
+  correlation `0.70 / 0.80 / 0.90`; CNN score `0.70 / 0.90 / 0.99`; and robust
+  similarity limits `3.0 / 2.3 / 1.7`.
+- Fast area autofill preserves both values with no ROI, changes only maximum
+  with one ROI, and uses `round(0.9 * smallest)` / `round(1.1 * largest)` with
+  multiple ROIs. CaImAn uses the median equivalent diameter of current masks.
+- Existing ROIs are protected and refined locally within `2-12 px`. They are
+  never removed, merged, split, or moved to another cell. Weak protected masks
+  remain with exactly one trailing `*` and aligned provenance metadata.
+- Added weighted median/MAD fitting over shape, contrast, fixed Gaussian/Sobel/
+  LoG responses, temporal activity, NeuSuite confidence, and CaImAn quality.
+- Added permissive worker modes. Fast generates candidates down to confidence
+  `0.05`; CaImAn exports every non-empty component with aligned traces, SNR,
+  spatial correlation, CNN score, component index, and preset-accepted flag.
+- Fast and CaImAn candidate banks are separate and session-local. Signatures
+  include movie generation, shape, invalid frames, relevant projection/window,
+  model identity, and generation settings. ROI/preset-only changes reuse banks;
+  movie/preprocessing/model-generation changes invalidate them. Movie and ROI
+  revision checks prevent stale background output from overwriting user edits.
+- Tk smoke ran two Fast adaptive fits around a manual ROI update; the worker
+  ran once, the second fit reused its bank, metadata stayed aligned, and no
+  duplicate `**` name was produced.
+- Protected sample `eye/data/2/A01/result.avi` stayed read-only and unchanged
+  (`800 x 540 x 512`, `10 Hz`). The final read-only smoke used an
+  `80 x 256 x 256` Fast crop and returned 9 candidates; two adaptive passes
+  returned the same result from that bank. A `50 x 128 x 128` CaImAn crop
+  returned 35 candidates with aligned traces, SNR, spatial correlation, CNN,
+  component-index, and preset-accepted arrays. SHA-256 remained
+  `48106b31ba131d1c7dcb80bb1e745349844e7b936150100008df4d423917fad5`.
+- Real Fast inference exposed missing `py-cpuinfo`. Added version `9.0.0` to
+  runtime requirements, offline copy, and setup verification. CaImAn now maps
+  empty optional quality output to aligned NaN values while still rejecting
+  non-empty misaligned arrays.
+- Review hardening added normalized-centroid candidate matching so shifted
+  masks from the same cell cannot be appended twice. Matched model masks now
+  aid protected-boundary refinement and active-preset quality marking.
+- Low-quality status is recomputed on every adaptive pass, so a successful or
+  more permissive rerun can remove an obsolete `*`. Stable `base_name` values
+  now survive ordinary add/delete operations.
+- Automatic full-frame ROI creation now uses `set_rois()` and increments
+  `roi_revision`. Candidate-mode artifacts must include every required aligned
+  quality array; missing arrays fail closed instead of receiving ideal scores.
+- Candidate cache identities now include NeuSuite weights, runtime source and
+  supplemental dependencies, plus the CaImAn environment metadata and CNN
+  resources.
+- Model-generated protected ROIs that are absent from the current permissive
+  bank remain present but are marked as not reproduced. CaImAn runtime identity
+  now follows the same local-prefix or named-environment fallback used by its
+  worker wrapper.
+- Final verification: `169 passed`; focused adaptive verification is
+  `100 passed`; compilation, Tk state smoke, retained-sample smoke, and
+  `git diff --check` passed. No EXE was built and no validation sample was
+  moved, deleted, or overwritten.

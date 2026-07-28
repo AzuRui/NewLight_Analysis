@@ -279,6 +279,37 @@ class GuiStaticTests(unittest.TestCase):
         self.assertIn("candidate_mode=True", source)
         self.assertIn("self.roi_candidate_banks[engine]", source)
 
+    def test_fast_roi_cache_identity_includes_runtime_code_and_dependencies(self):
+        source = Path("NewLight_Analysis.py").read_text(encoding="utf-8")
+        start = source.index("    def _roi_model_identity(engine):")
+        end = source.index("    @staticmethod\n    def _candidate_bank_from_result", start)
+        method = source[start:end]
+
+        self.assertIn("core.NEUSUITE_DEFAULT_WEIGHTS", method)
+        self.assertIn("core.NEUSUITE_RUNTIME_ROOT", method)
+        self.assertIn('core.PROJECT_DIR / "NeuSuite_RuntimeDeps"', method)
+        self.assertIn("_roi_path_identity", method)
+        self.assertIn("core.caiman_worker_environment()", method)
+        self.assertIn("core.resolve_conda_environment_prefix", method)
+        self.assertIn("core.CAIMAN_RESOURCE_DIR", method)
+
+    def test_roi_name_sync_preserves_existing_base_identity(self):
+        source = Path("NewLight_Analysis.py").read_text(encoding="utf-8")
+        start = source.index("    def sync_roi_names(self):")
+        end = source.index("    def set_rois", start)
+        method = source[start:end]
+
+        self.assertNotIn('item["base_name"] = f"ROI{index + 1}"', method)
+        self.assertIn("self.next_roi_base_name", method)
+
+    def test_automatic_global_roi_uses_revision_incrementing_mutation_path(self):
+        source = Path("NewLight_Analysis.py").read_text(encoding="utf-8")
+
+        self.assertIn("def ensure_global_roi(self):", source)
+        self.assertIn('self.set_rois([full_roi], source="全局 ROI"', source)
+        self.assertNotIn("self.state.roi_masks = [full_roi]", source)
+        self.assertNotIn("self.state.roi_masks = [np.ones(self.state.movie.shape[1:], dtype=bool)]", source)
+
     def test_parameter_choices_support_selection_callbacks_for_presets(self):
         source = Path("NewLight_Analysis.py").read_text(encoding="utf-8")
         start = source.index("    def show_parameter_panel(")

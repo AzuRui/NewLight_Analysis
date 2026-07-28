@@ -463,3 +463,85 @@ For future updates:
 
 5. Commit source and record updates together when the change is stable.
 6. Finish each task with the context-safety self-check described above.
+
+## Adaptive ROI Guidance Plan (2026-07-28)
+
+- Read these two documents before implementing:
+  `docs/superpowers/specs/2026-07-28-adaptive-roi-guidance-design.md` and
+  `docs/superpowers/plans/2026-07-28-adaptive-roi-guidance.md`.
+- This feature is approved but not implemented. Do not infer that candidate
+  caching, ROI provenance, boundary refinement, or adaptive worker modes exist
+  yet. The current verified baseline is still `111 passed`.
+- The approved behavior is: both fast ROI and CaImAn provide quality presets
+  and a user-example adaptive action; all current ROI masks are protected;
+  their boundaries are locally refined; similar missed candidates are added;
+  low-quality protected masks remain and display/export with one trailing `*`.
+- Fast area autofill uses all current valid masks: two or more examples fill
+  `0.9 x minimum` and `1.1 x maximum`; one example changes only the maximum.
+- The adaptation is not weight training. Use NeuSuite confidence plus a fixed
+  low-cost convolution descriptor, and use CaImAn's SNR, spatial correlation,
+  CNN score, traces, and footprints. Keep the adaptation logic backend-neutral
+  in the planned `roi_adaptation.py` module.
+- Candidate banks must remain session-temporary and be invalidated by source,
+  preprocessing, projection/model-generation inputs, not by example-only ROI
+  edits. A separate ROI revision check blocks stale fitted output from
+  replacing newly drawn masks.
+- Follow the written plan in TDD order. Preserve all validation samples,
+  especially `eye/data/2/A01/result.avi`, and do not build the EXE unless the
+  user separately requests it after source verification.
+
+## Adaptive ROI Guidance Implemented State (2026-07-28)
+
+- The planning-only section above is superseded: adaptive ROI guidance is now
+  implemented on `codex/dual-roi-engines`. In a new task, read the design and
+  plan above, then `roi_adaptation.py`, both `workers/run_*_roi.py` files, ROI
+  wrappers in `analysis_core.py`, and ROI panel/adaptive methods in
+  `NewLight_Analysis.py`.
+- ROI masks, names, and metadata are aligned. Every ROI mutation increments
+  `roi_revision`. Metadata stores `source`, `protected`, `low_quality`,
+  `quality_reasons`, and stable `base_name`. Low-quality protected ROIs remain
+  and show/export with one `*`; only user deletion removes them.
+- Both panels expose four presets and `根据当前 ROI 自适应拟合并运行`. Preset
+  values are Fast confidence `0.10 / 0.25 / 0.40`; CaImAn SNR
+  `1.5 / 2.0 / 2.5`; spatial correlation `0.70 / 0.80 / 0.90`; CNN
+  `0.70 / 0.90 / 0.99`; similarity `3.0 / 2.3 / 1.7`. Custom uses current
+  visible fields. This is calibration, not weight training.
+- Fast area autofill and CaImAn diameter suggestion follow the exact rules in
+  the design. Protected boundaries use the bounded `2-12 px` local activity
+  refinement and preserve identity on every failure path.
+- `self.roi_candidate_banks` has separate Fast/CaImAn banks.
+  `self.movie_generation` invalidates them when import, undo, channels,
+  preprocessing, image shift, vessel removal, or motion correction replaces
+  the movie. ROI edits and final thresholds do not invalidate candidates.
+- Adaptive FIFO tasks snapshot movie identity/generation, ROI masks/metadata,
+  `roi_revision`, protocol, preset, and engine settings. A stale task may cache
+  candidates after an ROI edit but must not apply fitted output.
+- Fast candidate mode uses confidence `0.05` and aligned `scores` /
+  `source_indices`. CaImAn candidate mode exports aligned `traces`, `snr`,
+  `r_values`, `cnn_scores`, `component_indices`, and `preset_accepted`. Empty
+  optional quality arrays become NaN arrays; non-empty mismatches are errors.
+- The `neuroseg3` source runtime also requires `py-cpuinfo==9.0.0`. Recreate
+  runtime dependencies with `setup_neusuite_runtime.bat`; its offline fallback
+  copies Python source from NeuSuite without importing incompatible bytecode.
+- Protected validation sample remains `eye/data/2/A01/result.avi` (`800` frames,
+  `540 x 512`, `10 Hz`). Final read-only smoke results: 9 Fast candidates from
+  an `80 x 256 x 256` crop with repeatable adaptive reuse; 35 CaImAn candidates
+  from a `50 x 128 x 128` crop with all six exported arrays aligned. The source
+  SHA-256 remained `48106b31ba131d1c7dcb80bb1e745349844e7b936150100008df4d423917fad5`.
+  Never clean sample data.
+- Candidate matching combines IoU and normalized centroid distance. A matched
+  model mask contributes to protected-boundary refinement and quality status,
+  but is never appended as a duplicate. Protected low-quality state is
+  recomputed under the active preset, so an obsolete trailing `*` can clear.
+- ROI `base_name` is stable through add/delete operations. Automatic global ROI
+  creation uses the central mutation path and increments `roi_revision`.
+- Candidate-mode worker artifacts fail closed when required quality arrays are
+  missing. Cache identities fingerprint Fast weights/runtime/dependencies and
+  CaImAn environment metadata/resources.
+- A protected Fast/CaImAn ROI absent from the current permissive bank remains
+  present and is marked `当前模型候选中未复现`. CaImAn cache identity resolves
+  whichever local-prefix or named environment its worker actually selects.
+- Current verification is `169 passed`; focused adaptive tests are `100 passed`;
+  key source/worker compile checks and Tk state smoke pass.
+  No EXE was built. The Conda OpenCL `temp.txt` text remains harmless when the
+  command exits with code 0.

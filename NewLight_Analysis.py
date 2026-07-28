@@ -3071,19 +3071,37 @@ class NewLightApp:
             return "loaded"
         return "loaded"
 
+    def next_roi_base_name(self, metadata=None):
+        values = self.state.roi_metadata if metadata is None else metadata
+        maximum = 0
+        for item in values:
+            name = str(item.get("base_name", "")).rstrip("*")
+            if name.startswith("ROI") and name[3:].isdigit():
+                maximum = max(maximum, int(name[3:]))
+        return f"ROI{maximum + 1}"
+
     def sync_roi_names(self):
         existing = list(self.state.roi_metadata)
         metadata = []
         for index in range(len(self.state.roi_masks)):
+            fallback_name = self.next_roi_base_name(metadata)
             item = roi_fit.normalized_roi_metadata(
                 existing[index] if index < len(existing) else None,
                 "loaded",
-                f"ROI{index + 1}",
+                fallback_name,
             )
-            item["base_name"] = f"ROI{index + 1}"
             metadata.append(item)
         self.state.roi_metadata = metadata
         self.state.roi_names = [roi_fit.display_roi_name(item) for item in metadata]
+
+    def ensure_global_roi(self):
+        if self.state.roi_masks:
+            return False
+        full_roi = np.ones(self.state.movie.shape[1:], dtype=bool)
+        metadata = [{"source": "loaded", "base_name": "Global_ROI"}]
+        self.set_rois([full_roi], source="全局 ROI", names=["Global_ROI"], metadata=metadata)
+        self.log("未选择 ROI，已自动使用全画面全局 ROI。")
+        return True
 
     def set_rois(self, masks, source="ROI", names=None, metadata=None):
         source_kind = self.roi_source_kind(source)
@@ -3738,13 +3756,14 @@ class NewLightApp:
         if mask is None or not np.any(mask):
             self.log("已忽略空 ROI。")
             return
+        base_name = self.next_roi_base_name()
         self.state.roi_masks.append(mask.astype(bool))
         self.state.roi_metadata.append(
-            {"source": "manual", "base_name": f"ROI{len(self.state.roi_masks)}"}
+            {"source": "manual", "base_name": base_name}
         )
         self.mark_rois_changed()
         self.redraw()
-        self.log(f"已添加 ROI；总数={len(self.state.roi_masks)}，并重新编号为 ROI1-ROI{len(self.state.roi_masks)}。")
+        self.log(f"已添加 {base_name}；总数={len(self.state.roi_masks)}。")
 
     def delete_last_roi(self):
         if self.state.roi_masks:
@@ -3754,7 +3773,7 @@ class NewLightApp:
                 self.state.roi_metadata.pop()
             self.mark_rois_changed()
             self.redraw()
-            self.log(f"已删除 ROI{idx}；剩余 ROI 已重新编号。")
+            self.log(f"已删除列表中的第 {idx} 个 ROI。")
 
     def delete_roi_at(self, x, y):
         if x is None or y is None or not self.state.roi_masks:
@@ -3777,7 +3796,7 @@ class NewLightApp:
         deleted = hit + 1
         self.mark_rois_changed()
         self.redraw()
-        self.log(f"已点击删除 ROI{deleted}；剩余 ROI 已重新编号。")
+        self.log(f"已点击删除列表中的第 {deleted} 个 ROI。")
 
     def clear_rois(self):
         self.state.roi_masks = []
@@ -5291,9 +5310,7 @@ class NewLightApp:
             return None
         self.apply_protocol(update_baseline=False)
         if need_traces and not self.state.roi_masks:
-            self.state.roi_masks = [np.ones(self.state.movie.shape[1:], dtype=bool)]
-            self.sync_roi_names()
-            self.log("未选择 ROI，已自动使用全画面全局 ROI。")
+            self.ensure_global_roi()
         if len(self.state.roi_names) != len(self.state.roi_masks):
             self.sync_roi_names()
         baseline_start = int(self.state.baseline_start_frame)
@@ -5424,9 +5441,7 @@ class NewLightApp:
         try:
             self.apply_protocol(update_baseline=False)
             if not self.state.roi_masks:
-                self.state.roi_masks = [np.ones(self.state.movie.shape[1:], dtype=bool)]
-                self.sync_roi_names()
-                self.log("未选择 ROI，已自动使用全画面全局 ROI。")
+                self.ensure_global_roi()
             if len(self.state.roi_names) != len(self.state.roi_masks):
                 self.sync_roi_names()
             frames = np.asarray(self.state.trigger_frames, dtype=int).copy()
@@ -6039,15 +6054,38 @@ class NewLightApp:
         return values
 
     @staticmethod
+    def _roi_path_identity(path):
+        path = Path(path).resolve()
+        try:
+            if path.is_file():
+                stat = path.stat()
+                return (str(path), 1, int(stat.st_size), int(stat.st_mtime_ns))
+            if path.is_dir():
+                entries = []
+                for item in sorted(candidate for candidate in path.rglob("*") if candidate.is_file()):
+                    stat = item.stat()
+                    entries.append((str(item.relative_to(path)), int(stat.st_size), int(stat.st_mtime_ns)))
+                return (str(path), len(entries), tuple(entries))
+        except OSError:
+            pass
+        return (str(path), 0)
+
+    @staticmethod
     def _roi_model_identity(engine):
         if engine != "fast":
-            return f"caiman:{core.NEWLIGHT_CAIMAN_PREFIX}"
-        path = core.NEUSUITE_DEFAULT_WEIGHTS.resolve()
-        try:
-            stat = path.stat()
-            return f"{path}|{stat.st_size}|{stat.st_mtime_ns}"
-        except OSError:
-            return str(path)
+            environment = core.caiman_worker_environment()
+            prefix = core.resolve_conda_environment_prefix(environment)
+            runtime = Path(environment) if prefix is None else prefix / "conda-meta"
+            return (
+                str(environment),
+                NewLightApp._roi_path_identity(runtime),
+                NewLightApp._roi_path_identity(core.CAIMAN_RESOURCE_DIR),
+            )
+        return (
+            NewLightApp._roi_path_identity(core.NEUSUITE_DEFAULT_WEIGHTS),
+            NewLightApp._roi_path_identity(core.NEUSUITE_RUNTIME_ROOT),
+            NewLightApp._roi_path_identity(core.PROJECT_DIR / "NeuSuite_RuntimeDeps"),
+        )
 
     @staticmethod
     def _candidate_bank_from_result(engine, result, signature, generation_parameters):
@@ -6501,10 +6539,7 @@ class NewLightApp:
         if not self.require_movie():
             return None
         if not self.state.roi_masks:
-            full_roi = np.ones(self.state.movie.shape[1:], dtype=bool)
-            self.state.roi_masks = [full_roi]
-            self.sync_roi_names()
-            self.log("未选择 ROI，已自动使用全画面全局 ROI。")
+            self.ensure_global_roi()
         self.apply_protocol(update_baseline=False)
         if len(self.state.roi_names) != len(self.state.roi_masks):
             self.sync_roi_names()
@@ -6613,9 +6648,7 @@ class NewLightApp:
             return
         self.apply_protocol(update_baseline=False)
         if not self.state.roi_masks:
-            self.state.roi_masks = [np.ones(self.state.movie.shape[1:], dtype=bool)]
-            self.sync_roi_names()
-            self.log("未选择 ROI，已自动使用全画面全局 ROI。")
+            self.ensure_global_roi()
         if len(self.state.roi_names) != len(self.state.roi_masks):
             self.sync_roi_names()
 

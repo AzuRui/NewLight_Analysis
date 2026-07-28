@@ -82,6 +82,14 @@ class CandidateBank:
         for key, values in self.model_quality.items():
             if np.asarray(values).reshape(-1).size != masks.shape[0]:
                 raise ValueError(f"Candidate quality array '{key}' is not aligned with masks")
+        required = {
+            "fast": ("scores",),
+            "caiman": ("snr", "r_values", "cnn_scores"),
+        }.get(str(self.engine), ())
+        if masks.shape[0]:
+            missing = [name for name in required if name not in self.model_quality]
+            if missing:
+                raise ValueError(f"Candidate bank is missing required quality array '{missing[0]}'")
 
     @classmethod
     def empty(cls, engine, image_shape):
@@ -177,7 +185,7 @@ def _component_with_greatest_overlap(candidate, reference):
     return selected
 
 
-def refine_protected_mask(movie, projection, mask):
+def refine_protected_mask(movie, projection, mask, proposal=None):
     data = np.asarray(movie, dtype=np.float32)
     original = np.asarray(mask, dtype=bool)
     if data.ndim != 3 or data.shape[1:] != original.shape or not np.any(original):
@@ -196,6 +204,12 @@ def refine_protected_mask(movie, projection, mask):
     gaussian_support = fixed_convolution_maps(projection)["gaussian_1"]
     correlation_support = np.clip((correlations + 1.0) * 0.5, 0.0, 1.0)
     support = 0.68 * correlation_support + 0.27 * projection_norm + 0.05 * gaussian_support
+    if proposal is not None:
+        proposal_mask = np.asarray(proposal, dtype=bool)
+        if proposal_mask.shape == original.shape:
+            proposal_mask = _component_with_greatest_overlap(proposal_mask & search, original)
+            if proposal_mask is not None:
+                support = support + 0.12 * proposal_mask.astype(np.float32)
     values = support[search]
     try:
         threshold = float(filters.threshold_otsu(values))
@@ -318,15 +332,43 @@ def _mask_iou(first, second):
     return float(np.count_nonzero(first_mask & second_mask) / union) if union else 0.0
 
 
+def _normalized_centroid_distance(first, second):
+    first_mask = np.asarray(first, dtype=bool)
+    second_mask = np.asarray(second, dtype=bool)
+    first_points = np.argwhere(first_mask)
+    second_points = np.argwhere(second_mask)
+    if first_points.size == 0 or second_points.size == 0:
+        return np.inf
+    distance = float(np.linalg.norm(np.mean(first_points, axis=0) - np.mean(second_points, axis=0)))
+    first_diameter = 2.0 * np.sqrt(first_points.shape[0] / np.pi)
+    second_diameter = 2.0 * np.sqrt(second_points.shape[0] / np.pi)
+    return distance / max(1.0, 0.5 * (first_diameter + second_diameter))
+
+
+def _protected_candidate_match(first, second):
+    iou = _mask_iou(first, second)
+    centroid_distance = _normalized_centroid_distance(first, second)
+    first_area = int(np.count_nonzero(first))
+    second_area = int(np.count_nonzero(second))
+    area_ratio = second_area / max(1, first_area)
+    matched = iou >= 0.35 or (
+        0.5 <= area_ratio <= 2.0
+        and centroid_distance <= 0.55
+        and np.any(morphology.dilation(np.asarray(first, dtype=bool), morphology.disk(2)) & second)
+    )
+    score = iou + max(0.0, 1.0 - centroid_distance) * 0.25
+    return matched, score
+
+
 def _candidate_quality_passes(bank, index, preset):
     quality = bank.model_quality
     if bank.engine == "fast":
-        scores = np.asarray(quality.get("scores", np.ones(len(bank.names))), dtype=np.float32)
+        scores = np.asarray(quality["scores"], dtype=np.float32)
         return float(scores[index]) >= preset.fast_confidence
     if bank.engine == "caiman":
-        snr = np.asarray(quality.get("snr", np.full(len(bank.names), np.inf)), dtype=np.float32)
-        r_values = np.asarray(quality.get("r_values", np.full(len(bank.names), np.inf)), dtype=np.float32)
-        cnn = np.asarray(quality.get("cnn_scores", np.full(len(bank.names), np.inf)), dtype=np.float32)
+        snr = np.asarray(quality["snr"], dtype=np.float32)
+        r_values = np.asarray(quality["r_values"], dtype=np.float32)
+        cnn = np.asarray(quality["cnn_scores"], dtype=np.float32)
         return float(snr[index]) >= preset.caiman_min_snr and (
             float(r_values[index]) >= preset.caiman_rval or float(cnn[index]) >= preset.caiman_cnn
         )
@@ -359,15 +401,41 @@ def adapt_candidate_bank(movie, projection, reference_masks, reference_metadata,
         preset_name = str(quality_preset)
         preset = QUALITY_PRESETS.get(preset_name, QUALITY_PRESETS["balanced"])
 
+    match_pairs = []
+    for reference_index, reference_mask in enumerate(reference_masks):
+        for candidate_index, candidate_mask in enumerate(np.asarray(bank.masks, dtype=bool)):
+            matched, score = _protected_candidate_match(reference_mask, candidate_mask)
+            if matched:
+                match_pairs.append((score, reference_index, candidate_index))
+    matched_by_reference = {}
+    matched_candidate_indices = set()
+    for _score, reference_index, candidate_index in sorted(match_pairs, reverse=True):
+        if reference_index in matched_by_reference or candidate_index in matched_candidate_indices:
+            continue
+        matched_by_reference[reference_index] = candidate_index
+        matched_candidate_indices.add(candidate_index)
+
+    refinement_threshold = {
+        "recall": 0.45,
+        "balanced": 0.55,
+        "precision": 0.65,
+    }.get(preset_name, 0.55)
     protected_masks = []
     protected_metadata = []
     for index, (mask, metadata) in enumerate(zip(reference_masks, reference_metadata)):
         item = normalized_roi_metadata(metadata, str(metadata.get("source", "loaded")), f"ROI{index + 1}")
         item["protected"] = True
-        refined = refine_protected_mask(data, image, mask)
-        reasons = list(item.get("quality_reasons", []))
-        reasons.extend(reason for reason in refined.reasons if reason not in reasons)
-        item["low_quality"] = bool(item.get("low_quality", False) or refined.low_quality)
+        matched_index = matched_by_reference.get(index)
+        proposal = None if matched_index is None else bank.masks[matched_index]
+        refined = refine_protected_mask(data, image, mask, proposal=proposal)
+        reasons = [reason for reason in refined.reasons if reason != "活动轮廓支持较弱"]
+        if refined.confidence < refinement_threshold and "活动轮廓支持较弱" not in reasons:
+            reasons.append("活动轮廓支持较弱")
+        if matched_index is not None and not _candidate_quality_passes(bank, matched_index, preset):
+            reasons.append("未达到当前模型质量预设")
+        elif matched_index is None and item["source"] in {"fast", "caiman"}:
+            reasons.append("当前模型候选中未复现")
+        item["low_quality"] = bool(reasons)
         item["quality_reasons"] = reasons
         protected_masks.append(np.asarray(refined.mask, dtype=bool).copy())
         protected_metadata.append(item)
@@ -380,6 +448,8 @@ def adapt_candidate_bank(movie, projection, reference_masks, reference_metadata,
     output_metadata = list(protected_metadata)
     ranked = []
     for index, mask in enumerate(np.asarray(bank.masks, dtype=bool)):
+        if index in matched_candidate_indices:
+            continue
         if _overlaps_existing(mask, protected_masks, threshold=0.35):
             continue
         if not _candidate_quality_passes(bank, index, preset):

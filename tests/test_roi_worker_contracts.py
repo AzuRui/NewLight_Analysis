@@ -117,6 +117,15 @@ def test_caiman_candidate_arrays_remain_aligned_after_empty_filtering():
     assert preset_accepted.tolist() == [True, False, True]
 
 
+def test_caiman_missing_quality_array_uses_aligned_nan_defaults():
+    worker = load_worker("run_caiman_roi.py")
+
+    values = worker._quality_values([], [0, 2, 3], np.nan)
+
+    assert values.shape == (3,)
+    assert np.isnan(values).all()
+
+
 @pytest.mark.parametrize(
     "diameter,expected",
     [(1.0, (1, 1)), (12.0, (3, 3)), (20.0, (5, 5))],
@@ -296,3 +305,13 @@ def test_fast_worker_imports_custom_runtime_through_method_package(tmp_path):
             if name == "method" or name.startswith("method.") or name == "ultralytics" or name.startswith("ultralytics."):
                 sys.modules.pop(name, None)
         sys.modules.pop("runtime_dependency", None)
+
+
+def test_neusuite_runtime_setup_includes_cpu_detection_dependency():
+    requirements = (ROOT / "requirements-neusuite-runtime.txt").read_text(encoding="utf-8")
+    setup = (ROOT / "setup_neusuite_runtime.bat").read_text(encoding="utf-8")
+    offline_copy = (ROOT / "tools" / "copy_neusuite_runtime_deps.ps1").read_text(encoding="utf-8")
+
+    assert "py-cpuinfo==9.0.0" in requirements
+    assert "import cpuinfo" in setup
+    assert '"cpuinfo"' in offline_copy

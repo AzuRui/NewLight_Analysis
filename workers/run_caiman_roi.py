@@ -102,6 +102,8 @@ def _quality_values(values, accepted_indices, default_value):
     if values is None:
         return np.full(accepted.shape, default_value, dtype=np.float32)
     array = np.asarray(values).reshape(-1)
+    if array.size == 0:
+        return np.full(accepted.shape, default_value, dtype=np.float32)
     if accepted.size and int(np.max(accepted)) >= array.size:
         raise RuntimeError("CaImAn quality array is not aligned with spatial components")
     return np.asarray(array[accepted], dtype=np.float32)

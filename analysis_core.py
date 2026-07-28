@@ -2944,6 +2944,40 @@ def run_conda_worker(env_name: str, script: str, args: list[str], cwd: str | Non
     )
 
 
+def caiman_worker_environment() -> str:
+    if (NEWLIGHT_CAIMAN_PREFIX / "python.exe").is_file():
+        return str(NEWLIGHT_CAIMAN_PREFIX)
+    return "caiman_latest"
+
+
+def resolve_conda_environment_prefix(environment: str) -> Path | None:
+    selector = Path(str(environment)).expanduser()
+    if selector.is_dir():
+        return selector.resolve()
+
+    name = str(environment)
+    candidates = []
+    for value in (os.environ.get("CONDA_PREFIX"), sys.prefix):
+        if value:
+            candidate = Path(value).expanduser()
+            if candidate.name.lower() == name.lower():
+                candidates.append(candidate)
+
+    conda_executable = shutil.which("conda")
+    if conda_executable:
+        executable = Path(conda_executable).resolve()
+        roots = (executable.parent, executable.parent.parent)
+        candidates.extend(root / "envs" / name for root in roots)
+    user_profile = os.environ.get("USERPROFILE")
+    if user_profile:
+        candidates.append(Path(user_profile) / ".conda" / "envs" / name)
+
+    for candidate in candidates:
+        if candidate.is_dir():
+            return candidate.resolve()
+    return None
+
+
 def run_neuroseg3(input_image: np.ndarray, output_dir: str, weights: str | None = None, conf: float = 0.25, mask_threshold: float = 0.5) -> tuple[list[np.ndarray], str]:
     out_dir = Path(output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -2995,6 +3029,7 @@ def _load_roi_worker_result(
     log: str,
     metadata_updates: dict | None = None,
     aligned_arrays: tuple[str, ...] = (),
+    required_arrays: tuple[str, ...] = (),
 ) -> ROIBackendResult:
     if not artifact_path.is_file():
         raise RuntimeError("ROI worker finished without creating an ROI artifact")
@@ -3010,6 +3045,9 @@ def _load_roi_worker_result(
             raise ROIArtifactError(
                 f"ROI quality array {name!r} count does not match mask count {mask_count}"
             )
+    missing = [name for name in required_arrays if name not in artifact.arrays]
+    if missing:
+        raise ROIArtifactError(f"ROI artifact is missing required quality array {missing[0]!r}")
     try:
         summary = json.loads(summary_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
@@ -3063,7 +3101,7 @@ def run_caiman_roi_segmentation(
     summary_path = job_dir / "caiman_summary.json"
     tifffile.imwrite(input_path, movie, photometric="minisblack")
     script = WORKER_DIR / "run_caiman_roi.py"
-    environment = str(NEWLIGHT_CAIMAN_PREFIX) if (NEWLIGHT_CAIMAN_PREFIX / "python.exe").is_file() else "caiman_latest"
+    environment = caiman_worker_environment()
     args = [
         "--input", str(input_path),
         "--output", str(artifact_path),
@@ -3108,6 +3146,14 @@ def run_caiman_roi_segmentation(
                 "component_indices",
                 "preset_accepted",
             ),
+            required_arrays=(
+                "traces",
+                "snr",
+                "r_values",
+                "cnn_scores",
+                "component_indices",
+                "preset_accepted",
+            ) if candidate_mode else (),
         )
         succeeded = True
         return result
@@ -3178,6 +3224,7 @@ def run_fast_roi_segmentation(
             log=log,
             metadata_updates={"projection_mode": str(projection_mode)},
             aligned_arrays=("scores", "source_indices"),
+            required_arrays=("scores", "source_indices") if candidate_mode else (),
         )
         succeeded = True
         return result

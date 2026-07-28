@@ -267,6 +267,104 @@ def test_matching_candidate_is_not_duplicated_after_reference_refinement():
     assert len(result.masks) == 1
 
 
+def test_shifted_same_cell_candidate_is_matched_by_centroid_and_not_duplicated():
+    movie = np.zeros((30, 24, 24), dtype=np.float32)
+    reference = square(5, shape=(24, 24), top=7, left=7)
+    shifted = square(5, shape=(24, 24), top=9, left=9)
+    signal = np.sin(np.linspace(0, 4 * np.pi, movie.shape[0])).astype(np.float32)
+    movie[:, reference | shifted] = signal[:, None] + 2.0
+    bank = CandidateBank(
+        "fast",
+        shifted[None, ...],
+        ("same-cell",),
+        {"scores": np.array([0.95], dtype=np.float32)},
+        ("fast", 1),
+        {},
+    )
+
+    result = adapt_candidate_bank(
+        movie,
+        movie.mean(axis=0),
+        [reference],
+        [{"source": "manual", "base_name": "ROI1"}],
+        bank,
+        "balanced",
+    )
+
+    assert result.protected_count == 1
+    assert result.selected_count == 0
+    assert len(result.masks) == 1
+
+
+def test_successful_refit_recomputes_instead_of_preserving_stale_low_quality_flag():
+    movie, _target, coarse = synthetic_activity_movie()
+    result = adapt_candidate_bank(
+        movie,
+        movie.mean(axis=0),
+        [coarse],
+        [{"source": "manual", "base_name": "ROI1", "low_quality": True, "quality_reasons": ["旧警告"]}],
+        CandidateBank.empty("fast", coarse.shape),
+        "recall",
+    )
+
+    assert not result.metadata[0]["low_quality"]
+    assert result.metadata[0]["quality_reasons"] == []
+    assert display_roi_name(result.metadata[0]) == "ROI1"
+
+
+def test_matched_protected_roi_is_marked_when_candidate_fails_active_preset():
+    movie = np.zeros((30, 24, 24), dtype=np.float32)
+    reference = square(5, shape=(24, 24), top=7, left=7)
+    signal = np.sin(np.linspace(0, 4 * np.pi, movie.shape[0])).astype(np.float32)
+    movie[:, reference] = signal[:, None] + 2.0
+    bank = CandidateBank(
+        "fast",
+        reference[None, ...],
+        ("matched",),
+        {"scores": np.array([0.15], dtype=np.float32)},
+        ("fast", 1),
+        {},
+    )
+
+    result = adapt_candidate_bank(
+        movie,
+        movie.mean(axis=0),
+        [reference],
+        [{"source": "manual", "base_name": "ROI1"}],
+        bank,
+        "precision",
+    )
+
+    assert result.metadata[0]["low_quality"]
+    assert "未达到当前模型质量预设" in result.metadata[0]["quality_reasons"]
+
+
+def test_unmatched_model_generated_roi_is_retained_and_marked_not_reproduced():
+    movie, _target, coarse = synthetic_activity_movie()
+    for engine in ("fast", "caiman"):
+        result = adapt_candidate_bank(
+            movie,
+            movie.mean(axis=0),
+            [coarse],
+            [{"source": engine, "base_name": f"{engine}-roi"}],
+            CandidateBank.empty(engine, coarse.shape),
+            "recall",
+        )
+
+        assert len(result.masks) == 1
+        assert result.metadata[0]["low_quality"]
+        assert "当前模型候选中未复现" in result.metadata[0]["quality_reasons"]
+        assert display_roi_name(result.metadata[0]).endswith("*")
+
+
+def test_nonempty_candidate_bank_requires_selection_quality_arrays():
+    candidate = square(4, shape=(16, 16))[None, ...]
+    with np.testing.assert_raises_regex(ValueError, "scores"):
+        CandidateBank("fast", candidate, ("candidate",), {}, (), {})
+    with np.testing.assert_raises_regex(ValueError, "snr"):
+        CandidateBank("caiman", candidate, ("candidate",), {}, (), {})
+
+
 def test_single_reference_uses_preset_scales_instead_of_zero_mad():
     movie = np.ones((20, 20, 20), dtype=np.float32)
     reference = np.zeros((20, 20), dtype=bool)

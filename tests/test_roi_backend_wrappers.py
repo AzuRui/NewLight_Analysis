@@ -13,6 +13,17 @@ def arg_value(args, name):
     return args[args.index(name) + 1]
 
 
+def test_caiman_environment_resolves_named_fallback_prefix(tmp_path, monkeypatch):
+    local_prefix = tmp_path / "missing-local"
+    named_prefix = tmp_path / "caiman_latest"
+    (named_prefix / "conda-meta").mkdir(parents=True)
+    monkeypatch.setattr(core, "NEWLIGHT_CAIMAN_PREFIX", local_prefix)
+    monkeypatch.setenv("CONDA_PREFIX", str(named_prefix))
+
+    assert core.caiman_worker_environment() == "caiman_latest"
+    assert core.resolve_conda_environment_prefix("caiman_latest") == named_prefix.resolve()
+
+
 def test_caiman_wrapper_preserves_movie_dtype_and_forwards_all_controls(tmp_path, monkeypatch):
     movie = (np.arange(12 * 7 * 9).reshape(12, 7, 9) * 17).astype(np.uint16)
     observed = {}
@@ -196,6 +207,38 @@ def test_wrapper_rejects_misaligned_candidate_quality_arrays(
 
     monkeypatch.setattr(core, "run_conda_worker", fake_run)
     with pytest.raises(ROIArtifactError, match=array_name):
+        if backend == "fast":
+            core.run_fast_roi_segmentation(
+                np.ones((4, 6), dtype=np.float32),
+                session_dir=str(tmp_path),
+                weights=str(tmp_path / "weights.pt"),
+                runtime_root=str(tmp_path / "method"),
+                candidate_mode=True,
+            )
+        else:
+            core.run_caiman_roi_segmentation(
+                np.ones((12, 4, 6), dtype=np.float32),
+                session_dir=str(tmp_path),
+                candidate_mode=True,
+            )
+
+
+@pytest.mark.parametrize("backend", ["fast", "caiman"])
+def test_candidate_wrapper_rejects_missing_required_quality_arrays(tmp_path, monkeypatch, backend):
+    def fake_run(environment, script, args, cwd=None, timeout=None):
+        output = Path(arg_value(args, "--output"))
+        summary = Path(arg_value(args, "--summary"))
+        save_roi_artifact(
+            output,
+            np.ones((1, 4, 6), dtype=bool),
+            image_shape=(4, 6),
+            extra_arrays={},
+        )
+        summary.write_text("{}", encoding="utf-8")
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(core, "run_conda_worker", fake_run)
+    with pytest.raises(ROIArtifactError, match="missing required"):
         if backend == "fast":
             core.run_fast_roi_segmentation(
                 np.ones((4, 6), dtype=np.float32),
