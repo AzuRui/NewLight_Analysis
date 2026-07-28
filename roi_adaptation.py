@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 
 import numpy as np
@@ -445,3 +446,56 @@ def normalized_roi_metadata(value, source, fallback_name):
 def display_roi_name(metadata):
     base_name = str(metadata["base_name"]).rstrip("*")
     return base_name + ("*" if metadata.get("low_quality") else "")
+
+
+def normalize_roi_collection(masks, names=None, metadata=None, source="loaded"):
+    mask_values = tuple(np.asarray(mask, dtype=bool).copy() for mask in masks)
+    count = len(mask_values)
+    if names is not None and len(names) != count:
+        raise ValueError("ROI name count does not match mask count")
+    if metadata is not None and len(metadata) != count:
+        raise ValueError("ROI metadata count does not match mask count")
+    base_names = tuple(str(names[index]) if names is not None else f"ROI{index + 1}" for index in range(count))
+    metadata_values = tuple(
+        normalized_roi_metadata(
+            metadata[index] if metadata is not None else None,
+            source,
+            base_names[index],
+        )
+        for index in range(count)
+    )
+    display_names = tuple(display_roi_name(item) for item in metadata_values)
+    return mask_values, display_names, metadata_values
+
+
+def serialize_roi_metadata(metadata):
+    return json.dumps([dict(item) for item in metadata], ensure_ascii=False, separators=(",", ":"))
+
+
+def deserialize_roi_metadata(value, count, names=None, source="loaded"):
+    count = int(count)
+    names = list(names) if names is not None else [f"ROI{index + 1}" for index in range(count)]
+    if len(names) != count:
+        names = [f"ROI{index + 1}" for index in range(count)]
+    decoded = None
+    if value is not None:
+        raw = value
+        if isinstance(raw, np.ndarray):
+            raw = raw.item() if raw.size == 1 else None
+        if isinstance(raw, bytes):
+            raw = raw.decode("utf-8", errors="replace")
+        if isinstance(raw, str):
+            try:
+                candidate = json.loads(raw)
+                if isinstance(candidate, list) and len(candidate) == count:
+                    decoded = candidate
+            except (TypeError, ValueError, json.JSONDecodeError):
+                decoded = None
+    return [
+        normalized_roi_metadata(
+            decoded[index] if decoded is not None else None,
+            source,
+            names[index],
+        )
+        for index in range(count)
+    ]

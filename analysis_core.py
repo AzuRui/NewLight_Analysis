@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import colorsys
 import json
 import os
 import re
+import shutil
 import struct
 import subprocess
 import sys
@@ -24,6 +26,8 @@ from scipy.ndimage import gaussian_filter
 from skimage import exposure, filters, measure, morphology, restoration
 from PIL import Image
 
+from roi_engines import ROIArtifactError, load_roi_artifact
+
 
 IS_FROZEN = bool(getattr(sys, "frozen", False))
 PROJECT_DIR = Path(__file__).resolve().parent
@@ -43,6 +47,11 @@ NEUROALIGN_DIR = resource_dir("NeuroAlign", WORKSPACE / "2cafe_analysis" / "Neur
 DEEPCADRT_DIR = resource_dir(Path("DeepCAD-RT") / "DeepCAD_RT_pytorch", WORKSPACE / "DeepCAD-RT" / "DeepCAD_RT_pytorch")
 DEEPCADRT_MODEL_DIR = APP_RESOURCE_DIR / "DeepCADRT_Model"
 DEEPCADRT_DEFAULT_MODEL_FILE = DEEPCADRT_MODEL_DIR / "E_02_Iter_6416.pth"
+NEUSUITE_DIR = resource_dir("NeuSuite2p", WORKSPACE / "NeuSuite2p")
+NEUSUITE_DEFAULT_WEIGHTS = NEUSUITE_DIR / "segment_model.pt"
+NEUSUITE_RUNTIME_ROOT = NEUSUITE_DIR / "method"
+CAIMAN_RESOURCE_DIR = resource_dir("CaImAn_Resources", PROJECT_DIR / "CaImAn_Resources")
+NEWLIGHT_CAIMAN_PREFIX = PROJECT_DIR / ".conda_envs" / "newlight_caiman"
 _CUPY_CACHE = None
 
 
@@ -70,16 +79,20 @@ class AnalysisState:
     dff_movie: np.ndarray | None = None
     roi_masks: list[np.ndarray] = field(default_factory=list)
     roi_names: list[str] = field(default_factory=list)
+    roi_metadata: list[dict] = field(default_factory=list)
+    roi_revision: int = 0
     traces: np.ndarray | None = None
     stimulus: np.ndarray | None = None
     trigger_frames: np.ndarray = field(default_factory=lambda: np.array([], dtype=int))
     fs: float = 10.0
     stimulus_fs: float = 2000.0
+    invalid_start_frames: int = 0
     baseline_start_frame: int = 0
     baseline_duration_frames: int = 0
     pre_trigger_s: float = 0.0
     post_trigger_s: float = 0.0
     source_path: str = ""
+    import_bit_depth: str = "auto"
     converted_color_avi_path: str = ""
     converted_source_folder: str = ""
     converted_channel_avi_paths: tuple[str, ...] = field(default_factory=tuple)
@@ -87,6 +100,17 @@ class AnalysisState:
     channel_colors: tuple[str, ...] = field(default_factory=tuple)
     history: list[tuple] = field(default_factory=list)
     last_message: str = ""
+
+
+@dataclass(frozen=True)
+class ROIBackendResult:
+    masks: np.ndarray
+    names: list[str]
+    metadata: dict
+    arrays: dict[str, np.ndarray]
+    log: str
+    artifact_path: Path
+    summary_path: Path
 
 
 @dataclass(frozen=True)
@@ -195,7 +219,7 @@ def cuda_status(check_neuroseg3: bool = False) -> dict[str, object]:
 def acceleration_label(acceleration: str = "auto") -> str:
     cp = get_cupy()
     if acceleration == "gpu" and cp is None:
-        return "GPU requested, CuPy unavailable; using CPU"
+        return "已请求 GPU，但 CuPy 不可用；当前使用 CPU"
     if acceleration in {"auto", "gpu"} and cp is not None:
         try:
             props = cp.cuda.runtime.getDeviceProperties(0)
@@ -220,14 +244,199 @@ def normalize_image(image: np.ndarray, p_low: float = 1, p_high: float = 99) -> 
     return np.clip((arr - lo) / (hi - lo), 0, 1).astype(np.float32)
 
 
+def normalized_display_controls(
+    shadows: float = 1.0,
+    highlights: float = 99.0,
+    brightness: float = 0.0,
+    contrast: float = 100.0,
+) -> tuple[float, float, float, float]:
+    """Clamp display controls to stable, user-facing ranges."""
+    low = float(np.clip(float(shadows), 0.0, 99.9))
+    high = float(np.clip(float(highlights), 0.1, 100.0))
+    if high <= low:
+        high = min(100.0, low + 0.1)
+    return low, high, float(np.clip(float(brightness), -100.0, 100.0)), float(np.clip(float(contrast), 0.0, 300.0))
+
+
+def movie_display_limits(
+    movie: np.ndarray,
+    shadows: float = 1.0,
+    highlights: float = 99.0,
+    overlay_movie: np.ndarray | None = None,
+    overlay_weight: float = 0.0,
+    max_sample_frames: int = 64,
+) -> tuple[float, float]:
+    """Return stable intensity limits for preview and 8-bit AVI rendering.
+
+    Sampling evenly through the time axis avoids materializing a second full
+    movie when a DeepCAD-RT blend is being displayed.
+    """
+    arr = np.asarray(movie, dtype=np.float32)
+    if arr.ndim == 2:
+        arr = arr[None, :, :]
+    if arr.ndim != 3 or arr.shape[0] == 0:
+        return 0.0, 1.0
+    indices = np.unique(np.linspace(0, arr.shape[0] - 1, min(arr.shape[0], max(1, int(max_sample_frames))), dtype=int))
+    sample = arr[indices]
+    if overlay_movie is not None:
+        other = np.asarray(overlay_movie, dtype=np.float32)
+        if other.shape != arr.shape:
+            raise ValueError(f"显示融合 shape 不一致：{arr.shape} 与 {other.shape}")
+        weight = float(np.clip(float(overlay_weight), 0.0, 1.0))
+        sample = (1.0 - weight) * sample + weight * other[indices]
+    finite = sample[np.isfinite(sample)]
+    if finite.size == 0:
+        return 0.0, 1.0
+    low_pct, high_pct, _brightness, _contrast = normalized_display_controls(shadows, highlights)
+    lo, hi = np.percentile(finite, [low_pct, high_pct])
+    if hi <= lo:
+        lo, hi = float(np.min(finite)), float(np.max(finite))
+    if hi <= lo:
+        hi = lo + 1.0
+    return float(lo), float(hi)
+
+
+def render_grayscale_display(
+    image: np.ndarray,
+    limits: tuple[float, float],
+    brightness: float = 0.0,
+    contrast: float = 100.0,
+) -> np.ndarray:
+    """Map a grayscale image to the exact 8-bit view used by AVI export."""
+    lo, hi = float(limits[0]), float(limits[1])
+    _shadows, _highlights, brightness, contrast = normalized_display_controls(1.0, 99.0, brightness, contrast)
+    if hi <= lo:
+        hi = lo + 1.0
+    values = np.asarray(image, dtype=np.float32)
+    normalized = np.clip((values - lo) / (hi - lo), 0.0, 1.0)
+    normalized = (normalized - 0.5) * (contrast / 100.0) + 0.5 + brightness / 100.0
+    return np.rint(np.clip(normalized, 0.0, 1.0) * 255.0).astype(np.uint8)
+
+
+def render_rgb_display(
+    image: np.ndarray,
+    shadows: float = 1.0,
+    highlights: float = 99.0,
+    brightness: float = 0.0,
+    contrast: float = 100.0,
+) -> np.ndarray:
+    """Apply the four display controls to an RGB display/export image."""
+    low_pct, high_pct, brightness, contrast = normalized_display_controls(shadows, highlights, brightness, contrast)
+    arr = np.asarray(image, dtype=np.float32)
+    if arr.ndim != 3 or arr.shape[-1] != 3:
+        raise ValueError(f"需要 RGB 图像，实际 shape 为 {arr.shape}")
+    if np.nanmax(arr) <= 1.0:
+        arr = arr * 255.0
+    low = low_pct / 100.0
+    high = high_pct / 100.0
+    normalized = np.clip((arr / 255.0 - low) / max(1e-6, high - low), 0.0, 1.0)
+    normalized = (normalized - 0.5) * (contrast / 100.0) + 0.5 + brightness / 100.0
+    return np.rint(np.clip(normalized, 0.0, 1.0) * 255.0).astype(np.uint8)
+
+
 def to_uint8(image: np.ndarray) -> np.ndarray:
     return (normalize_image(image) * 255).astype(np.uint8)
 
 
-def load_movie(path: str, max_preview_frames: int | None = None) -> tuple[np.ndarray, float]:
-    ext = Path(path).suffix.lower()
+def normalized_movie_bit_depth(bit_depth: str | None) -> str:
+    raw = "auto" if bit_depth is None else str(bit_depth).strip().lower()
+    raw = raw.replace(" ", "").replace("_", "-")
+    aliases = {
+        "auto": "auto",
+        "preserve": "auto",
+        "native": "auto",
+        "original": "auto",
+        "8": "8-bit",
+        "8bit": "8-bit",
+        "8-bit": "8-bit",
+        "uint8": "8-bit",
+        "16": "16-bit",
+        "16bit": "16-bit",
+        "16-bit": "16-bit",
+        "uint16": "16-bit",
+    }
+    if raw in aliases:
+        return aliases[raw]
+    raise ValueError(f"不支持的位深模式：{bit_depth}")
+
+
+def _movie_to_8bit_stack(movie: np.ndarray) -> np.ndarray:
+    arr = np.asarray(movie)
+    if arr.ndim == 2:
+        arr = arr[None, :, :]
+    if arr.ndim != 3:
+        raise ValueError(f"需要三维视频堆栈，实际 shape 为 {arr.shape}")
+    if arr.dtype == np.uint8:
+        return arr.astype(np.float32, copy=False)
+    arr32 = arr.astype(np.float32, copy=False)
+    if np.issubdtype(arr.dtype, np.integer):
+        info = np.iinfo(arr.dtype)
+        scale = float(info.max - info.min)
+        if scale <= 0:
+            return np.zeros(arr.shape, dtype=np.float32)
+        arr32 = np.clip(arr32 - float(info.min), 0.0, scale)
+        return np.rint(arr32 * (255.0 / scale)).astype(np.float32)
+    finite = arr32[np.isfinite(arr32)]
+    if finite.size == 0:
+        return np.zeros(arr.shape, dtype=np.float32)
+    lo, hi = float(np.min(finite)), float(np.max(finite))
+    if hi <= lo:
+        return np.zeros(arr.shape, dtype=np.float32)
+    return np.rint(np.clip((arr32 - lo) / (hi - lo), 0.0, 1.0) * 255.0).astype(np.float32)
+
+
+def _valid_frame_rate(value: object, default: float | None = None) -> float | None:
+    try:
+        fps = float(value)
+    except (TypeError, ValueError):
+        return default
+    return fps if np.isfinite(fps) and fps > 0 else default
+
+
+def _nearby_protocol_frame_rate(path: Path) -> float | None:
+    for protocol_path in sorted(path.parent.glob("protocol*.txt")):
+        text = None
+        for encoding in ("gbk", "utf-8", "latin1"):
+            try:
+                text = protocol_path.read_text(encoding=encoding)
+                break
+            except (OSError, UnicodeError):
+                continue
+        if text is None:
+            continue
+        match = re.search(r"^\s*Image frame rate\s*:\s*([-+]?\d+(?:\.\d+)?)", text, flags=re.IGNORECASE | re.MULTILINE)
+        if match:
+            fps = _valid_frame_rate(match.group(1))
+            if fps is not None:
+                return fps
+    return None
+
+
+def _tiff_frame_rate(tif: tifffile.TiffFile, path: Path) -> float:
+    metadata = tif.imagej_metadata or {}
+    fps = _valid_frame_rate(metadata.get("fps"))
+    if fps is not None:
+        return fps
+    frame_interval = _valid_frame_rate(metadata.get("finterval"))
+    if frame_interval is not None:
+        return 1.0 / frame_interval
+    ome_metadata = tif.ome_metadata or ""
+    match = re.search(r'\bTimeIncrement="([-+]?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?)"', ome_metadata)
+    if match:
+        frame_interval = _valid_frame_rate(match.group(1))
+        if frame_interval is not None:
+            return 1.0 / frame_interval
+    return _nearby_protocol_frame_rate(path) or 10.0
+
+
+def load_movie(path: str, max_preview_frames: int | None = None, bit_depth: str = "auto") -> tuple[np.ndarray, float]:
+    mode = normalized_movie_bit_depth(bit_depth)
+    movie_path = Path(path)
+    ext = movie_path.suffix.lower()
     if ext in {".tif", ".tiff"}:
-        arr = tifffile.imread(path)
+        with tifffile.TiffFile(path) as tif:
+            arr = tif.asarray()
+            fps = _tiff_frame_rate(tif, movie_path)
         arr = np.asarray(arr)
         if arr.ndim == 2:
             arr = arr[None, :, :]
@@ -236,15 +445,17 @@ def load_movie(path: str, max_preview_frames: int | None = None) -> tuple[np.nda
         elif arr.ndim == 4:
             arr = arr[..., 0]
         else:
-            raise ValueError(f"Unsupported TIFF shape: {arr.shape}")
+            raise ValueError(f"不支持的 TIFF shape：{arr.shape}")
         if max_preview_frames and arr.shape[0] > max_preview_frames:
             arr = arr[:max_preview_frames]
-        return arr.astype(np.float32), 10.0
+        if mode == "8-bit":
+            arr = _movie_to_8bit_stack(arr)
+        return arr.astype(np.float32), fps
     if ext in {".avi", ".mp4", ".mov", ".mkv"}:
         cap = cv2.VideoCapture(path)
         if not cap.isOpened():
-            raise IOError(f"Cannot open video: {path}")
-        fps = cap.get(cv2.CAP_PROP_FPS) or 10.0
+            raise IOError(f"无法打开视频：{path}")
+        fps = _valid_frame_rate(cap.get(cv2.CAP_PROP_FPS), 10.0)
         frames = []
         while True:
             ok, frame = cap.read()
@@ -256,9 +467,12 @@ def load_movie(path: str, max_preview_frames: int | None = None) -> tuple[np.nda
                 break
         cap.release()
         if not frames:
-            raise IOError(f"No frames read from: {path}")
-        return np.stack(frames, axis=0), float(fps)
-    raise ValueError(f"Unsupported file type: {ext}")
+            raise IOError(f"未能从文件中读取任何帧：{path}")
+        movie = np.stack(frames, axis=0)
+        if mode == "8-bit" and movie.dtype != np.uint8:
+            movie = _movie_to_8bit_stack(movie)
+        return movie.astype(np.float32), float(fps)
+    raise ValueError(f"不支持的文件类型：{ext}")
 
 
 def _read_text_with_fallback(path: Path, encodings: tuple[str, ...] = ("gbk", "utf-8", "latin1")) -> str:
@@ -298,7 +512,7 @@ def read_two_photon_protocol(folder: str | Path) -> TwoPhotonProtocol:
     folder = Path(folder)
     candidates = sorted(folder.glob("protocol*.txt"))
     if not candidates:
-        raise FileNotFoundError(f"No protocol*.txt file found in {folder}")
+        raise FileNotFoundError(f"在 {folder} 中未找到 protocol*.txt 文件")
     protocol_path = candidates[0]
     values: dict[str, str] = {}
     for line in _read_text_with_fallback(protocol_path).splitlines():
@@ -311,7 +525,7 @@ def read_two_photon_protocol(folder: str | Path) -> TwoPhotonProtocol:
     frame_rate = _protocol_float(values, "Image frame rate", 10.0)
     recording_time_s = _protocol_float(values, "Recording time", 0.0)
     if width <= 0 or height <= 0:
-        raise ValueError(f"Protocol does not contain a valid image size: {protocol_path}")
+        raise ValueError(f"协议文件中没有有效的图像尺寸：{protocol_path}")
     if frame_rate <= 0:
         frame_rate = 10.0
     expected_frames = int(round(recording_time_s * frame_rate)) if recording_time_s > 0 else 0
@@ -352,7 +566,7 @@ def _tdms_raw_segments(path: str | Path) -> list[tuple[int, int]]:
             if len(leadin) < 28:
                 break
             if leadin[:4] != b"TDSm":
-                raise ValueError(f"Invalid TDMS segment at offset {pos}: {path}")
+                raise ValueError(f"TDMS 数据段无效，偏移位置 {pos}：{path}")
             next_segment_offset = _tdms_u64(leadin, 12)
             raw_data_offset = _tdms_u64(leadin, 20)
             if next_segment_offset == 0xFFFFFFFFFFFFFFFF:
@@ -366,7 +580,7 @@ def _tdms_raw_segments(path: str | Path) -> list[tuple[int, int]]:
                 break
             pos = segment_end
     if not segments:
-        raise ValueError(f"No raw TDMS image segments found: {path}")
+        raise ValueError(f"未找到原始 TDMS 图像数据段：{path}")
     return segments
 
 
@@ -395,7 +609,7 @@ def iter_tdms_image_slots(path: str | Path, width: int, height: int):
 def _two_photon_tdms_path(folder: Path) -> Path:
     tdms_files = sorted(p for p in folder.glob("*.tdms") if not p.name.endswith("_index"))
     if not tdms_files:
-        raise FileNotFoundError(f"No .tdms file found in {folder}")
+        raise FileNotFoundError(f"在 {folder} 中未找到 .tdms 文件")
     preferred = [p for p in tdms_files if "real-time imaging" in p.name.lower()]
     return preferred[0] if preferred else tdms_files[0]
 
@@ -449,12 +663,12 @@ def compose_channel_pseudocolor_rgb(
     limits: tuple[tuple[float, float] | None, ...] | None = None,
 ) -> np.ndarray:
     if not channel_images:
-        raise ValueError("No channel images were provided")
+        raise ValueError("未提供任何通道图像")
     images = [np.asarray(image, dtype=np.float32) for image in channel_images]
     shape = images[0].shape
     if any(image.shape != shape for image in images):
         shapes = ", ".join(str(image.shape) for image in images)
-        raise ValueError(f"Channel images must have the same shape, got: {shapes}")
+        raise ValueError(f"各通道图像必须具有相同 shape，实际为：{shapes}")
     color_names = channel_colors_for_count(colors, len(images))
     if limits is None:
         limits = tuple(None for _ in images)
@@ -503,7 +717,7 @@ def pseudocolor_rgb(
 
 def two_photon_analysis_movie(channel_movies: tuple[np.ndarray, ...]) -> np.ndarray:
     if not channel_movies:
-        raise ValueError("No channel movies were provided")
+        raise ValueError("未提供任何通道视频")
     if len(channel_movies) == 1:
         return np.asarray(channel_movies[0], dtype=np.float32)
     return np.maximum.reduce([np.asarray(movie, dtype=np.float32) for movie in channel_movies])
@@ -557,7 +771,7 @@ def convert_two_photon_folder_to_movie(
     raw_slots = tdms_image_slot_count(tdms_path, protocol.width, protocol.height)
     frame_count, channel_count = _channel_frame_count(protocol, raw_slots)
     if frame_count <= 0:
-        raise ValueError(f"No complete image frames found in {tdms_path}")
+        raise ValueError(f"在 {tdms_path} 中未找到完整图像帧")
 
     movie_path = output_dir / "converted_movie.npy"
     movie = np.lib.format.open_memmap(
@@ -642,12 +856,12 @@ def read_stimulus_file(path: str) -> np.ndarray:
         df = pd.read_csv(path)
         numeric = df.select_dtypes(include=[np.number])
         if numeric.empty:
-            raise ValueError("Stimulus CSV does not contain numeric columns")
+            raise ValueError("刺激 CSV 中没有数值列")
         data = numeric.iloc[:, 0].to_numpy(dtype=np.float32)
     elif ext in {".txt", ".dat"}:
         data = np.loadtxt(path, dtype=np.float32)
     else:
-        raise ValueError(f"Unsupported stimulus file: {ext}")
+        raise ValueError(f"不支持的刺激文件类型：{ext}")
     data = np.asarray(data, dtype=np.float32).reshape(-1)
     return data[np.isfinite(data)]
 
@@ -734,7 +948,7 @@ def read_stimulus_file_info(path: str | Path) -> StimulusFileData:
         df = pd.read_csv(path)
         numeric = df.select_dtypes(include=[np.number])
         if numeric.empty:
-            raise ValueError("Stimulus CSV does not contain numeric columns")
+            raise ValueError("刺激 CSV 中没有数值列")
         data2 = numeric.to_numpy(dtype=np.float32)
         columns = tuple(str(col) for col in numeric.columns)
         col_idx = _best_stimulus_column(data2, columns)
@@ -769,38 +983,60 @@ def read_stimulus_file_info(path: str | Path) -> StimulusFileData:
     return StimulusFileData(signal=signal_data, fs=fs, sample_count=int(signal_data.size))
 
 
-def save_movie_tiff(movie: np.ndarray, path: str) -> None:
-    tifffile.imwrite(path, np.asarray(movie, dtype=np.float32), photometric="minisblack")
+def _movie_to_unsigned_integer_stack(movie: np.ndarray, dtype: np.dtype) -> np.ndarray:
+    arr = np.asarray(movie, dtype=np.float32)
+    if arr.ndim == 2:
+        arr = arr[None, :, :]
+    if arr.ndim != 3:
+        raise ValueError(f"需要三维视频堆栈，实际 shape 为 {arr.shape}")
+    info = np.iinfo(dtype)
+    arr = np.nan_to_num(arr, nan=0.0, posinf=float(info.max), neginf=0.0)
+    return np.clip(np.rint(arr), 0, info.max).astype(dtype)
 
 
-def _movie_to_uint8(movie: np.ndarray) -> np.ndarray:
+def save_movie_tiff(movie: np.ndarray, path: str, bit_depth: str = "auto") -> None:
+    mode = normalized_movie_bit_depth(bit_depth)
+    if mode == "8-bit":
+        arr = _movie_to_unsigned_integer_stack(movie, np.uint8)
+    elif mode == "16-bit":
+        arr = _movie_to_unsigned_integer_stack(movie, np.uint16)
+    else:
+        arr = np.asarray(movie, dtype=np.float32)
+    tifffile.imwrite(path, arr, photometric="minisblack")
+
+
+def _movie_to_uint8(
+    movie: np.ndarray,
+    display_limits: tuple[float, float] | None = None,
+    brightness: float = 0.0,
+    contrast: float = 100.0,
+) -> np.ndarray:
     arr = np.asarray(movie)
     if arr.ndim == 2:
         arr = arr[None, :, :]
     if arr.ndim != 3:
-        raise ValueError(f"Expected a 3D movie stack, got shape {arr.shape}")
-    if arr.dtype == np.uint8:
-        return arr.copy()
-    arr = arr.astype(np.float32, copy=False)
-    finite = arr[np.isfinite(arr)]
-    if finite.size == 0:
-        return np.zeros(arr.shape, dtype=np.uint8)
-    lo, hi = np.percentile(finite, [1, 99])
-    if hi <= lo:
-        lo, hi = float(np.nanmin(finite)), float(np.nanmax(finite))
-    if hi <= lo:
-        return np.zeros(arr.shape, dtype=np.uint8)
-    return np.clip((arr - lo) / (hi - lo) * 255.0, 0, 255).astype(np.uint8)
+        raise ValueError(f"需要三维视频堆栈，实际 shape 为 {arr.shape}")
+    if display_limits is None:
+        display_limits = movie_display_limits(arr)
+    return render_grayscale_display(arr, display_limits, brightness=brightness, contrast=contrast)
 
 
-def save_movie_avi(movie: np.ndarray, path: str, fs: float = 10.0) -> None:
-    frames = _movie_to_uint8(movie)
+def save_movie_avi(
+    movie: np.ndarray,
+    path: str,
+    fs: float = 10.0,
+    display_limits: tuple[float, float] | None = None,
+    brightness: float = 0.0,
+    contrast: float = 100.0,
+) -> None:
+    """Save the same fixed 8-bit mapping used by the grayscale preview."""
+    frames = _movie_to_uint8(movie, display_limits=display_limits, brightness=brightness, contrast=contrast)
     fps = float(fs) if fs and fs > 0 else 10.0
     h, w = frames.shape[1:3]
     Path(path).parent.mkdir(parents=True, exist_ok=True)
     writer = cv2.VideoWriter(path, cv2.VideoWriter_fourcc(*"MJPG"), fps, (w, h), isColor=True)
     if not writer.isOpened():
-        raise IOError(f"Cannot create AVI video: {path}")
+        raise IOError(f"无法创建 AVI 视频：{path}")
     try:
         for frame in frames:
             writer.write(cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR))
@@ -813,27 +1049,33 @@ def save_channel_pseudocolor_avi(
     colors: tuple[str, ...] | list[str] | None,
     path: str,
     fs: float = 10.0,
+    limits: tuple[tuple[float, float] | None, ...] | None = None,
+    shadows: float = 1.0,
+    highlights: float = 99.0,
+    brightness: float = 0.0,
+    contrast: float = 100.0,
     progress=None,
 ) -> None:
     movies = [np.asarray(movie) for movie in channel_movies if movie is not None]
     if not movies:
-        raise ValueError("No channel movies were provided")
+        raise ValueError("未提供任何通道视频")
     first_shape = movies[0].shape
     if len(first_shape) != 3:
-        raise ValueError(f"Expected a 3D channel movie, got shape {first_shape}")
+        raise ValueError(f"需要三维通道视频，实际 shape 为 {first_shape}")
     if any(movie.shape != first_shape for movie in movies):
         shapes = ", ".join(str(movie.shape) for movie in movies)
-        raise ValueError(f"Channel movies must have the same shape, got: {shapes}")
+        raise ValueError(f"各通道视频必须具有相同 shape，实际为：{shapes}")
     color_names = channel_colors_for_count(colors, len(movies))
     frame_count, h, w = first_shape
     fps = float(fs) if fs and fs > 0 else 10.0
     Path(path).parent.mkdir(parents=True, exist_ok=True)
     writer = cv2.VideoWriter(path, cv2.VideoWriter_fourcc(*"MJPG"), fps, (w, h), isColor=True)
     if not writer.isOpened():
-        raise IOError(f"Cannot create AVI video: {path}")
+        raise IOError(f"无法创建 AVI 视频：{path}")
     try:
         for frame_idx in range(frame_count):
-            rgb = compose_channel_pseudocolor_rgb([movie[frame_idx] for movie in movies], color_names)
+            rgb = compose_channel_pseudocolor_rgb([movie[frame_idx] for movie in movies], color_names, limits=limits)
+            rgb = render_rgb_display(rgb, shadows, highlights, brightness, contrast)
             writer.write(cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR))
             if progress is not None:
                 progress(frame_idx + 1, frame_count)
@@ -841,16 +1083,53 @@ def save_channel_pseudocolor_avi(
         writer.release()
 
 
-def save_movie(movie: np.ndarray, path: str, fs: float = 10.0) -> None:
+def save_channel_pseudocolor_tiff(
+    channel_movies: tuple[np.ndarray, ...] | list[np.ndarray],
+    colors: tuple[str, ...] | list[str] | None,
+    path: str,
+    limits: tuple[tuple[float, float] | None, ...] | None = None,
+    shadows: float = 1.0,
+    highlights: float = 99.0,
+    brightness: float = 0.0,
+    contrast: float = 100.0,
+    progress=None,
+) -> None:
+    """Write an RGB TIFF stack that matches the pseudo-colour preview."""
+    movies = [np.asarray(movie) for movie in channel_movies if movie is not None]
+    if not movies:
+        raise ValueError("未提供任何通道视频")
+    first_shape = movies[0].shape
+    if len(first_shape) != 3 or any(movie.shape != first_shape for movie in movies):
+        raise ValueError("各通道视频必须是 shape 相同的三维堆栈")
+    color_names = channel_colors_for_count(colors, len(movies))
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
+    with tifffile.TiffWriter(path, bigtiff=True) as writer:
+        for frame_idx in range(first_shape[0]):
+            rgb = compose_channel_pseudocolor_rgb([movie[frame_idx] for movie in movies], color_names, limits=limits)
+            rgb = render_rgb_display(rgb, shadows, highlights, brightness, contrast)
+            writer.write(rgb, photometric="rgb", metadata=None)
+            if progress is not None:
+                progress(frame_idx + 1, first_shape[0])
+
+
+def save_movie(
+    movie: np.ndarray,
+    path: str,
+    fs: float = 10.0,
+    bit_depth: str = "auto",
+    display_limits: tuple[float, float] | None = None,
+    brightness: float = 0.0,
+    contrast: float = 100.0,
+) -> None:
     ext = Path(path).suffix.lower()
     Path(path).parent.mkdir(parents=True, exist_ok=True)
     if ext in {".tif", ".tiff"}:
-        save_movie_tiff(movie, path)
+        save_movie_tiff(movie, path, bit_depth=bit_depth)
         return
     if ext == ".avi":
-        save_movie_avi(movie, path, fs=fs)
+        save_movie_avi(movie, path, fs=fs, display_limits=display_limits, brightness=brightness, contrast=contrast)
         return
-    raise ValueError(f"Unsupported movie output type: {ext}. Use .tif, .tiff, or .avi")
+    raise ValueError(f"不支持的视频输出类型：{ext}。请使用 .tif、.tiff 或 .avi")
 
 
 def ensure_deepcadrt_model_available(model: str | None = None) -> str:
@@ -874,7 +1153,7 @@ def blend_movies(raw_movie: np.ndarray, denoised_movie: np.ndarray, weight: floa
     raw = np.asarray(raw_movie, dtype=np.float32)
     denoised = np.asarray(denoised_movie, dtype=np.float32)
     if raw.shape != denoised.shape:
-        raise ValueError(f"Cannot blend movies with different shapes: {raw.shape} vs {denoised.shape}")
+        raise ValueError(f"无法混合 shape 不同的视频：{raw.shape} 与 {denoised.shape}")
     return ((1.0 - weight) * raw + weight * denoised).astype(np.float32, copy=False)
 
 
@@ -883,8 +1162,55 @@ def blend_images(raw_image: np.ndarray, denoised_image: np.ndarray, weight: floa
     raw = np.asarray(raw_image, dtype=np.float32)
     denoised = np.asarray(denoised_image, dtype=np.float32)
     if raw.shape != denoised.shape:
-        raise ValueError(f"Cannot blend images with different shapes: {raw.shape} vs {denoised.shape}")
+        raise ValueError(f"无法混合 shape 不同的图像：{raw.shape} 与 {denoised.shape}")
     return ((1.0 - weight) * raw + weight * denoised).astype(np.float32, copy=False)
+
+
+def preserve_empty_source_frames(source_movie: np.ndarray, processed_movie: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Restore strictly empty source frames after a temporal denoising model.
+
+    DeepCAD-RT uses temporal patches and can emit nonzero model-bias values for
+    an all-zero frame at the beginning or end of a recording. Those frames
+    contain no acquisition data and must remain empty in preview and export.
+    """
+    source = np.asarray(source_movie, dtype=np.float32)
+    processed = np.asarray(processed_movie, dtype=np.float32)
+    if source.shape != processed.shape or source.ndim != 3:
+        raise ValueError(f"空帧保护需要相同的三维堆栈，实际为 {source.shape} 与 {processed.shape}")
+    safe_source = np.nan_to_num(source, nan=0.0, posinf=0.0, neginf=0.0)
+    global_peak = float(np.max(np.abs(safe_source))) if safe_source.size else 0.0
+    tolerance = max(1e-6, global_peak * 1e-8)
+    empty_mask = np.max(np.abs(safe_source), axis=(1, 2)) <= tolerance
+    if not np.any(empty_mask):
+        return processed, np.empty(0, dtype=int)
+    restored = processed.copy()
+    restored[empty_mask] = source[empty_mask]
+    return restored, np.flatnonzero(empty_mask).astype(int)
+
+
+def preserve_invalid_denoised_frames(source_movie: np.ndarray, processed_movie: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Restore nonempty input frames when DeepCAD-RT emitted an empty frame.
+
+    DeepCAD-RT's upstream temporal stitcher can leave trailing frames as zero
+    for a short movie.  A zero output for a nonempty input is invalid; keeping
+    the source frame is safer than blending an artificial black frame into a
+    preview or a saved movie.
+    """
+    source = np.asarray(source_movie, dtype=np.float32)
+    processed = np.asarray(processed_movie, dtype=np.float32)
+    if source.shape != processed.shape or source.ndim != 3:
+        raise ValueError(f"异常帧保护需要相同的三维堆栈，实际为 {source.shape} 与 {processed.shape}")
+    safe_source = np.nan_to_num(source, nan=0.0, posinf=0.0, neginf=0.0)
+    safe_processed = np.nan_to_num(processed, nan=0.0, posinf=0.0, neginf=0.0)
+    source_peak = np.max(np.abs(safe_source), axis=(1, 2))
+    output_peak = np.max(np.abs(safe_processed), axis=(1, 2))
+    source_tolerance = max(1e-6, float(np.max(source_peak)) * 1e-8)
+    invalid_mask = (source_peak > source_tolerance) & (output_peak <= source_tolerance)
+    if not np.any(invalid_mask):
+        return processed, np.empty(0, dtype=int)
+    restored = processed.copy()
+    restored[invalid_mask] = source[invalid_mask]
+    return restored, np.flatnonzero(invalid_mask).astype(int)
 
 
 def compute_baseline(movie: np.ndarray, mode: str = "percentile", start: int = 0, end: int | None = None) -> np.ndarray:
@@ -904,16 +1230,32 @@ def compute_baseline(movie: np.ndarray, mode: str = "percentile", start: int = 0
     return baseline
 
 
-def baseline_from_frames(movie: np.ndarray, start_frame: int | float = 0, duration_frames: int | float = 0) -> np.ndarray:
-    start = max(0, int(round(float(start_frame))))
+def normalized_invalid_start_frames(movie: np.ndarray, invalid_start_frames: int | float = 0) -> int:
+    frame_count = int(np.asarray(movie).shape[0])
+    invalid = int(round(float(invalid_start_frames)))
+    if invalid < 0:
+        raise ValueError("无效起始帧数必须大于或等于 0")
+    if frame_count <= 0 or invalid >= frame_count:
+        raise ValueError(f"无效起始帧数 {invalid} 必须小于视频总帧数 {frame_count}")
+    return invalid
+
+
+def baseline_from_frames(
+    movie: np.ndarray,
+    start_frame: int | float = 0,
+    duration_frames: int | float = 0,
+    invalid_start_frames: int | float = 0,
+) -> np.ndarray:
+    invalid = normalized_invalid_start_frames(movie, invalid_start_frames)
+    start = max(invalid, int(round(float(start_frame))))
     duration = max(0, int(round(float(duration_frames))))
     if duration <= 0:
-        return compute_baseline(movie, mode="percentile")
+        return compute_baseline(movie, mode="percentile", start=invalid)
     if start >= movie.shape[0]:
-        raise ValueError(f"Baseline start frame {start} is outside movie length {movie.shape[0]}")
+        raise ValueError(f"基线起始帧 {start} 超出视频总帧数 {movie.shape[0]}")
     end = min(movie.shape[0], start + duration)
     if end <= start:
-        raise ValueError("Baseline duration selects no frames")
+        raise ValueError("基线持续帧数没有选中任何帧")
     return compute_baseline(movie, mode="mean", start=start, end=end)
 
 
@@ -930,22 +1272,46 @@ def baseline_from_seconds(movie: np.ndarray, fs: float, start_s: float, duration
     return compute_baseline(movie, mode=mode, start=start, end=end)
 
 
-def compute_projection(movie: np.ndarray, mode: str, acceleration: str = "auto") -> np.ndarray:
+def compute_projection(
+    movie: np.ndarray,
+    mode: str,
+    acceleration: str = "auto",
+    mean_start_frame: int = 0,
+    mean_duration_frames: int = 0,
+    invalid_start_frames: int = 0,
+) -> np.ndarray:
+    """Create a display projection without changing the analysis movie.
+
+    A positive mean duration restricts only the mean projection to the protocol
+    frame window. Max, standard deviation, and 25th-percentile views always
+    describe the full movie.
+    """
+    arr_movie = np.asarray(movie)
+    invalid = normalized_invalid_start_frames(arr_movie, invalid_start_frames)
+    if mode == "mean" and int(mean_duration_frames) > 0:
+        start = max(invalid, int(mean_start_frame))
+        end = min(arr_movie.shape[0], start + int(mean_duration_frames))
+        if end > start:
+            arr_movie = arr_movie[start:end]
+    else:
+        arr_movie = arr_movie[invalid:]
     cp = get_cupy() if acceleration in {"auto", "gpu"} else None
     if cp is not None and mode in {"mean", "max", "std"}:
-        arr = cp.asarray(movie, dtype=cp.float32)
+        arr = cp.asarray(arr_movie, dtype=cp.float32)
         if mode == "max":
             return cp.asnumpy(cp.max(arr, axis=0)).astype(np.float32)
         if mode == "std":
             return cp.asnumpy(cp.std(arr, axis=0)).astype(np.float32)
         return cp.asnumpy(cp.mean(arr, axis=0)).astype(np.float32)
     if mode == "max":
-        return np.max(movie, axis=0)
+        return np.max(arr_movie, axis=0)
     if mode == "std":
-        return np.std(movie, axis=0)
+        return np.std(arr_movie, axis=0)
+    if mode == "p25":
+        return np.percentile(arr_movie, 25, axis=0).astype(np.float32)
     if mode == "corr":
-        return local_correlation_image(movie)
-    return np.mean(movie, axis=0)
+        return local_correlation_image(arr_movie)
+    return np.mean(arr_movie, axis=0)
 
 
 def local_correlation_image(movie: np.ndarray) -> np.ndarray:
@@ -1003,7 +1369,7 @@ def _shift_2d_rows(rows: np.ndarray, shift_px: int) -> np.ndarray:
 def apply_interlacing_shift_image(image: np.ndarray, shift_px: int, row_parity: str = "odd") -> np.ndarray:
     arr = np.asarray(image)
     if arr.ndim != 2:
-        raise ValueError(f"Expected a 2D image, got shape {arr.shape}")
+        raise ValueError(f"需要二维图像，实际 shape 为 {arr.shape}")
     shift = int(round(float(shift_px)))
     out = arr.copy()
     if shift == 0:
@@ -1016,7 +1382,7 @@ def apply_interlacing_shift_image(image: np.ndarray, shift_px: int, row_parity: 
 def apply_interlacing_shift_movie(movie: np.ndarray, shift_px: int, row_parity: str = "odd") -> np.ndarray:
     arr = np.asarray(movie)
     if arr.ndim != 3:
-        raise ValueError(f"Expected a 3D movie stack, got shape {arr.shape}")
+        raise ValueError(f"需要三维视频堆栈，实际 shape 为 {arr.shape}")
     shift = int(round(float(shift_px)))
     out = np.empty_like(arr, dtype=np.float32)
     for frame_idx, frame in enumerate(arr):
@@ -1027,7 +1393,7 @@ def apply_interlacing_shift_movie(movie: np.ndarray, shift_px: int, row_parity: 
 def apply_interlacing_shift_movie_inplace(movie: np.ndarray, shift_px: int, row_parity: str = "odd", progress=None) -> None:
     arr = np.asarray(movie)
     if arr.ndim != 3:
-        raise ValueError(f"Expected a 3D movie stack, got shape {arr.shape}")
+        raise ValueError(f"需要三维视频堆栈，实际 shape 为 {arr.shape}")
     shift = int(round(float(shift_px)))
     if shift == 0:
         return
@@ -1043,7 +1409,7 @@ def apply_interlacing_shift_movie_inplace(movie: np.ndarray, shift_px: int, row_
 def estimate_interlacing_shift(image: np.ndarray, search_range: int = 10, row_parity: str = "odd") -> int:
     arr = np.asarray(image, dtype=np.float32)
     if arr.ndim != 2:
-        raise ValueError(f"Expected a 2D image, got shape {arr.shape}")
+        raise ValueError(f"需要二维图像，实际 shape 为 {arr.shape}")
     h, w = arr.shape
     if h < 4 or w < 8:
         return 0
@@ -1088,7 +1454,7 @@ def estimate_interlacing_shift_from_movie(
 ) -> int:
     arr = np.asarray(movie)
     if arr.ndim != 3:
-        raise ValueError(f"Expected a 3D movie stack, got shape {arr.shape}")
+        raise ValueError(f"需要三维视频堆栈，实际 shape 为 {arr.shape}")
     n_frames = arr.shape[0]
     if n_frames <= 0:
         return 0
@@ -1104,11 +1470,11 @@ def estimate_interlacing_shift_from_movie(
 def write_analysis_movie_from_channels(movie: np.ndarray, channel_movies: tuple[np.ndarray, ...] | list[np.ndarray]) -> None:
     channels = [np.asarray(channel) for channel in channel_movies if channel is not None]
     if not channels:
-        raise ValueError("No channel movies were provided")
+        raise ValueError("未提供任何通道视频")
     target = np.asarray(movie)
     if any(channel.shape != target.shape for channel in channels):
         shapes = ", ".join(str(channel.shape) for channel in channels)
-        raise ValueError(f"Channel movies must match analysis movie shape {target.shape}, got: {shapes}")
+        raise ValueError(f"各通道视频必须匹配分析视频 shape {target.shape}，实际为：{shapes}")
     for frame_idx in range(target.shape[0]):
         if len(channels) == 1:
             target[frame_idx] = channels[0][frame_idx]
@@ -1172,27 +1538,304 @@ def bleach_correct(movie: np.ndarray) -> np.ndarray:
     return (movie - trend[:, None, None]).astype(np.float32)
 
 
-def enhance_contrast(movie: np.ndarray) -> np.ndarray:
+def enhance_contrast(movie: np.ndarray, clip_limit: float = 0.02) -> np.ndarray:
+    clip_limit = max(0.001, float(clip_limit))
     out = np.empty_like(movie, dtype=np.float32)
     for i, frame in enumerate(movie):
-        out[i] = exposure.equalize_adapthist(normalize_image(frame), clip_limit=0.02)
+        out[i] = exposure.equalize_adapthist(normalize_image(frame), clip_limit=clip_limit)
     return out.astype(np.float32)
 
 
-def rigid_motion_correction(movie: np.ndarray, template_frames: int = 100) -> tuple[np.ndarray, list[tuple[float, float]]]:
-    n = min(movie.shape[0], max(1, int(template_frames)))
-    template = np.mean(movie[:n], axis=0)
-    corrected = np.empty_like(movie, dtype=np.float32)
-    shifts = []
+def _phase_translation(reference: np.ndarray, moving: np.ndarray, upsample_factor: int, max_shift: float) -> np.ndarray:
     try:
         from skimage.registration import phase_cross_correlation
     except Exception as exc:
-        raise RuntimeError("skimage.registration.phase_cross_correlation is unavailable") from exc
-    for i, frame in enumerate(movie):
-        shift, _, _ = phase_cross_correlation(template, frame, upsample_factor=10)
+        raise RuntimeError("无法使用 skimage.registration.phase_cross_correlation") from exc
+
+    shift, _, _ = phase_cross_correlation(reference, moving, upsample_factor=max(1, int(upsample_factor)))
+    shift = np.asarray(shift, dtype=np.float32)
+    if not np.all(np.isfinite(shift)):
+        return np.zeros(2, dtype=np.float32)
+    return np.clip(shift, -float(max_shift), float(max_shift))
+
+
+def _rigid_reference_window(
+    movie: np.ndarray,
+    reference_mode: str,
+    reference_start: int,
+    reference_frames: int,
+) -> tuple[int, int]:
+    frame_count = int(movie.shape[0])
+    window = min(frame_count, max(1, int(reference_frames)))
+    mode = str(reference_mode).strip().lower()
+    if mode == "manual":
+        start = int(reference_start)
+        if start < 0 or start >= frame_count:
+            raise ValueError(f"参考起始帧必须位于 0 到 {frame_count - 1} 之间。")
+        return start, min(frame_count, start + window)
+    if mode != "auto":
+        raise ValueError("参考帧模式必须为 auto 或 manual。")
+    if window >= frame_count:
+        return 0, frame_count
+    if window == 1:
+        sharpness = [float(np.var(ndimage.laplace(frame))) for frame in movie]
+        start = int(np.argmax(sharpness))
+        return start, start + 1
+
+    sample_step = max(1, int(np.ceil(max(movie.shape[1:]) / 128.0)))
+    sample = np.asarray(movie[:, ::sample_step, ::sample_step], dtype=np.float32)
+    transition_scores = np.empty(frame_count - 1, dtype=np.float32)
+    trajectory = np.zeros((frame_count, 2), dtype=np.float32)
+    for i in range(1, frame_count):
+        shift = _phase_translation(sample[i - 1], sample[i], upsample_factor=1, max_shift=max(sample.shape[1:]))
+        transition_scores[i - 1] = float(np.linalg.norm(shift))
+        trajectory[i] = trajectory[i - 1] - shift
+
+    typical_position = np.median(trajectory, axis=0)
+    candidate_scores = np.empty(frame_count - window + 1, dtype=np.float32)
+    for start in range(candidate_scores.size):
+        local = transition_scores[start : start + window - 1]
+        position_distance = np.linalg.norm(trajectory[start : start + window] - typical_position, axis=1)
+        candidate_scores[start] = float(
+            np.median(local) + 0.25 * np.mean(local) + 0.1 * np.median(position_distance)
+        )
+    start = int(np.argmin(candidate_scores))
+    return start, start + window
+
+
+def rigid_motion_correction(
+    movie: np.ndarray,
+    template_frames: int = 100,
+    *,
+    reference_mode: str = "auto",
+    reference_start: int = 0,
+    reference_frames: int | None = None,
+    max_shift: float = 15.0,
+    upsample_factor: int = 10,
+) -> tuple[np.ndarray, list[tuple[float, float]], dict]:
+    source = np.asarray(movie, dtype=np.float32)
+    if source.ndim != 3 or source.shape[0] < 1:
+        raise ValueError(f"刚性运动矫正需要非空三维视频，实际 shape 为 {source.shape}。")
+    max_shift = float(max_shift)
+    if not np.isfinite(max_shift) or max_shift < 0:
+        raise ValueError("最大刚性位移必须是大于或等于 0 的有限数值。")
+    requested_frames = template_frames if reference_frames is None else reference_frames
+    start, end = _rigid_reference_window(source, reference_mode, reference_start, requested_frames)
+    anchor_frame = start + (end - start) // 2
+    anchor = source[anchor_frame]
+
+    aligned_reference = np.empty((end - start,) + source.shape[1:], dtype=np.float32)
+    for output_index, frame_index in enumerate(range(start, end)):
+        shift = _phase_translation(anchor, source[frame_index], upsample_factor, max_shift)
+        aligned_reference[output_index] = ndimage.shift(source[frame_index], shift=shift, order=1, mode="nearest")
+    template = np.median(aligned_reference, axis=0).astype(np.float32)
+
+    corrected = np.empty_like(source, dtype=np.float32)
+    shifts = []
+    for i, frame in enumerate(source):
+        shift = _phase_translation(template, frame, upsample_factor, max_shift)
         corrected[i] = ndimage.shift(frame, shift=shift, order=1, mode="nearest")
         shifts.append((float(shift[0]), float(shift[1])))
-    return corrected, shifts
+    info = {
+        "reference_start": int(start),
+        "reference_end": int(end),
+        "anchor_frame": int(anchor_frame),
+        "template": template,
+    }
+    return corrected, shifts, info
+
+
+def _local_patch_starts(length: int, block_size: int) -> list[int]:
+    last = max(0, int(length) - int(block_size))
+    stride = max(8, int(block_size) // 2)
+    starts = list(range(0, last + 1, stride))
+    if not starts or starts[-1] != last:
+        starts.append(last)
+    return starts
+
+
+def _interpolate_local_shift_grid(
+    grid: np.ndarray,
+    centers_y: np.ndarray,
+    centers_x: np.ndarray,
+    shape: tuple[int, int],
+) -> np.ndarray:
+    height, width = shape
+    target_x = np.arange(width, dtype=np.float32)
+    target_y = np.arange(height, dtype=np.float32)
+    rows = np.empty((grid.shape[0], width), dtype=np.float32)
+    for row_index, row in enumerate(grid):
+        rows[row_index] = np.interp(target_x, centers_x, row, left=row[0], right=row[-1])
+    dense = np.empty((height, width), dtype=np.float32)
+    for column_index in range(width):
+        column = rows[:, column_index]
+        dense[:, column_index] = np.interp(
+            target_y,
+            centers_y,
+            column,
+            left=column[0],
+            right=column[-1],
+        )
+    return dense
+
+
+def _estimate_local_shift_grid(
+    template: np.ndarray,
+    frame: np.ndarray,
+    starts_y: list[int],
+    starts_x: list[int],
+    block_size: int,
+    max_local_deformation: float,
+) -> tuple[np.ndarray, np.ndarray]:
+    shift_grid = np.zeros((len(starts_y), len(starts_x), 2), dtype=np.float32)
+    limit_hits = np.zeros((len(starts_y), len(starts_x)), dtype=bool)
+    window_1d = np.hanning(block_size).astype(np.float32)
+    window = np.outer(window_1d, window_1d)
+    texture_floor = max(float(np.std(template)) * 1e-3, np.finfo(np.float32).eps)
+
+    for row_index, start_y in enumerate(starts_y):
+        for column_index, start_x in enumerate(starts_x):
+            ref_patch = template[start_y : start_y + block_size, start_x : start_x + block_size]
+            moving_patch = frame[start_y : start_y + block_size, start_x : start_x + block_size]
+            if float(np.std(ref_patch)) <= texture_floor or float(np.std(moving_patch)) <= texture_floor:
+                continue
+            ref_windowed = (ref_patch - float(np.mean(ref_patch))) * window
+            moving_windowed = (moving_patch - float(np.mean(moving_patch))) * window
+            shift = _phase_translation(
+                ref_windowed,
+                moving_windowed,
+                upsample_factor=4,
+                max_shift=max_local_deformation,
+            )
+            if not np.all(np.isfinite(shift)):
+                continue
+            shift_grid[row_index, column_index] = shift
+            if max_local_deformation > 0:
+                limit_hits[row_index, column_index] = bool(
+                    np.any(np.abs(shift) >= max_local_deformation - 1e-6)
+                )
+
+    # Keep residual whole-frame motion: the rigid estimate can be biased by local deformation.
+    shift_grid = np.clip(shift_grid, -max_local_deformation, max_local_deformation)
+    shift_grid[..., 0] = ndimage.median_filter(shift_grid[..., 0], size=3, mode="nearest")
+    shift_grid[..., 1] = ndimage.median_filter(shift_grid[..., 1], size=3, mode="nearest")
+    return shift_grid.astype(np.float32), limit_hits
+
+
+def fast_motion_correction(
+    movie: np.ndarray,
+    *,
+    reference_mode: str = "auto",
+    reference_start: int = 0,
+    reference_frames: int = 100,
+    max_shift: float = 15.0,
+    flexible_strength: float = 0.0,
+    local_block_size: int = 96,
+    max_local_deformation: float = 3.0,
+    upsample_factor: int = 10,
+) -> tuple[np.ndarray, list[tuple[float, float]], dict]:
+    strength = float(flexible_strength)
+    if not np.isfinite(strength):
+        raise ValueError("柔性强度必须是有限数值。")
+    strength = float(np.clip(strength, 0.0, 1.0))
+    max_local = float(max_local_deformation)
+    if not np.isfinite(max_local) or max_local < 0:
+        raise ValueError("最大局部形变必须是大于或等于 0 的有限数值。")
+    try:
+        requested_block = int(round(float(local_block_size)))
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError("局部块尺寸必须是有限整数。") from exc
+    if requested_block < 8:
+        raise ValueError("局部块尺寸必须大于或等于 8 px。")
+
+    corrected, shifts, rigid_info = rigid_motion_correction(
+        movie,
+        reference_mode=reference_mode,
+        reference_start=reference_start,
+        reference_frames=reference_frames,
+        max_shift=max_shift,
+        upsample_factor=upsample_factor,
+    )
+    info = dict(rigid_info)
+    info.update(
+        {
+            "flexible_strength": strength,
+            "local_applied": False,
+            "local_skip_reason": "",
+            "local_block_size": 0,
+            "local_grid_shape": (0, 0),
+            "local_median_abs_shift": (0.0, 0.0),
+            "local_max_abs_shift_by_axis": (0.0, 0.0),
+            "local_max_abs_shift": 0.0,
+            "local_limit_hit_fraction": 0.0,
+        }
+    )
+    if strength <= 0.0:
+        info["local_skip_reason"] = "flexible_strength_zero"
+        return corrected, shifts, info
+    if max_local <= 0.0:
+        info["local_skip_reason"] = "max_local_deformation_zero"
+        return corrected, shifts, info
+
+    height, width = corrected.shape[1:]
+    if min(height, width) < 32:
+        info["local_skip_reason"] = "image_too_small"
+        return corrected, shifts, info
+    largest_useful_block = max(16, (2 * min(height, width)) // 3)
+    block_size = min(max(16, requested_block), largest_useful_block)
+    starts_y = _local_patch_starts(height, block_size)
+    starts_x = _local_patch_starts(width, block_size)
+    if len(starts_y) < 2 or len(starts_x) < 2:
+        info["local_skip_reason"] = "image_too_small"
+        return corrected, shifts, info
+
+    centers_y = np.asarray(starts_y, dtype=np.float32) + (block_size - 1) / 2.0
+    centers_x = np.asarray(starts_x, dtype=np.float32) + (block_size - 1) / 2.0
+    template = np.asarray(info["template"], dtype=np.float32)
+    output = np.empty_like(corrected, dtype=np.float32)
+    yy, xx = np.indices((height, width), dtype=np.float32)
+    all_local_shifts = []
+    all_limit_hits = []
+    smooth_sigma = max(1.0, block_size / 8.0)
+
+    for frame_index, frame in enumerate(corrected):
+        shift_grid, limit_hits = _estimate_local_shift_grid(
+            template,
+            frame,
+            starts_y,
+            starts_x,
+            block_size,
+            max_local,
+        )
+        dense_y = _interpolate_local_shift_grid(shift_grid[..., 0], centers_y, centers_x, (height, width))
+        dense_x = _interpolate_local_shift_grid(shift_grid[..., 1], centers_y, centers_x, (height, width))
+        dense_y = gaussian_filter(dense_y, sigma=smooth_sigma, mode="nearest") * strength
+        dense_x = gaussian_filter(dense_x, sigma=smooth_sigma, mode="nearest") * strength
+        output[frame_index] = ndimage.map_coordinates(
+            frame,
+            [yy - dense_y, xx - dense_x],
+            order=1,
+            mode="nearest",
+        )
+        all_local_shifts.append(shift_grid)
+        all_limit_hits.append(limit_hits)
+
+    local_shifts = np.stack(all_local_shifts).astype(np.float32)
+    absolute_shifts = np.abs(local_shifts)
+    limit_hit_fraction = float(np.mean(np.stack(all_limit_hits))) if all_limit_hits else 0.0
+    info.update(
+        {
+            "local_applied": True,
+            "local_skip_reason": "",
+            "local_block_size": int(block_size),
+            "local_grid_shape": (len(starts_y), len(starts_x)),
+            "local_median_abs_shift": tuple(float(v) for v in np.median(absolute_shifts, axis=(0, 1, 2))),
+            "local_max_abs_shift_by_axis": tuple(float(v) for v in np.max(absolute_shifts, axis=(0, 1, 2))),
+            "local_max_abs_shift": float(np.max(absolute_shifts)),
+            "local_limit_hit_fraction": limit_hit_fraction,
+        }
+    )
+    return output.astype(np.float32), shifts, info
 
 
 def detect_vessels(movie: np.ndarray, fs: float = 10.0, threshold: float = 90.0) -> tuple[np.ndarray, np.ndarray]:
@@ -1354,12 +1997,12 @@ def env_secant(x_data: np.ndarray, y_data: np.ndarray, view: int, side: str = "b
     x = np.asarray(x_data, dtype=np.float64).reshape(-1)
     y = np.asarray(y_data, dtype=np.float64).reshape(-1)
     if x.size != y.size:
-        raise ValueError("x_data and y_data must have the same length")
+        raise ValueError("x_data 与 y_data 的长度必须相同")
     if x.size == 0:
         return np.array([], dtype=np.float32)
     view = int(view)
     if view <= 1:
-        raise ValueError("Parameter <view> too small")
+        raise ValueError("参数 <view> 过小")
     side_factor = 1.0 if str(side).lower() == "top" else -1.0
     data_len = y.size
     x_new = [x[0]]
@@ -1554,14 +2197,14 @@ def process_atlas_image(path: str, frame_shape: tuple[int, int], min_area: int =
     atlas = np.asarray(Image.open(path).convert("L"), dtype=np.float32)
     finite = atlas[np.isfinite(atlas)]
     if finite.size == 0:
-        raise ValueError("Atlas image contains no valid pixels")
+        raise ValueError("图谱图像中没有有效像素")
 
     p2, p98 = np.percentile(finite, (2, 98))
     if p98 <= p2:
         p2 = float(np.min(finite))
         p98 = float(np.max(finite))
     if p98 <= p2:
-        raise ValueError("Atlas image has no contrast")
+        raise ValueError("图谱图像没有可用对比度")
 
     atlas_norm = np.clip((atlas - p2) / (p98 - p2), 0, 1)
     binary = atlas_norm > 0.9
@@ -1571,12 +2214,12 @@ def process_atlas_image(path: str, frame_shape: tuple[int, int], min_area: int =
     binary = morphology.remove_small_objects(binary.astype(bool), min_size=max(1, int(min_area)))
     labels = measure.label(binary)
     if labels.max() == 0:
-        raise ValueError("No valid ROIs found in atlas image")
+        raise ValueError("图谱图像中未找到有效 ROI")
 
     resized = cv2.resize(labels.astype(np.int32), (frame_shape[1], frame_shape[0]), interpolation=cv2.INTER_NEAREST)
     regions = [region for region in measure.regionprops(resized) if region.area >= min_area]
     if not regions:
-        raise ValueError("No valid ROIs found in atlas image")
+        raise ValueError("图谱图像中未找到有效 ROI")
 
     regions = sorted(regions, key=lambda region: (region.centroid[0], region.centroid[1]))
     rois = [resized == region.label for region in regions]
@@ -1589,7 +2232,7 @@ def process_atlas_json(path: str, frame_shape: tuple[int, int], min_area: int = 
         atlas = json.load(f)
     regions = atlas.get("regions", [])
     if not isinstance(regions, list) or not regions:
-        raise ValueError("Atlas JSON has no regions")
+        raise ValueError("Atlas JSON 中没有区域")
 
     frame_h, frame_w = frame_shape[:2]
     src_w = int(atlas.get("image_width", frame_w) or frame_w)
@@ -1621,7 +2264,7 @@ def process_atlas_json(path: str, frame_shape: tuple[int, int], min_area: int = 
         region_items.append((centroid_y, centroid_x, mask.astype(bool), str(name)))
 
     if not region_items:
-        raise ValueError("No valid ROIs found in atlas JSON")
+        raise ValueError("Atlas JSON 中未找到有效 ROI")
 
     region_items.sort(key=lambda item: (item[0], item[1]))
     rois = [item[2] for item in region_items]
@@ -1730,15 +2373,31 @@ def export_results(
     return paths
 
 
+def roi_color_rgb(index: int) -> tuple[float, float, float]:
+    """Return the stable display color assigned to a zero-based ROI index."""
+    index = int(index)
+    if index < 0:
+        raise ValueError("ROI index must be non-negative")
+    hue = (0.53 + index * 0.618033988749895) % 1.0
+    return tuple(float(channel) for channel in colorsys.hsv_to_rgb(hue, 0.78, 0.82))
+
+
+def roi_color_uint8(index: int) -> tuple[int, int, int]:
+    return tuple(int(round(channel * 255)) for channel in roi_color_rgb(index))
+
+
+def roi_color_hex(index: int) -> str:
+    return "#" + "".join(f"{channel:02x}" for channel in roi_color_uint8(index))
+
+
 def draw_roi_overlay(image: np.ndarray, roi_masks: list[np.ndarray], roi_names: list[str]) -> np.ndarray:
     base = (normalize_image(image) * 255).astype(np.uint8)
     rgb = cv2.cvtColor(base, cv2.COLOR_GRAY2RGB)
     if not roi_masks:
         return rgb
-    colors = (plt.cm.hsv(np.linspace(0, 1, max(len(roi_masks), 1)))[:, :3] * 255).astype(np.uint8)
     for i, mask in enumerate(roi_masks):
         contours = measure.find_contours(mask.astype(np.uint8), 0.5)
-        color = tuple(int(c) for c in colors[i % len(colors)])
+        color = roi_color_uint8(i)
         for contour in contours:
             pts = np.round(contour[:, ::-1]).astype(np.int32)
             cv2.polylines(rgb, [pts], True, color, 1, cv2.LINE_AA)
@@ -1754,16 +2413,22 @@ def plot_traces(path: str, t: np.ndarray, traces: np.ndarray, roi_names: list[st
     if traces is not None and traces.size:
         offsets = np.arange(traces.shape[1]) * (np.nanstd(traces) * 4 + 0.1)
         for i in range(traces.shape[1]):
-            ax.plot(t, traces[:, i] + offsets[i], lw=0.9, label=roi_names[i] if i < len(roi_names) else f"ROI{i+1}")
+            ax.plot(
+                t,
+                traces[:, i] + offsets[i],
+                color=roi_color_hex(i),
+                lw=0.9,
+                label=roi_names[i] if i < len(roi_names) else f"ROI{i+1}",
+            )
         ax.set_yticks(offsets)
         ax.set_yticklabels(roi_names)
     if trigger_frames is not None:
         for frame in trigger_frames:
             if 0 <= frame < len(t):
                 ax.axvline(frame / fs, color="red", linestyle="--", linewidth=0.8, alpha=0.55)
-    ax.set_xlabel("Time (s)")
+    ax.set_xlabel("时间 (s)")
     ax.set_ylabel("ROI dF/F")
-    ax.set_title("ROI Calcium Traces")
+    ax.set_title("ROI 钙信号曲线")
     ax.grid(True, alpha=0.25)
     fig.tight_layout()
     fig.savefig(path, dpi=160)
@@ -1775,13 +2440,13 @@ def plot_trial_average(path: str, t: np.ndarray, mean_trial: np.ndarray, roi_nam
     if mean_trial.size:
         offsets = np.arange(mean_trial.shape[1]) * (np.nanstd(mean_trial) * 4 + 0.1)
         for i in range(mean_trial.shape[1]):
-            ax.plot(t, mean_trial[:, i] + offsets[i], lw=1.0)
+            ax.plot(t, mean_trial[:, i] + offsets[i], color=roi_color_hex(i), lw=1.0)
         ax.set_yticks(offsets)
         ax.set_yticklabels(roi_names)
     ax.axvline(0, color="red", linestyle="--", linewidth=1.0)
-    ax.set_xlabel("Time from trigger (s)")
-    ax.set_ylabel("Mean ROI dF/F")
-    ax.set_title("Trial Average")
+    ax.set_xlabel("相对触发时间 (s)")
+    ax.set_ylabel("ROI 平均 dF/F")
+    ax.set_title("试次平均")
     ax.grid(True, alpha=0.25)
     fig.tight_layout()
     fig.savefig(path, dpi=160)
@@ -1800,11 +2465,11 @@ def plot_event_aligned_roi(path: str, trial_t: np.ndarray, roi_trials: np.ndarra
         for trial in arr:
             ax.plot(trial_t, trial, color="0.70", linewidth=0.8, alpha=0.55)
         mean_trial = np.nanmean(arr, axis=0)
-        ax.plot(trial_t, mean_trial, color="black", linewidth=2.0, label="Mean")
-    ax.axvline(0, color="red", linestyle="--", linewidth=1.2, label="Stimulus")
-    ax.set_xlabel("Time from stimulus (s)")
+        ax.plot(trial_t, mean_trial, color="black", linewidth=2.0, label="均值")
+    ax.axvline(0, color="red", linestyle="--", linewidth=1.2, label="刺激")
+    ax.set_xlabel("相对刺激时间 (s)")
     ax.set_ylabel("dF/F")
-    ax.set_title(f"{roi_name} stimulus-aligned response, n={trigger_count}")
+    ax.set_title(f"{roi_name} 刺激对齐响应，n={trigger_count}")
     ax.grid(True, alpha=0.25)
     ax.legend(loc="best", frameon=False)
     fig.tight_layout()
@@ -1820,7 +2485,7 @@ def plot_correlation(path: str, corr: np.ndarray, roi_names: list[str]) -> None:
     ax.set_xticklabels(roi_names, rotation=45, ha="right")
     ax.set_yticklabels(roi_names)
     fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
-    ax.set_title("ROI Correlation")
+    ax.set_title("ROI 相关性")
     fig.tight_layout()
     fig.savefig(path, dpi=160)
     plt.close(fig)
@@ -1832,7 +2497,7 @@ def save_heatmap(path: str, heat: np.ndarray, mask: np.ndarray) -> None:
     data[~mask] = np.nan
     fig, ax = plt.subplots(figsize=(7, 6))
     im = ax.imshow(data, cmap="jet")
-    ax.set_title("Mean dF/F Heatmap")
+    ax.set_title("均值 dF/F 热图")
     ax.axis("off")
     fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
     fig.tight_layout()
@@ -1840,7 +2505,7 @@ def save_heatmap(path: str, heat: np.ndarray, mask: np.ndarray) -> None:
     plt.close(fig)
 
 
-def save_event_heatmap(path: str, heat: np.ndarray, title: str = "Stimulus-aligned mean dF/F", top_percent: float | None = None) -> None:
+def save_event_heatmap(path: str, heat: np.ndarray, title: str = "刺激对齐均值 dF/F", top_percent: float | None = None) -> None:
     data = gaussian_filter(np.asarray(heat, dtype=np.float32), sigma=2)
     data = data.copy()
     if top_percent is not None and top_percent > 0:
@@ -1908,7 +2573,7 @@ def save_roi_statistics_table(
 
 def save_correlation_outputs(output_dir: str, name: str, traces: np.ndarray, roi_names: list[str]) -> dict[str, str]:
     if traces is None or traces.shape[1] < 2:
-        raise ValueError("Need at least two ROI traces for correlation export")
+        raise ValueError("相关性导出至少需要两条 ROI 曲线")
     out_dir = Path(output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     corr = np.corrcoef(traces.T)
@@ -1980,7 +2645,7 @@ def export_event_aligned_response(
     acceleration: str = "auto",
 ) -> dict[str, str]:
     if traces is None or traces.size == 0:
-        raise ValueError("Stimulus event average needs extracted ROI traces")
+        raise ValueError("刺激事件对齐平均需要先提取 ROI 曲线")
     out_dir = Path(output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     safe_name = safe_filename(name, "NewLight")
@@ -1988,7 +2653,7 @@ def export_event_aligned_response(
 
     trials, trial_t, kept_triggers = event_aligned_blocks(traces, trigger_frames, fs, pre_s, post_s)
     if trials.size == 0 or kept_triggers.size == 0:
-        raise ValueError("No complete stimulus events fit inside the selected pre/post window")
+        raise ValueError("所选事件前后窗口内没有完整刺激事件")
 
     paths["event_trials_npz"] = str(out_dir / f"{safe_name}_stimulus_event_trials.npz")
     np.savez_compressed(
@@ -2019,7 +2684,7 @@ def export_event_aligned_response(
     dff = compute_dff(movie, baseline, acceleration=acceleration)
     mean_movie, movie_t, kept_movie_triggers = event_aligned_mean(dff, kept_triggers, fs, pre_s, post_s)
     if kept_movie_triggers.size == 0:
-        raise ValueError("No complete movie events fit inside the selected pre/post window")
+        raise ValueError("所选事件前后窗口内没有完整视频事件")
     if heatmap_end_s is None:
         heatmap_end_s = float(post_s)
     h_start = float(heatmap_start_s)
@@ -2036,7 +2701,7 @@ def export_event_aligned_response(
     save_event_heatmap(
         paths["event_heatmap_png"],
         event_heat,
-        title=f"Stimulus-aligned mean dF/F ({h_start:g} to {h_end:g} s)",
+        title=f"刺激对齐均值 dF/F（{h_start:g} 至 {h_end:g} s）",
     )
 
     if top_percent is not None and float(top_percent) > 0:
@@ -2045,7 +2710,7 @@ def export_event_aligned_response(
         save_event_heatmap(
             paths["event_heatmap_top_png"],
             event_heat,
-            title=f"Stimulus-aligned mean dF/F, top {pct:g}%",
+            title=f"刺激对齐均值 dF/F，最高 {pct:g}%",
             top_percent=pct,
         )
 
@@ -2214,7 +2879,7 @@ def save_heatmap_video(
     out_h, out_w = first_rgb.shape[:2]
     writer = cv2.VideoWriter(path, cv2.VideoWriter_fourcc(*"MJPG"), fps, (out_w, out_h), isColor=True)
     if not writer.isOpened():
-        raise IOError(f"Cannot create heatmap video: {path}")
+        raise IOError(f"无法创建热图视频：{path}")
     completed = False
     try:
         writer.write(cv2.cvtColor(first_rgb, cv2.COLOR_RGB2BGR))
@@ -2257,11 +2922,15 @@ def run_conda_worker(env_name: str, script: str, args: list[str], cwd: str | Non
         else:
             cmd = [str(Path(sys.executable)), "--worker", script] + args
     else:
-        cmd = ["conda", "run", "-n", env_name, "python", script] + args
+        environment_path = Path(env_name)
+        selector = ["-p", str(environment_path)] if environment_path.is_dir() else ["-n", env_name]
+        cmd = ["conda", "run"] + selector + ["--no-capture-output", "python", script] + args
     env = os.environ.copy()
     env.setdefault("PYTHONIOENCODING", "utf-8")
     env.setdefault("PYTHONUTF8", "1")
     env.setdefault("NEWLIGHT_RESOURCE_DIR", str(APP_RESOURCE_DIR))
+    env.setdefault("MKL_THREADING_LAYER", "SEQUENTIAL")
+    env.setdefault("KERAS_BACKEND", "torch")
     return subprocess.run(
         cmd,
         cwd=cwd,
@@ -2298,31 +2967,263 @@ def run_neuroseg3(input_image: np.ndarray, output_dir: str, weights: str | None 
     )
     log = (proc.stdout or "") + ("\n" + proc.stderr if proc.stderr else "")
     if proc.returncode != 0:
-        raise RuntimeError(log.strip() or "NeuroSeg3 failed")
+        raise RuntimeError(log.strip() or "NeuroSeg3 运行失败")
     if not mask_path.exists():
-        raise RuntimeError("NeuroSeg3 finished but did not create masks")
+        raise RuntimeError("NeuroSeg3 已结束，但未生成蒙版")
     with np.load(mask_path, allow_pickle=True) as data:
         masks = [m.astype(bool) for m in data["masks"]]
     return masks, log
 
 
-def run_caiman_motion(input_movie: np.ndarray, output_dir: str, mode: str = "rigid") -> tuple[np.ndarray, str]:
+def _roi_worker_log(proc: subprocess.CompletedProcess) -> str:
+    raw = (proc.stdout or "") + ("\n" + proc.stderr if proc.stderr else "")
+    lines = []
+    for line in raw.splitlines():
+        stripped = line.strip()
+        if "OpenCL" in line and "vendors" in line and "temp.txt" in line:
+            continue
+        if stripped in {"Access is denied.", "The system cannot find the file specified."}:
+            continue
+        lines.append(line)
+    return "\n".join(lines).strip()
+
+
+def _load_roi_worker_result(
+    artifact_path: Path,
+    summary_path: Path,
+    expected_shape: tuple[int, int],
+    log: str,
+    metadata_updates: dict | None = None,
+) -> ROIBackendResult:
+    if not artifact_path.is_file():
+        raise RuntimeError("ROI worker finished without creating an ROI artifact")
+    if not summary_path.is_file():
+        raise RuntimeError("ROI worker finished without creating a summary")
+    artifact = load_roi_artifact(artifact_path, expected_shape=expected_shape)
+    try:
+        summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f"Cannot read ROI worker summary: {exc}") from exc
+    if not isinstance(summary, dict):
+        raise RuntimeError("ROI worker summary must be a JSON object")
+    metadata = dict(artifact.metadata)
+    metadata.update(summary)
+    metadata.update(metadata_updates or {})
+    return ROIBackendResult(
+        masks=artifact.masks,
+        names=artifact.names,
+        metadata=metadata,
+        arrays=artifact.arrays,
+        log=log,
+        artifact_path=artifact_path,
+        summary_path=summary_path,
+    )
+
+
+def run_caiman_roi_segmentation(
+    input_movie: np.ndarray,
+    session_dir: str,
+    frame_rate: float = 10.0,
+    invalid_start_frames: int = 0,
+    mode: str = "two_photon",
+    cell_diameter: float = 12.0,
+    components_per_patch: int = 4,
+    background_components: int = 2,
+    spatial_subsample: int = 2,
+    temporal_subsample: int = 2,
+    ar_order: int = 1,
+    merge_threshold: float = 0.85,
+    min_snr: float = 2.0,
+    rval_threshold: float = 0.85,
+    use_cnn: bool = True,
+    min_cnn_threshold: float = 0.99,
+    cnn_lowest: float = 0.1,
+    footprint_threshold: float = 0.20,
+) -> ROIBackendResult:
+    movie = np.asarray(input_movie)
+    if movie.ndim != 3 or movie.shape[0] == 0:
+        raise ValueError("CaImAn ROI extraction requires a non-empty (frames, height, width) movie")
+    root = Path(session_dir).resolve()
+    root.mkdir(parents=True, exist_ok=True)
+    job_dir = root / f"caiman_roi_{uuid.uuid4().hex[:10]}"
+    job_dir.mkdir(parents=True, exist_ok=False)
+    input_path = job_dir / "input_movie.tif"
+    artifact_path = job_dir / "caiman_rois.npz"
+    summary_path = job_dir / "caiman_summary.json"
+    tifffile.imwrite(input_path, movie, photometric="minisblack")
+    script = WORKER_DIR / "run_caiman_roi.py"
+    environment = str(NEWLIGHT_CAIMAN_PREFIX) if (NEWLIGHT_CAIMAN_PREFIX / "python.exe").is_file() else "caiman_latest"
+    args = [
+        "--input", str(input_path),
+        "--output", str(artifact_path),
+        "--summary", str(summary_path),
+        "--session-dir", str(job_dir),
+        "--caiman-data", str(CAIMAN_RESOURCE_DIR),
+        "--mode", str(mode),
+        "--frame-rate", str(float(frame_rate)),
+        "--invalid-start-frames", str(max(0, int(invalid_start_frames))),
+        "--cell-diameter", str(float(cell_diameter)),
+        "--components-per-patch", str(int(components_per_patch)),
+        "--background-components", str(int(background_components)),
+        "--spatial-subsample", str(int(spatial_subsample)),
+        "--temporal-subsample", str(int(temporal_subsample)),
+        "--ar-order", str(int(ar_order)),
+        "--merge-threshold", str(float(merge_threshold)),
+        "--min-snr", str(float(min_snr)),
+        "--rval-threshold", str(float(rval_threshold)),
+        "--use-cnn" if use_cnn else "--no-cnn",
+        "--min-cnn-threshold", str(float(min_cnn_threshold)),
+        "--cnn-lowest", str(float(cnn_lowest)),
+        "--footprint-threshold", str(float(footprint_threshold)),
+    ]
+    succeeded = False
+    try:
+        proc = run_conda_worker(environment, str(script), args, cwd=str(PROJECT_DIR), timeout=7200)
+        log = _roi_worker_log(proc)
+        if proc.returncode != 0:
+            raise RuntimeError(log or "CaImAn ROI extraction failed")
+        result = _load_roi_worker_result(
+            artifact_path,
+            summary_path,
+            expected_shape=tuple(movie.shape[1:]),
+            log=log,
+        )
+        succeeded = True
+        return result
+    finally:
+        try:
+            input_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        if not succeeded:
+            shutil.rmtree(job_dir, ignore_errors=True)
+
+
+def run_fast_roi_segmentation(
+    input_image: np.ndarray,
+    session_dir: str,
+    projection_mode: str = "mean",
+    weights: str | None = None,
+    runtime_root: str | None = None,
+    image_size: int = 960,
+    confidence: float = 0.25,
+    iou: float = 0.70,
+    min_area: int = 20,
+    max_area: int = 4000,
+    device: str = "auto",
+) -> ROIBackendResult:
+    image = np.asarray(input_image)
+    if image.ndim != 2 or image.size == 0:
+        raise ValueError("Fast ROI extraction requires a non-empty 2D projection")
+    root = Path(session_dir).resolve()
+    root.mkdir(parents=True, exist_ok=True)
+    job_dir = root / f"fast_roi_{uuid.uuid4().hex[:10]}"
+    job_dir.mkdir(parents=True, exist_ok=False)
+    input_path = job_dir / "projection.tif"
+    artifact_path = job_dir / "fast_rois.npz"
+    summary_path = job_dir / "fast_summary.json"
+    tifffile.imwrite(input_path, image, photometric="minisblack")
+    script = WORKER_DIR / "run_neusuite_roi.py"
+    weights_path = Path(weights).resolve() if weights else NEUSUITE_DEFAULT_WEIGHTS.resolve()
+    runtime_path = Path(runtime_root).resolve() if runtime_root else NEUSUITE_RUNTIME_ROOT.resolve()
+    args = [
+        "--input", str(input_path),
+        "--output", str(artifact_path),
+        "--summary", str(summary_path),
+        "--weights", str(weights_path),
+        "--runtime-root", str(runtime_path),
+        "--image-size", str(int(image_size)),
+        "--confidence", str(float(confidence)),
+        "--iou", str(float(iou)),
+        "--min-area", str(int(min_area)),
+        "--max-area", str(int(max_area)),
+        "--device", str(device),
+    ]
+    succeeded = False
+    try:
+        proc = run_conda_worker("neuroseg3", str(script), args, cwd=str(PROJECT_DIR), timeout=1800)
+        log = _roi_worker_log(proc)
+        if proc.returncode != 0:
+            raise RuntimeError(log or "Fast ROI extraction failed")
+        result = _load_roi_worker_result(
+            artifact_path,
+            summary_path,
+            expected_shape=tuple(image.shape),
+            log=log,
+            metadata_updates={"projection_mode": str(projection_mode)},
+        )
+        succeeded = True
+        return result
+    finally:
+        try:
+            input_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        if not succeeded:
+            shutil.rmtree(job_dir, ignore_errors=True)
+
+
+def run_caiman_motion(
+    input_movie: np.ndarray,
+    output_dir: str,
+    mode: str = "rigid",
+    max_shift: int = 12,
+    stride: int = 48,
+    overlap: int = 24,
+    max_deviation: int = 5,
+) -> tuple[np.ndarray, str, str]:
     out_dir = Path(output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     input_path = out_dir / "caiman_input.tif"
-    output_path = out_dir / f"caiman_corrected_{uuid.uuid4().hex[:8]}.tif"
+    output_path = out_dir / "caiman_preview.tif"
+    output_path.unlink(missing_ok=True)
+    max_shift = max(1, int(max_shift))
+    stride = max(1, int(stride))
+    overlap = max(0, int(overlap))
+    max_deviation = max(0, int(max_deviation))
     save_movie_tiff(input_movie, str(input_path))
     script = WORKER_DIR / "run_caiman.py"
     proc = run_conda_worker(
         "caiman_latest",
         str(script),
-        ["motion", "--input", str(input_path), "--output", str(output_path), "--mode", mode],
+        [
+            "motion",
+            "--input", str(input_path),
+            "--output", str(output_path),
+            "--mode", mode,
+            "--max-shift", str(max_shift),
+            "--stride", str(stride),
+            "--overlap", str(overlap),
+            "--max-deviation", str(max_deviation),
+        ],
         timeout=1800,
     )
-    log = (proc.stdout or "") + ("\n" + proc.stderr if proc.stderr else "")
-    if proc.returncode != 0:
-        raise RuntimeError(log.strip() or "CaImAn motion correction failed")
-    return tifffile.imread(output_path).astype(np.float32), log
+    raw_log = (proc.stdout or "") + ("\n" + proc.stderr if proc.stderr else "")
+    log_lines = []
+    for line in raw_log.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("CaImAn motion correction saved "):
+            continue
+        if "OpenCL" in line and "vendors" in line and "temp.txt" in line:
+            continue
+        if stripped in {"Access is denied.", "The system cannot find the file specified."}:
+            continue
+        log_lines.append(line)
+    log = "\n".join(log_lines).strip()
+    keep_preview = False
+    try:
+        if proc.returncode != 0:
+            raise RuntimeError(log or raw_log.strip() or "CaImAn 运动矫正失败")
+        result = tifffile.imread(output_path).astype(np.float32)
+        keep_preview = True
+        return result, log, str(output_path)
+    finally:
+        cleanup_paths = (input_path,) if keep_preview else (input_path, output_path)
+        for temporary_path in cleanup_paths:
+            try:
+                temporary_path.unlink(missing_ok=True)
+            except OSError:
+                pass
 
 
 def run_deepcadrt_denoise(
@@ -2330,16 +3231,20 @@ def run_deepcadrt_denoise(
     output_dir: str,
     model: str | None = None,
     overlap: float = 0.6,
+    invalid_start_frames: int = 0,
 ) -> tuple[np.ndarray, str]:
     if not DEEPCADRT_DIR.exists():
-        raise FileNotFoundError(f"DeepCAD-RT pytorch folder not found: {DEEPCADRT_DIR}")
+        raise FileNotFoundError(f"未找到 DeepCAD-RT PyTorch 文件夹：{DEEPCADRT_DIR}")
     model_arg = ensure_deepcadrt_model_available(model)
     overlap = float(np.clip(float(overlap), 0.0, 0.95))
+    source_movie = np.asarray(input_movie)
+    invalid_start_frames = normalized_invalid_start_frames(source_movie, invalid_start_frames)
+    model_input = source_movie[invalid_start_frames:]
     out_dir = Path(output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     input_path = out_dir / f"deepcadrt_input_{uuid.uuid4().hex[:8]}.tif"
     output_path = out_dir / f"deepcadrt_denoised_{uuid.uuid4().hex[:8]}.tif"
-    save_movie_tiff(input_movie, str(input_path))
+    save_movie_tiff(model_input, str(input_path))
     script = WORKER_DIR / "run_deepcadrt.py"
     args = [
         "--input", str(input_path),
@@ -2362,12 +3267,21 @@ def run_deepcadrt_denoise(
     except OSError:
         pass
     if proc.returncode != 0:
-        raise RuntimeError(log.strip() or "DeepCAD-RT denoising failed")
+        raise RuntimeError(log.strip() or "DeepCAD-RT 降噪失败")
     if not output_path.exists():
-        raise RuntimeError("DeepCAD-RT finished but did not create an output TIFF.")
+        raise RuntimeError("DeepCAD-RT 已结束，但未生成输出 TIFF。")
     denoised = tifffile.imread(output_path).astype(np.float32)
     if denoised.ndim == 2:
         denoised = denoised[None, :, :]
-    if denoised.shape != np.asarray(input_movie).shape:
-        raise RuntimeError(f"DeepCAD-RT output shape {denoised.shape} does not match input {np.asarray(input_movie).shape}.")
+    if denoised.shape != model_input.shape:
+        raise RuntimeError(f"DeepCAD-RT 输出 shape {denoised.shape} 与有效输入 {model_input.shape} 不一致。")
+    denoised, empty_frames = preserve_empty_source_frames(model_input, denoised)
+    if empty_frames.size:
+        log = log.rstrip() + f"\n已保留 {empty_frames.size} 个输入空白帧：" + ", ".join(str(int(frame)) for frame in empty_frames)
+    denoised, invalid_frames = preserve_invalid_denoised_frames(model_input, denoised)
+    if invalid_frames.size:
+        log = log.rstrip() + f"\n已回退 {invalid_frames.size} 个异常 DeepCAD-RT 输出帧：" + ", ".join(str(int(frame)) for frame in invalid_frames)
+    if invalid_start_frames:
+        denoised = np.concatenate((source_movie[:invalid_start_frames].astype(np.float32), denoised), axis=0)
+        log = log.rstrip() + f"\n已跳过并原样保留前 {invalid_start_frames} 个无效起始帧。"
     return denoised, log

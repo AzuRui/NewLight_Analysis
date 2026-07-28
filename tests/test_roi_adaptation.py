@@ -1,13 +1,17 @@
 import numpy as np
 
+import analysis_core as core
 from roi_adaptation import (
     CandidateBank,
     QUALITY_PRESETS,
     adapt_candidate_bank,
     build_feature_table,
     display_roi_name,
+    deserialize_roi_metadata,
+    normalize_roi_collection,
     normalized_roi_metadata,
     refine_protected_mask,
+    serialize_roi_metadata,
     suggest_area_range,
 )
 
@@ -252,3 +256,53 @@ def test_caiman_candidate_requires_snr_and_either_spatial_or_cnn_quality():
     )
     assert result.selected_count == 1
     assert result.metadata[-1]["base_name"] == "good"
+
+
+def test_analysis_state_starts_with_aligned_empty_roi_metadata_and_revision():
+    state = core.AnalysisState()
+    assert state.roi_masks == []
+    assert state.roi_names == []
+    assert state.roi_metadata == []
+    assert state.roi_revision == 0
+
+
+def test_normalize_roi_collection_keeps_masks_metadata_and_display_names_aligned():
+    masks, names, metadata = normalize_roi_collection(
+        [square(3), square(4)],
+        names=["first", "second"],
+        metadata=[
+            {"source": "manual", "base_name": "first", "low_quality": True},
+            {"source": "fast", "base_name": "second"},
+        ],
+        source="loaded",
+    )
+    assert len(masks) == len(names) == len(metadata) == 2
+    assert names == ("first*", "second")
+    assert masks[0].dtype == np.bool_
+    assert not np.shares_memory(masks[0], masks[1])
+
+
+def test_roi_metadata_json_round_trip_preserves_quality_and_rejects_extra_star():
+    source = [
+        normalized_roi_metadata(
+            {"source": "manual", "base_name": "ROI1*", "low_quality": True, "quality_reasons": ["弱信号"]},
+            "manual",
+            "ROI1",
+        )
+    ]
+    restored = deserialize_roi_metadata(
+        serialize_roi_metadata(source),
+        count=1,
+        names=["ROI1*"],
+        source="loaded",
+    )
+    assert restored[0]["base_name"] == "ROI1"
+    assert restored[0]["low_quality"]
+    assert restored[0]["quality_reasons"] == ["弱信号"]
+    assert display_roi_name(restored[0]) == "ROI1*"
+
+
+def test_missing_roi_metadata_uses_loaded_compatibility_defaults():
+    restored = deserialize_roi_metadata(None, count=2, names=["old1", "old2"], source="loaded")
+    assert [item["source"] for item in restored] == ["loaded", "loaded"]
+    assert [display_roi_name(item) for item in restored] == ["old1", "old2"]
