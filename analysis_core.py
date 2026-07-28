@@ -1492,6 +1492,126 @@ def available_neuroseg3_weights() -> list[str]:
     return [str(path) for path in sorted(weights_dir.rglob("*.pt"))]
 
 
+def _validated_spatial_bounds(shape: tuple[int, int], bounds) -> tuple[int, int, int, int]:
+    height, width = (int(shape[0]), int(shape[1]))
+    if len(bounds) != 4:
+        raise ValueError("裁剪范围必须包含 x0, y0, x1, y1 四个值。")
+    x0, y0, x1, y1 = (int(value) for value in bounds)
+    if x0 < 0 or y0 < 0 or x1 > width or y1 > height or x1 <= x0 or y1 <= y0:
+        raise ValueError(f"裁剪范围 {(x0, y0, x1, y1)} 超出图像尺寸 {width} x {height}。")
+    return x0, y0, x1, y1
+
+
+def crop_movie_bounds(movie: np.ndarray, bounds) -> np.ndarray:
+    """Crop a frame stack with exclusive upper bounds while preserving dtype."""
+    arr = np.asarray(movie)
+    if arr.ndim != 3:
+        raise ValueError(f"需要三维视频堆栈，实际 shape 为 {arr.shape}")
+    x0, y0, x1, y1 = _validated_spatial_bounds(arr.shape[1:], bounds)
+    return arr[:, y0:y1, x0:x1].copy()
+
+
+def crop_spatial_mask(mask: np.ndarray, bounds) -> np.ndarray:
+    arr = np.asarray(mask)
+    if arr.ndim != 2:
+        raise ValueError(f"需要二维空间蒙版，实际 shape 为 {arr.shape}")
+    x0, y0, x1, y1 = _validated_spatial_bounds(arr.shape, bounds)
+    return arr[y0:y1, x0:x1].copy()
+
+
+def _contiguous_true_count(values: np.ndarray) -> int:
+    count = 0
+    for value in np.asarray(values, dtype=bool):
+        if not value:
+            break
+        count += 1
+    return count
+
+
+def _frame_edge_depths(frame: np.ndarray, edge_fraction: float) -> tuple[int, int, int, int]:
+    finite = np.isfinite(frame)
+    if not np.any(finite):
+        return 0, 0, 0, 0
+    values = np.asarray(frame, dtype=np.float32)
+    fill = float(np.median(values[finite]))
+    values = np.where(finite, values, fill)
+    low, high = np.percentile(values, (10.0, 90.0))
+    dynamic_range = float(high - low)
+    if not np.isfinite(dynamic_range) or dynamic_range <= np.finfo(np.float32).eps:
+        return 0, 0, 0, 0
+
+    row_difference = np.median(np.abs(np.diff(values, axis=0)), axis=1)
+    column_difference = np.median(np.abs(np.diff(values, axis=1)), axis=0)
+    row_spread = np.percentile(values, 90.0, axis=1) - np.percentile(values, 10.0, axis=1)
+    column_spread = np.percentile(values, 90.0, axis=0) - np.percentile(values, 10.0, axis=0)
+
+    row_reference = float(np.median(row_difference))
+    column_reference = float(np.median(column_difference))
+    row_spread_reference = float(np.median(row_spread))
+    column_spread_reference = float(np.median(column_spread))
+    row_duplicate = row_difference <= max(np.finfo(np.float32).eps, edge_fraction * row_reference)
+    column_duplicate = column_difference <= max(np.finfo(np.float32).eps, edge_fraction * column_reference)
+    row_empty = row_spread <= max(np.finfo(np.float32).eps, edge_fraction * row_spread_reference)
+    column_empty = column_spread <= max(np.finfo(np.float32).eps, edge_fraction * column_spread_reference)
+
+    top = max(_contiguous_true_count(row_duplicate), _contiguous_true_count(row_empty))
+    bottom = max(_contiguous_true_count(row_duplicate[::-1]), _contiguous_true_count(row_empty[::-1]))
+    left = max(_contiguous_true_count(column_duplicate), _contiguous_true_count(column_empty))
+    right = max(_contiguous_true_count(column_duplicate[::-1]), _contiguous_true_count(column_empty[::-1]))
+    return left, top, right, bottom
+
+
+def _consensus_depth(values: list[int], support_fraction: float) -> int:
+    ordered = sorted(int(value) for value in values)
+    if not ordered:
+        return 0
+    required_support = min(len(ordered), max(1, int(np.ceil(float(support_fraction) * len(ordered)))))
+    return ordered[len(ordered) - required_support]
+
+
+def _expand_interval_to_minimum(start: int, end: int, limit: int, minimum_size: int) -> tuple[int, int]:
+    minimum = min(max(1, int(minimum_size)), int(limit))
+    if end - start >= minimum:
+        return start, end
+    center = (float(start) + float(end)) / 2.0
+    start = int(np.floor(center - minimum / 2.0))
+    start = min(max(0, start), limit - minimum)
+    return start, start + minimum
+
+
+def estimate_stable_crop_bounds(
+    movie: np.ndarray,
+    *,
+    edge_fraction: float = 0.02,
+    valid_frame_fraction: float = 0.95,
+    minimum_size: int = 16,
+    max_sample_frames: int = 96,
+) -> tuple[int, int, int, int]:
+    """Estimate conservative outer crop bounds from repeated or empty edge bands."""
+    arr = np.asarray(movie)
+    if arr.ndim != 3 or arr.shape[0] <= 0 or arr.shape[1] <= 0 or arr.shape[2] <= 0:
+        raise ValueError(f"需要非空三维视频堆栈，实际 shape 为 {arr.shape}")
+    edge_fraction = float(edge_fraction)
+    valid_frame_fraction = float(valid_frame_fraction)
+    if not 0.0 < edge_fraction <= 1.0:
+        raise ValueError("边缘灵敏度必须大于 0 且不超过 1。")
+    if not 0.0 < valid_frame_fraction <= 1.0:
+        raise ValueError("有效帧比例必须大于 0 且不超过 1。")
+
+    sample_count = min(arr.shape[0], max(1, int(max_sample_frames)))
+    indices = np.linspace(0, arr.shape[0] - 1, sample_count, dtype=int)
+    depths = [_frame_edge_depths(arr[int(index)], edge_fraction) for index in indices]
+    left = _consensus_depth([item[0] for item in depths], valid_frame_fraction)
+    top = _consensus_depth([item[1] for item in depths], valid_frame_fraction)
+    right = _consensus_depth([item[2] for item in depths], valid_frame_fraction)
+    bottom = _consensus_depth([item[3] for item in depths], valid_frame_fraction)
+
+    height, width = arr.shape[1:]
+    x0, x1 = _expand_interval_to_minimum(left, width - right, width, minimum_size)
+    y0, y1 = _expand_interval_to_minimum(top, height - bottom, height, minimum_size)
+    return int(x0), int(y0), int(x1), int(y1)
+
+
 def gaussian_smooth_movie(movie: np.ndarray, sigma: float, acceleration: str = "auto") -> np.ndarray:
     if sigma <= 0:
         return movie.copy()

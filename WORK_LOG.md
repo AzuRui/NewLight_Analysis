@@ -692,3 +692,39 @@
 - Added overlay rendering and GUI binding regressions plus a real Tk selection
   smoke test. Final verification: `171 passed`; focused tests `41 passed`;
   compilation and `git diff --check` passed. No EXE was built.
+
+### Independent Invalid-Edge Crop
+
+- Added `自动裁剪无效边缘` as an independent preprocessing action. It is not
+  embedded in either Fast Motion Correction or CaImAn motion correction.
+- The estimator samples at most 96 frames and detects only contiguous outer
+  bands that are stably duplicated or spatially empty. Low-information movies
+  fail conservatively to the full frame, and the result keeps at least a
+  `16 x 16` region.
+- The fitted rectangle is drawn over the main preview with outside shading,
+  four edge handles and four corner handles. Users can drag the rectangle,
+  edges, or corners, then refit, confirm, or cancel from the embedded parameter
+  panel without opening a dialog.
+- Confirmation runs through the global FIFO queue and crops the current
+  temporary movie plus every loaded channel with identical exclusive bounds.
+  The imported source path/file is never written. Permanent output still
+  requires the existing Save Current Movie action.
+- Existing ROI masks are cropped with the same bounds; masks that become empty
+  are removed while names and metadata stay aligned. This crop operation stores
+  ROI snapshots in its undo entry, so Undo restores movie, channels, colors,
+  ROI masks, names, and metadata together.
+- Added nine pure-core crop/estimation tests plus independent-entry, embedded
+  interaction, FIFO/state-alignment, cancellation, undo, and localization
+  regressions. A real Tk smoke fitted `(4, 3, 67, 62)`, dragged one edge and the
+  full rectangle, cropped a two-channel movie and ROIs, verified the source
+  array unchanged, then restored all spatial state with Undo.
+- Review hardening requires every automatic trim depth to be supported by at
+  least 95% of sampled frames, reads the active movie
+  when a queued fit actually starts, preserves confirmation locking across
+  panel changes, and reports missing input only in the embedded panel. The real
+  Tk drag/crop/undo workflow is now an automated behavioral regression.
+- Final verification: `188 passed`; focused crop/GUI/localization tests `63 passed`; key
+  source compilation, Tk smoke, and `git diff --check` passed. Tests used
+  `.conda_envs/newlight_caiman/python.exe` because the named `caiman_latest`
+  environment currently crashes while importing NumPy native libraries. No
+  EXE was built and no validation sample was read, moved, deleted, or written.

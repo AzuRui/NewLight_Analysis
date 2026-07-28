@@ -19,6 +19,7 @@ import matplotlib
 matplotlib.use("TkAgg")
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
 from matplotlib.figure import Figure
+from matplotlib.patches import Rectangle
 import numpy as np
 from PIL import Image, ImageTk
 
@@ -1639,6 +1640,13 @@ class NewLightApp:
         self.parameter_apply_command = None
         self.parameter_cancel_command = None
         self.active_parameter_panel_id = None
+        self.auto_crop_bounds = None
+        self.auto_crop_drag_mode = None
+        self.auto_crop_drag_start = None
+        self.auto_crop_drag_origin_bounds = None
+        self.auto_crop_confirmation_pending = False
+        self.auto_crop_confirmation_token = 0
+        self.auto_crop_fit_token = 0
         self.roi_table_images = []
         self.highlighted_roi_index = None
         self._view_limits = None
@@ -2084,10 +2092,13 @@ class NewLightApp:
 
     def clear_parameter_panel(self):
         leaving_roi_list = self.active_parameter_panel_id == "roi_list"
+        leaving_auto_crop = self.active_parameter_panel_id == "auto_crop_edges"
         self.active_parameter_panel_id = None
         self.roi_table_images = []
         if leaving_roi_list:
             self.clear_roi_highlight()
+        if leaving_auto_crop:
+            self.clear_auto_crop_preview(redraw=True)
         if self.parameter_content is None:
             return
         for child in self.parameter_content.winfo_children():
@@ -2161,6 +2172,8 @@ class NewLightApp:
             return
         if self.active_parameter_panel_id == "roi_list" and panel_id != "roi_list":
             self.clear_roi_highlight()
+        if self.active_parameter_panel_id == "auto_crop_edges" and panel_id != "auto_crop_edges":
+            self.clear_auto_crop_preview(redraw=True)
         self.active_parameter_panel_id = panel_id
         self.roi_table_images = []
         for child in self.parameter_content.winfo_children():
@@ -3095,10 +3108,16 @@ class NewLightApp:
             return False
         return True
 
-    def push_history(self, label):
+    def push_history(self, label, include_rois=False):
         if self.state.movie is not None:
             channel_snapshot = tuple(np.asarray(movie).copy() for movie in self.state.converted_channel_movies)
-            self.state.history.append((label, self.state.movie.copy(), channel_snapshot, tuple(self.state.channel_colors)))
+            entry = (label, self.state.movie.copy(), channel_snapshot, tuple(self.state.channel_colors))
+            if include_rois:
+                roi_snapshot = tuple(np.asarray(mask, dtype=bool).copy() for mask in self.state.roi_masks)
+                name_snapshot = tuple(self.state.roi_names)
+                metadata_snapshot = tuple(dict(item) for item in self.state.roi_metadata)
+                entry += (roi_snapshot, name_snapshot, metadata_snapshot)
+            self.state.history.append(entry)
             if len(self.state.history) > 12:
                 self.state.history.pop(0)
 
@@ -3252,12 +3271,20 @@ class NewLightApp:
             self.state.converted_channel_movies = tuple(entry[2])
         if len(entry) > 3:
             self.state.channel_colors = tuple(entry[3])
+        if len(entry) > 6:
+            self.state.roi_masks = [np.asarray(mask, dtype=bool).copy() for mask in entry[4]]
+            self.state.roi_names = list(entry[5])
+            self.state.roi_metadata = [dict(item) for item in entry[6]]
+            self.state.roi_revision += 1
+            self.state.traces = None
+            self.highlighted_roi_index = None
         self._converted_frame_cache = (None, None, None)
         self._converted_projection_cache = {}
         self.clear_deepcad_cache()
         self.update_frame_controls()
         self.update_channel_color_buttons()
         self.queue_movie_view_refresh("刷新撤销后预览")
+        self.refresh_roi_list_if_visible()
         self.log(f"已撤销：{label}")
 
     def reset_loaded_movie_view(self, fs, preserve_view=False):
@@ -3700,7 +3727,51 @@ class NewLightApp:
             self.ax.plot(xs, ys, color="cyan", linewidth=1.5)
             if len(self.current_polygon) >= 3 and not self.freehand_drawing:
                 self.ax.plot([xs[-1], xs[0]], [ys[-1], ys[0]], color="cyan", linewidth=1.0, linestyle="--")
+        self.draw_auto_crop_overlay()
         self.canvas.draw_idle()
+
+    def draw_auto_crop_overlay(self):
+        if self.active_parameter_panel_id != "auto_crop_edges" or self.auto_crop_bounds is None:
+            return
+        image = self.state.display_image
+        if image is None:
+            return
+        height, width = np.asarray(image).shape[:2]
+        x0, y0, x1, y1 = self.auto_crop_bounds
+        left, top = x0 - 0.5, y0 - 0.5
+        right, bottom = x1 - 0.5, y1 - 0.5
+        shade = {"facecolor": "#020617", "edgecolor": "none", "alpha": 0.30, "zorder": 8}
+        if x0 > 0:
+            self.ax.add_patch(Rectangle((-0.5, -0.5), x0, height, **shade))
+        if x1 < width:
+            self.ax.add_patch(Rectangle((right, -0.5), width - x1, height, **shade))
+        if y0 > 0:
+            self.ax.add_patch(Rectangle((left, -0.5), x1 - x0, y0, **shade))
+        if y1 < height:
+            self.ax.add_patch(Rectangle((left, bottom), x1 - x0, height - y1, **shade))
+        self.ax.add_patch(
+            Rectangle(
+                (left, top),
+                x1 - x0,
+                y1 - y0,
+                fill=False,
+                edgecolor=THEME["accent"],
+                linewidth=2.0,
+                zorder=10,
+            )
+        )
+        middle_x = (left + right) / 2.0
+        middle_y = (top + bottom) / 2.0
+        self.ax.scatter(
+            [left, middle_x, right, left, right, left, middle_x, right],
+            [top, top, top, middle_y, middle_y, bottom, bottom, bottom],
+            s=28,
+            marker="s",
+            facecolors="#e0f2fe",
+            edgecolors=THEME["accent"],
+            linewidths=1.0,
+            zorder=11,
+        )
 
     def draw_empty_preview_background(self):
         path = ui_background.default_background_path()
@@ -3727,6 +3798,9 @@ class NewLightApp:
             self.last_cursor_image_xy = (float(event.xdata), float(event.ydata))
         if event.inaxes != self.ax or self.state.display_image is None:
             return
+        if self.active_parameter_panel_id == "auto_crop_edges":
+            self._start_auto_crop_drag(event)
+            return
         if self.roi_view_refresh_pending and self.mode.get() in {"circle", "freehand", "delete_roi"}:
             self.log("正在切换 ROI 交互视图，请在预览刷新后绘制。")
             return
@@ -3749,6 +3823,9 @@ class NewLightApp:
     def on_motion(self, event):
         if event.inaxes == self.ax and event.xdata is not None and event.ydata is not None:
             self.last_cursor_image_xy = (float(event.xdata), float(event.ydata))
+        if self.active_parameter_panel_id == "auto_crop_edges":
+            self._update_auto_crop_drag(event)
+            return
         if event.inaxes != self.ax:
             return
         if self.mode.get() == "inspect" and self.inspect_pan_start and event.xdata is not None and event.ydata is not None:
@@ -3761,6 +3838,11 @@ class NewLightApp:
             self.redraw()
 
     def on_release(self, event):
+        if self.active_parameter_panel_id == "auto_crop_edges":
+            self.auto_crop_drag_mode = None
+            self.auto_crop_drag_start = None
+            self.auto_crop_drag_origin_bounds = None
+            return
         if self.inspect_pan_start is not None:
             self.inspect_pan_start = None
             return
@@ -4773,6 +4855,9 @@ class NewLightApp:
         spec = PREPROCESS_PANEL_SPECS.get(action_id)
         if spec is None:
             return
+        if action_id == "auto_crop_edges":
+            self.show_auto_crop_edges_panel()
+            return
         fields = spec.get("fields", [])
         if action_id == "display_adjustment":
             fields = [
@@ -4788,6 +4873,349 @@ class NewLightApp:
             description=spec.get("description", ""),
             apply_text="运行",
         )
+
+    def clear_auto_crop_preview(self, redraw=True):
+        self.auto_crop_fit_token += 1
+        self.auto_crop_bounds = None
+        self.auto_crop_drag_mode = None
+        self.auto_crop_drag_start = None
+        self.auto_crop_drag_origin_bounds = None
+        if redraw and self.state.display_image is not None:
+            self.redraw(preserve_view=True)
+
+    def cancel_auto_crop_edges(self):
+        if self.auto_crop_confirmation_pending:
+            self.set_parameter_feedback("裁剪任务已提交，请等待当前任务完成。")
+            return
+        self.clear_parameter_panel()
+
+    def _update_auto_crop_summary(self):
+        if self.auto_crop_bounds is None:
+            text = "尚未生成裁剪框"
+        else:
+            x0, y0, x1, y1 = self.auto_crop_bounds
+            text = f"x={x0}:{x1}，y={y0}:{y1}；输出 {x1 - x0} x {y1 - y0} px"
+        value_var = self.parameter_vars.get("crop_bounds_summary")
+        if value_var is not None:
+            value_var.set(text)
+
+    def _auto_crop_hit_mode(self, x, y):
+        if self.auto_crop_bounds is None:
+            return None
+        x0, y0, x1, y1 = self.auto_crop_bounds
+        x_span = abs(float(self.ax.get_xlim()[1] - self.ax.get_xlim()[0]))
+        y_span = abs(float(self.ax.get_ylim()[1] - self.ax.get_ylim()[0]))
+        tolerance = max(2.0, min(x_span, y_span) * 0.018)
+        near_left = abs(x - x0) <= tolerance
+        near_right = abs(x - x1) <= tolerance
+        near_top = abs(y - y0) <= tolerance
+        near_bottom = abs(y - y1) <= tolerance
+        within_x = x0 - tolerance <= x <= x1 + tolerance
+        within_y = y0 - tolerance <= y <= y1 + tolerance
+        for matched, mode in (
+            (near_left and near_top, "top_left"),
+            (near_right and near_top, "top_right"),
+            (near_left and near_bottom, "bottom_left"),
+            (near_right and near_bottom, "bottom_right"),
+            (near_left and within_y, "left"),
+            (near_right and within_y, "right"),
+            (near_top and within_x, "top"),
+            (near_bottom and within_x, "bottom"),
+        ):
+            if matched:
+                return mode
+        if x0 <= x <= x1 and y0 <= y <= y1:
+            return "move"
+        return None
+
+    def _start_auto_crop_drag(self, event):
+        if self.auto_crop_confirmation_pending or event.button != 1 or event.xdata is None or event.ydata is None:
+            return
+        x, y = float(event.xdata) + 0.5, float(event.ydata) + 0.5
+        mode = self._auto_crop_hit_mode(x, y)
+        if mode is None:
+            return
+        self.auto_crop_fit_token += 1
+        self.auto_crop_drag_mode = mode
+        self.auto_crop_drag_start = (x, y)
+        self.auto_crop_drag_origin_bounds = tuple(self.auto_crop_bounds)
+
+    def _update_auto_crop_drag(self, event):
+        if (
+            self.auto_crop_confirmation_pending
+            or self.auto_crop_drag_mode is None
+            or self.auto_crop_drag_start is None
+            or self.auto_crop_drag_origin_bounds is None
+            or event.inaxes != self.ax
+            or event.xdata is None
+            or event.ydata is None
+            or self.state.display_image is None
+        ):
+            return
+        height, width = np.asarray(self.state.display_image).shape[:2]
+        minimum = min(16, height, width)
+        x, y = float(event.xdata) + 0.5, float(event.ydata) + 0.5
+        start_x, start_y = self.auto_crop_drag_start
+        x0, y0, x1, y1 = self.auto_crop_drag_origin_bounds
+        mode = self.auto_crop_drag_mode
+        if mode == "move":
+            crop_width, crop_height = x1 - x0, y1 - y0
+            x0 = min(max(0, int(round(x0 + x - start_x))), width - crop_width)
+            y0 = min(max(0, int(round(y0 + y - start_y))), height - crop_height)
+            x1, y1 = x0 + crop_width, y0 + crop_height
+        else:
+            if "left" in mode:
+                x0 = min(max(0, int(round(x))), x1 - minimum)
+            if "right" in mode:
+                x1 = max(min(width, int(round(x))), x0 + minimum)
+            if "top" in mode:
+                y0 = min(max(0, int(round(y))), y1 - minimum)
+            if "bottom" in mode:
+                y1 = max(min(height, int(round(y))), y0 + minimum)
+        self.auto_crop_bounds = (int(x0), int(y0), int(x1), int(y1))
+        self._update_auto_crop_summary()
+        self.redraw(preserve_view=True)
+
+    def show_auto_crop_edges_panel(self):
+        spec = PREPROCESS_PANEL_SPECS["auto_crop_edges"]
+        if self.auto_crop_confirmation_pending:
+            if self.active_parameter_panel_id == "auto_crop_edges":
+                self.set_parameter_feedback("裁剪任务已提交，请等待当前任务完成。")
+            self.log("自动裁剪无效边缘任务仍在等待或执行，本次未重复打开。")
+            return
+        if self.state.movie is None:
+            self.clear_auto_crop_preview(redraw=False)
+            self.show_parameter_panel(
+                spec["label"],
+                [{"type": "note", "text": "请先在数据区域导入视频、TIFF 或双光子数据。"}],
+                description=spec["description"],
+                cancel_command=self.cancel_auto_crop_edges,
+                panel_id="auto_crop_edges",
+            )
+            self.set_parameter_feedback("请先导入数据，再进行无效边缘拟合。")
+            return
+        height, width = np.asarray(self.state.movie).shape[1:]
+        self.clear_auto_crop_preview(redraw=False)
+        self.auto_crop_bounds = (0, 0, int(width), int(height))
+        fields = [
+            {
+                "type": "readonly",
+                "key": "crop_bounds_summary",
+                "label": "当前裁剪范围",
+                "default": "",
+            },
+            {
+                "type": "buttons",
+                "columns": 1,
+                "actions": (
+                    ("重新自动拟合", self.refit_auto_crop_edges),
+                    ("确认裁剪", self.confirm_auto_crop_edges, "Accent.TButton"),
+                ),
+            },
+            {
+                "type": "note",
+                "text": "拖动框内可移动整个范围；拖动四条边或八个控制点可调整尺寸。裁剪后可使用“撤销”恢复。",
+            },
+        ]
+        self.show_parameter_panel(
+            spec["label"],
+            fields,
+            description=spec["description"],
+            cancel_command=self.cancel_auto_crop_edges,
+            panel_id="auto_crop_edges",
+        )
+        self._update_auto_crop_summary()
+        self.redraw(preserve_view=True)
+        self.refit_auto_crop_edges()
+
+    def refit_auto_crop_edges(self):
+        if self.state.movie is None or self.active_parameter_panel_id != "auto_crop_edges":
+            return
+        self.auto_crop_fit_token += 1
+        token = self.auto_crop_fit_token
+        self.set_parameter_feedback("正在分析稳定有效边缘，结果会自动更新到主预览。")
+
+        def worker(cancel_event):
+            source = self.state.movie
+            if source is None:
+                raise ValueError("当前没有可拟合的视频。")
+            source_id = id(source)
+            bounds = core.estimate_stable_crop_bounds(np.asarray(source))
+            if cancel_event.is_set():
+                raise TaskCancelled()
+            return source_id, bounds
+
+        def finish(result):
+            result_source_id, bounds = result
+            if (
+                token != self.auto_crop_fit_token
+                or self.active_parameter_panel_id != "auto_crop_edges"
+                or result_source_id != id(self.state.movie)
+            ):
+                return
+            self.auto_crop_bounds = tuple(int(value) for value in bounds)
+            self._update_auto_crop_summary()
+            self.redraw(preserve_view=True)
+            x0, y0, x1, y1 = self.auto_crop_bounds
+            if (x0, y0, x1, y1) == (0, 0, self.state.movie.shape[2], self.state.movie.shape[1]):
+                self.set_parameter_feedback("未发现可信的连续无效外缘；当前保留全画面，可手动拖动边界。")
+            else:
+                self.set_parameter_feedback("自动拟合完成。请检查主预览中的范围，必要时拖动调整后确认。")
+
+        def fail(exc):
+            if token == self.auto_crop_fit_token and self.active_parameter_panel_id == "auto_crop_edges":
+                self.set_parameter_feedback(f"自动拟合失败：{exc}", error=True)
+            self.log(f"自动裁剪无效边缘拟合失败：{exc}")
+
+        self.enqueue_task("拟合有效画面边缘", worker, finish, on_error=fail)
+
+    def confirm_auto_crop_edges(self):
+        if self.state.movie is None or self.auto_crop_bounds is None or self.auto_crop_confirmation_pending:
+            return
+        bounds = tuple(int(value) for value in self.auto_crop_bounds)
+        height, width = np.asarray(self.state.movie).shape[1:]
+        if bounds == (0, 0, width, height):
+            self.set_parameter_feedback("当前范围是完整画面，无需裁剪；可先拖动边界。")
+            return
+        try:
+            self.apply_protocol(update_baseline=False)
+            source = self.state.movie
+            source_id = id(source)
+            channel_sources = tuple(self.channel_movies())
+            roi_sources = tuple(np.asarray(mask, dtype=bool).copy() for mask in self.state.roi_masks)
+            roi_names = tuple(self.state.roi_names)
+            roi_metadata = tuple(dict(item) for item in self.state.roi_metadata)
+            source_roi_revision = int(self.state.roi_revision)
+            baseline_start = int(self.state.baseline_start_frame)
+            baseline_duration = int(self.state.baseline_duration_frames)
+            invalid_start_frames = int(self.state.invalid_start_frames)
+            projection_mode = self.projection_mode.get()
+            acceleration = self.acceleration()
+            self.auto_crop_confirmation_token += 1
+            confirmation_token = self.auto_crop_confirmation_token
+            self.auto_crop_confirmation_pending = True
+            self.set_parameter_feedback("裁剪已加入任务流，正在等待执行。")
+
+            def worker(cancel_event):
+                if channel_sources:
+                    channels = []
+                    for channel in channel_sources:
+                        if cancel_event.is_set():
+                            raise TaskCancelled()
+                        channels.append(core.crop_movie_bounds(channel, bounds))
+                    channels = tuple(channels)
+                    movie = core.two_photon_analysis_movie(channels)
+                else:
+                    channels = ()
+                    movie = core.crop_movie_bounds(source, bounds)
+                cropped_rois = []
+                cropped_names = []
+                cropped_metadata = []
+                for index, mask in enumerate(roi_sources):
+                    cropped_mask = core.crop_spatial_mask(mask, bounds).astype(bool, copy=False)
+                    if np.any(cropped_mask):
+                        cropped_rois.append(cropped_mask)
+                        cropped_names.append(roi_names[index] if index < len(roi_names) else f"ROI{index + 1}")
+                        cropped_metadata.append(dict(roi_metadata[index]) if index < len(roi_metadata) else {})
+                if cancel_event.is_set():
+                    raise TaskCancelled()
+                baseline = core.baseline_from_frames(
+                    movie,
+                    baseline_start,
+                    baseline_duration,
+                    invalid_start_frames=invalid_start_frames,
+                )
+                projection = core.compute_projection(
+                    movie,
+                    projection_mode,
+                    acceleration=acceleration,
+                    mean_start_frame=baseline_start,
+                    mean_duration_frames=baseline_duration,
+                    invalid_start_frames=invalid_start_frames,
+                )
+                return {
+                    "source_id": source_id,
+                    "roi_revision": source_roi_revision,
+                    "movie": movie,
+                    "channels": channels,
+                    "rois": cropped_rois,
+                    "roi_names": cropped_names,
+                    "roi_metadata": cropped_metadata,
+                    "baseline": baseline,
+                    "projection": projection,
+                    "removed_rois": len(roi_sources) - len(cropped_rois),
+                }
+
+            def finish(result):
+                if confirmation_token != self.auto_crop_confirmation_token:
+                    return
+                self.auto_crop_confirmation_pending = False
+                if result["source_id"] != id(self.state.movie):
+                    if self.active_parameter_panel_id == "auto_crop_edges":
+                        self.set_parameter_feedback("当前视频已变化，已忽略过期的裁剪结果。", error=True)
+                    self.log("当前视频已变化，已忽略过期的自动裁剪结果。")
+                    return
+                if result["roi_revision"] != self.state.roi_revision:
+                    if self.active_parameter_panel_id == "auto_crop_edges":
+                        self.set_parameter_feedback("ROI 已在等待期间变化，已忽略过期的裁剪结果。", error=True)
+                    self.log("ROI 已在等待期间变化，已忽略过期的自动裁剪结果。")
+                    return
+                self.push_history("自动裁剪无效边缘", include_rois=True)
+                self.state.movie = result["movie"]
+                self.state.converted_channel_movies = tuple(result["channels"])
+                self.state.roi_masks = list(result["rois"])
+                self.state.roi_names = list(result["roi_names"])
+                self.state.roi_metadata = [dict(item) for item in result["roi_metadata"]]
+                self.state.roi_revision += 1
+                self.state.baseline_image = result["baseline"]
+                self.state.display_image = result["projection"]
+                self.state.dff_movie = None
+                self.state.traces = None
+                self.display_source = ("projection", projection_mode)
+                self.highlighted_roi_index = None
+                self.current_polygon = []
+                self.freehand_drawing = False
+                self.vessel_mask = None
+                self.mark_movie_changed()
+                self.clear_channel_render_cache()
+                self.clear_deepcad_cache()
+                self.update_frame_controls()
+                self.update_channel_color_buttons()
+                self._view_limits = None
+                self._view_is_fit = True
+                if self.active_parameter_panel_id == "auto_crop_edges":
+                    self.clear_parameter_panel()
+                else:
+                    self.clear_auto_crop_preview(redraw=False)
+                self.redraw(preserve_view=False)
+                self.refresh_roi_list_if_visible()
+                removed = result["removed_rois"]
+                roi_note = f"；移除 {removed} 个裁剪后为空的 ROI" if removed else ""
+                self.log(
+                    f"自动裁剪无效边缘完成：{width} x {height} -> "
+                    f"{result['movie'].shape[2]} x {result['movie'].shape[1]} px{roi_note}。"
+                )
+
+            def fail(exc):
+                if confirmation_token != self.auto_crop_confirmation_token:
+                    return
+                self.auto_crop_confirmation_pending = False
+                if self.active_parameter_panel_id == "auto_crop_edges":
+                    self.set_parameter_feedback(f"裁剪失败：{exc}", error=True)
+                self.log(f"自动裁剪无效边缘失败：{exc}")
+
+            def cancelled():
+                if confirmation_token != self.auto_crop_confirmation_token:
+                    return
+                self.auto_crop_confirmation_pending = False
+                if self.active_parameter_panel_id == "auto_crop_edges":
+                    self.set_parameter_feedback("已取消裁剪。")
+
+            self.enqueue_task("自动裁剪无效边缘", worker, finish, on_error=fail, on_cancel=cancelled)
+        except Exception as exc:
+            self.auto_crop_confirmation_pending = False
+            self.set_parameter_feedback(f"裁剪参数无效：{exc}", error=True)
+            self.log(f"自动裁剪无效边缘参数无效：{exc}")
 
     def _param_float(self, values, key, default=0.0, min_value=None, max_value=None):
         raw = values.get(key, default)

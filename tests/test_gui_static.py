@@ -431,6 +431,68 @@ class GuiStaticTests(unittest.TestCase):
         self.assertIn('text="质量"', panel)
         self.assertIn("名称末尾的 * 表示", method)
 
+    def test_auto_crop_is_an_independent_embedded_preprocess_tool(self):
+        source = Path("NewLight_Analysis.py").read_text(encoding="utf-8")
+        labels = Path("ui_text_zh.py").read_text(encoding="utf-8")
+        show_start = source.index("    def show_preprocess_parameters")
+        run_start = source.index("    def run_preprocess_action", show_start)
+        preprocess_entry = source[show_start:run_start]
+
+        self.assertIn('"auto_crop_edges"', labels)
+        self.assertIn('"label": "自动裁剪无效边缘"', labels)
+        self.assertIn('if action_id == "auto_crop_edges":', preprocess_entry)
+        self.assertIn("self.show_auto_crop_edges_panel()", preprocess_entry)
+        self.assertNotIn("auto_crop_edges", source[source.index('if action_id == "caiman_motion"'):source.index('if action_id == "image_shift"')])
+
+    def test_auto_crop_uses_canvas_overlay_dragging_fifo_and_aligned_state(self):
+        source = Path("NewLight_Analysis.py").read_text(encoding="utf-8")
+        redraw_start = source.index("    def redraw(")
+        redraw_end = source.index("    def draw_empty_preview_background", redraw_start)
+        press_start = source.index("    def on_press(")
+        scroll_start = source.index("    def on_scroll(", press_start)
+        crop_start = source.index("    def show_auto_crop_edges_panel(")
+        next_preprocess = source.index("    def _param_float", crop_start)
+        crop_methods = source[crop_start:next_preprocess]
+
+        self.assertIn("self.draw_auto_crop_overlay()", source[redraw_start:redraw_end])
+        self.assertIn('self.active_parameter_panel_id == "auto_crop_edges"', source[press_start:scroll_start])
+        self.assertIn("self._start_auto_crop_drag(event)", source[press_start:scroll_start])
+        self.assertIn("self._update_auto_crop_drag(event)", source[press_start:scroll_start])
+        self.assertIn("core.estimate_stable_crop_bounds", crop_methods)
+        self.assertIn("core.crop_movie_bounds", crop_methods)
+        self.assertIn("self.enqueue_task", crop_methods)
+        self.assertIn("self.state.converted_channel_movies", crop_methods)
+        self.assertIn("self.state.roi_masks", crop_methods)
+        self.assertIn("include_rois=True", crop_methods)
+        self.assertNotIn("Toplevel", crop_methods)
+
+    def test_auto_crop_cancel_and_undo_restore_spatial_state(self):
+        source = Path("NewLight_Analysis.py").read_text(encoding="utf-8")
+        clear_start = source.index("    def clear_parameter_panel(")
+        panel_start = source.index("    def show_parameter_panel(", clear_start)
+        undo_start = source.index("    def undo(")
+        reset_start = source.index("    def reset_loaded_movie_view", undo_start)
+
+        self.assertIn('leaving_auto_crop = self.active_parameter_panel_id == "auto_crop_edges"', source[clear_start:panel_start])
+        self.assertIn("self.clear_auto_crop_preview", source[clear_start:panel_start])
+        self.assertIn("roi_snapshot", source[source.index("    def push_history("):undo_start])
+        self.assertIn("self.state.roi_masks", source[undo_start:reset_start])
+        self.assertIn("self.state.roi_metadata", source[undo_start:reset_start])
+
+    def test_auto_crop_guards_manual_edits_and_newer_roi_state(self):
+        source = Path("NewLight_Analysis.py").read_text(encoding="utf-8")
+        drag_start = source.index("    def _start_auto_crop_drag(")
+        drag_end = source.index("    def _update_auto_crop_drag", drag_start)
+        confirm_start = source.index("    def confirm_auto_crop_edges(")
+        param_start = source.index("    def _param_float", confirm_start)
+        confirm = source[confirm_start:param_start]
+
+        self.assertIn("self.auto_crop_fit_token += 1", source[drag_start:drag_end])
+        self.assertIn("source_roi_revision = int(self.state.roi_revision)", confirm)
+        self.assertIn('result["roi_revision"] != self.state.roi_revision', confirm)
+        self.assertIn('if self.active_parameter_panel_id == "auto_crop_edges":', confirm)
+        self.assertIn("self.auto_crop_confirmation_token", confirm)
+
 
 if __name__ == "__main__":
     unittest.main()

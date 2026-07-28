@@ -560,3 +560,42 @@ For future updates:
 - Current source verification is `171 passed`, with `41 passed` in the focused
   ROI color/GUI suite and a successful real Tk selection smoke test. No EXE was
   rebuilt.
+
+## Independent Invalid-Edge Crop (2026-07-28)
+
+- `ui_text_zh.py::PREPROCESS_PANEL_SPECS["auto_crop_edges"]` registers the
+  independent `自动裁剪无效边缘` preprocessing tool. Keep it separate from
+  both motion-correction implementations.
+- Read these locations first when changing the feature:
+  `analysis_core.py::estimate_stable_crop_bounds`, `crop_movie_bounds`, and
+  `crop_spatial_mask`; then `NewLight_Analysis.py::show_auto_crop_edges_panel`,
+  `refit_auto_crop_edges`, `confirm_auto_crop_edges`, the three canvas event
+  handlers, `draw_auto_crop_overlay`, `push_history`, and `undo`.
+- Bounds are `(x0, y0, x1, y1)` with exclusive `x1/y1`. The estimator samples
+  up to 96 frames, measures adjacent row/column duplication plus empty outer
+  bands, keeps only trim depths supported by at least 95% of sampled frames,
+  and returns full-frame bounds on low-information input. Manual interaction
+  enforces at least `16 px` per axis.
+- Fitting and confirmation both use the single FIFO controller. Fit results are
+  guarded by a token plus movie identity. Confirm captures immutable bounds,
+  source identity, channels, ROI masks/names/metadata, protocol, and projection
+  settings before queueing; stale movie results are ignored.
+- Confirmation modifies only session state. It synchronously crops every
+  loaded channel, rebuilds the analysis movie, crops and filters ROIs, clears
+  incompatible dF/F/trace/DeepCAD/render caches, invalidates ROI candidate
+  banks through `mark_movie_changed()`, and resets the fitted view. It never
+  writes the imported source file.
+- Crop history entries opt into `include_rois=True`; older four-field history
+  entries remain backward compatible. Undo restores the extra ROI snapshot only
+  when those fields exist.
+- Regression coverage is in `tests/test_auto_crop_edges.py`,
+  `tests/test_auto_crop_gui.py`, `tests/test_gui_static.py`, and
+  `tests/test_chinese_localization.py`. Run tests
+  with `.conda_envs/newlight_caiman/python.exe -m pytest -q`; the named
+  `caiman_latest` environment currently aborts in NumPy native initialization.
+- Review hardening covers transient-edge rejection, fit-after-FIFO replacement,
+  pending-confirmation panel changes, no-input embedded feedback, and a real Tk
+  drag/crop/undo workflow.
+- Verified state: `188 passed`, focused `63 passed`, source compilation and a
+  real Tk drag/crop/undo smoke passed. No EXE was built. All validation samples,
+  especially `eye/data/2/A01/result.avi`, remain protected and untouched.
