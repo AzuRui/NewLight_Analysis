@@ -2994,12 +2994,22 @@ def _load_roi_worker_result(
     expected_shape: tuple[int, int],
     log: str,
     metadata_updates: dict | None = None,
+    aligned_arrays: tuple[str, ...] = (),
 ) -> ROIBackendResult:
     if not artifact_path.is_file():
         raise RuntimeError("ROI worker finished without creating an ROI artifact")
     if not summary_path.is_file():
         raise RuntimeError("ROI worker finished without creating a summary")
     artifact = load_roi_artifact(artifact_path, expected_shape=expected_shape)
+    mask_count = int(artifact.masks.shape[0])
+    for name in aligned_arrays:
+        if name not in artifact.arrays:
+            continue
+        array = np.asarray(artifact.arrays[name])
+        if array.ndim == 0 or int(array.shape[0]) != mask_count:
+            raise ROIArtifactError(
+                f"ROI quality array {name!r} count does not match mask count {mask_count}"
+            )
     try:
         summary = json.loads(summary_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
@@ -3039,6 +3049,7 @@ def run_caiman_roi_segmentation(
     min_cnn_threshold: float = 0.99,
     cnn_lowest: float = 0.1,
     footprint_threshold: float = 0.20,
+    candidate_mode: bool = False,
 ) -> ROIBackendResult:
     movie = np.asarray(input_movie)
     if movie.ndim != 3 or movie.shape[0] == 0:
@@ -3076,6 +3087,8 @@ def run_caiman_roi_segmentation(
         "--cnn-lowest", str(float(cnn_lowest)),
         "--footprint-threshold", str(float(footprint_threshold)),
     ]
+    if candidate_mode:
+        args.append("--candidate-mode")
     succeeded = False
     try:
         proc = run_conda_worker(environment, str(script), args, cwd=str(PROJECT_DIR), timeout=7200)
@@ -3087,6 +3100,14 @@ def run_caiman_roi_segmentation(
             summary_path,
             expected_shape=tuple(movie.shape[1:]),
             log=log,
+            aligned_arrays=(
+                "traces",
+                "snr",
+                "r_values",
+                "cnn_scores",
+                "component_indices",
+                "preset_accepted",
+            ),
         )
         succeeded = True
         return result
@@ -3111,6 +3132,8 @@ def run_fast_roi_segmentation(
     min_area: int = 20,
     max_area: int = 4000,
     device: str = "auto",
+    candidate_mode: bool = False,
+    candidate_confidence: float = 0.05,
 ) -> ROIBackendResult:
     image = np.asarray(input_image)
     if image.ndim != 2 or image.size == 0:
@@ -3134,11 +3157,14 @@ def run_fast_roi_segmentation(
         "--runtime-root", str(runtime_path),
         "--image-size", str(int(image_size)),
         "--confidence", str(float(confidence)),
+        "--candidate-confidence", str(float(candidate_confidence)),
         "--iou", str(float(iou)),
         "--min-area", str(int(min_area)),
         "--max-area", str(int(max_area)),
         "--device", str(device),
     ]
+    if candidate_mode:
+        args.append("--candidate-mode")
     succeeded = False
     try:
         proc = run_conda_worker("neuroseg3", str(script), args, cwd=str(PROJECT_DIR), timeout=1800)
@@ -3151,6 +3177,7 @@ def run_fast_roi_segmentation(
             expected_shape=tuple(image.shape),
             log=log,
             metadata_updates={"projection_mode": str(projection_mode)},
+            aligned_arrays=("scores", "source_indices"),
         )
         succeeded = True
         return result
