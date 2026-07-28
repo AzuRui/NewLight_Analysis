@@ -3,7 +3,9 @@ import numpy as np
 import analysis_core as core
 from roi_adaptation import (
     CandidateBank,
+    QualityPreset,
     QUALITY_PRESETS,
+    adaptive_result_is_current,
     adapt_candidate_bank,
     build_feature_table,
     display_roi_name,
@@ -12,6 +14,8 @@ from roi_adaptation import (
     normalized_roi_metadata,
     refine_protected_mask,
     serialize_roi_metadata,
+    candidate_source_signature,
+    suggest_cell_diameter,
     suggest_area_range,
 )
 
@@ -41,6 +45,62 @@ def test_no_example_keeps_current_area_range():
 def test_empty_masks_are_ignored_when_estimating_area():
     empty = np.zeros((40, 40), dtype=bool)
     assert suggest_area_range([empty, square(5)], 20, 4000) == (20, 28)
+
+
+def test_caiman_cell_diameter_uses_median_equivalent_diameter():
+    diameter = suggest_cell_diameter([square(4), square(10), square(6)], current_value=12.0)
+    expected = float(np.median([2 * np.sqrt(area / np.pi) for area in (16, 100, 36)]))
+    assert np.isclose(diameter, expected)
+
+
+def test_caiman_cell_diameter_keeps_current_value_without_valid_rois():
+    assert suggest_cell_diameter([], current_value=15.0) == 15.0
+
+
+def test_same_source_signature_reuses_candidate_bank():
+    first = candidate_source_signature(
+        "fast", 7, (128, 128), 5, "mean", (10, 50), "weights-v1", {"image_size": 960}
+    )
+    second = candidate_source_signature(
+        "fast", 7, (128, 128), 5, "mean", (10, 50), "weights-v1", {"image_size": 960}
+    )
+    assert first == second
+
+
+def test_projection_or_movie_generation_change_invalidates_fast_bank():
+    base = candidate_source_signature(
+        "fast", 7, (128, 128), 5, "mean", (10, 50), "weights-v1", {"image_size": 960}
+    )
+    changed_movie = candidate_source_signature(
+        "fast", 8, (128, 128), 5, "mean", (10, 50), "weights-v1", {"image_size": 960}
+    )
+    changed_projection = candidate_source_signature(
+        "fast", 7, (128, 128), 5, "max", (10, 50), "weights-v1", {"image_size": 960}
+    )
+    assert base != changed_movie
+    assert base != changed_projection
+
+
+def test_signature_normalizes_parameter_order_and_nested_values():
+    first = candidate_source_signature(
+        "caiman", 3, (20, 30), 0, "movie", (0, 0), "caiman", {"mode": "two_photon", "gSig": [3, 3]}
+    )
+    second = candidate_source_signature(
+        "caiman", 3, (20, 30), 0, "movie", (0, 0), "caiman", {"gSig": [3, 3], "mode": "two_photon"}
+    )
+    assert first == second
+
+
+def test_reference_revision_does_not_change_bank_signature_but_blocks_stale_apply():
+    before = candidate_source_signature(
+        "fast", 7, (128, 128), 5, "mean", (10, 50), "weights-v1", {"image_size": 960}
+    )
+    after = candidate_source_signature(
+        "fast", 7, (128, 128), 5, "mean", (10, 50), "weights-v1", {"image_size": 960}
+    )
+    assert before == after
+    assert adaptive_result_is_current(7, 12, current_generation=7, current_roi_revision=12)
+    assert not adaptive_result_is_current(7, 12, current_generation=7, current_roi_revision=13)
 
 
 def test_low_quality_name_has_one_trailing_asterisk():
@@ -256,6 +316,27 @@ def test_caiman_candidate_requires_snr_and_either_spatial_or_cnn_quality():
     )
     assert result.selected_count == 1
     assert result.metadata[-1]["base_name"] == "good"
+
+
+def test_custom_quality_preset_uses_current_thresholds():
+    movie = np.ones((10, 12, 12), dtype=np.float32)
+    candidate = np.zeros((12, 12), dtype=bool)
+    candidate[3:7, 4:8] = True
+    bank = CandidateBank(
+        "fast",
+        candidate[None, ...],
+        ("candidate",),
+        {"scores": np.array([0.15], dtype=np.float32)},
+        ("fast", 1),
+        {},
+    )
+    custom = QualityPreset(0.10, 2.0, 0.8, 0.9, 2.3)
+
+    result = adapt_candidate_bank(movie, movie.mean(axis=0), [], [], bank, custom)
+
+    assert result.selected_count == 1
+    assert result.fitted_parameters["quality_preset"] == "custom"
+    assert result.fitted_parameters["fast_confidence"] == 0.10
 
 
 def test_analysis_state_starts_with_aligned_empty_roi_metadata_and_revision():

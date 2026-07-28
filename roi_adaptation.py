@@ -352,7 +352,12 @@ def adapt_candidate_bank(movie, projection, reference_masks, reference_metadata,
         raise ValueError("Candidate bank spatial shape does not match the projection")
     if len(reference_masks) != len(reference_metadata):
         raise ValueError("Reference mask and metadata counts do not match")
-    preset = QUALITY_PRESETS.get(str(quality_preset), QUALITY_PRESETS["balanced"])
+    if isinstance(quality_preset, QualityPreset):
+        preset = quality_preset
+        preset_name = "custom"
+    else:
+        preset_name = str(quality_preset)
+        preset = QUALITY_PRESETS.get(preset_name, QUALITY_PRESETS["balanced"])
 
     protected_masks = []
     protected_metadata = []
@@ -400,7 +405,7 @@ def adapt_candidate_bank(movie, projection, reference_masks, reference_metadata,
     selected_count = len(output_masks) - len(protected_masks)
     low_quality_count = sum(bool(item.get("low_quality")) for item in protected_metadata)
     fitted_parameters = {
-        "quality_preset": str(quality_preset),
+        "quality_preset": preset_name,
         "feature_columns": list(FEATURE_COLUMNS),
         "feature_centers": centers.astype(float).tolist(),
         "feature_scales": scales.astype(float).tolist(),
@@ -429,6 +434,55 @@ def suggest_area_range(masks, current_min, current_max):
         return int(current_min), max(int(current_min), suggested_max)
     suggested_min = max(1, int(round(areas[0] * 0.9)))
     return suggested_min, max(suggested_min, suggested_max)
+
+
+def suggest_cell_diameter(masks, current_value):
+    diameters = [
+        2.0 * np.sqrt(int(np.count_nonzero(mask)) / np.pi)
+        for mask in masks
+        if np.any(mask)
+    ]
+    if not diameters:
+        return float(current_value)
+    return float(np.median(np.asarray(diameters, dtype=np.float32)))
+
+
+def candidate_source_signature(
+    engine,
+    movie_generation,
+    image_shape,
+    invalid_start_frames,
+    projection_mode,
+    baseline_window,
+    model_identity,
+    generation_parameters,
+):
+    parameters = tuple(
+        sorted((str(key), repr(value)) for key, value in dict(generation_parameters).items())
+    )
+    return (
+        str(engine),
+        int(movie_generation),
+        tuple(int(value) for value in image_shape),
+        int(invalid_start_frames),
+        str(projection_mode),
+        tuple(int(value) for value in baseline_window),
+        str(model_identity),
+        parameters,
+    )
+
+
+def adaptive_result_is_current(
+    source_generation,
+    source_roi_revision,
+    *,
+    current_generation,
+    current_roi_revision,
+):
+    return (
+        int(source_generation) == int(current_generation)
+        and int(source_roi_revision) == int(current_roi_revision)
+    )
 
 
 def normalized_roi_metadata(value, source, fallback_name):

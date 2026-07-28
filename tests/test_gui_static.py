@@ -248,6 +248,46 @@ class GuiStaticTests(unittest.TestCase):
         self.assertIn("if result.masks.shape[0] == 0:", fast_methods)
         self.assertIn("self.set_rois(result.masks", fast_methods)
 
+    def test_roi_engines_expose_quality_presets_and_adaptive_actions(self):
+        source = Path("NewLight_Analysis.py").read_text(encoding="utf-8")
+        caiman_start = source.index("    def caiman_roi(self):")
+        fast_start = source.index("    def fast_roi(self):", caiman_start)
+        legacy_start = source.index("    def auto_roi(self):", fast_start)
+        caiman_methods = source[caiman_start:fast_start]
+        fast_methods = source[fast_start:legacy_start]
+
+        for methods in (caiman_methods, fast_methods):
+            self.assertIn('"quality_preset"', methods)
+            self.assertIn('("recall", "高召回")', methods)
+            self.assertIn('("balanced", "均衡")', methods)
+            self.assertIn('("precision", "高精度")', methods)
+            self.assertIn('("custom", "自定义")', methods)
+            self.assertIn("根据当前 ROI 自适应拟合并运行", methods)
+            self.assertIn("不训练或修改模型权重", methods)
+        self.assertIn("从当前 ROI 填入面积", fast_methods)
+
+    def test_adaptive_roi_uses_separate_banks_signatures_and_stale_guards(self):
+        source = Path("NewLight_Analysis.py").read_text(encoding="utf-8")
+
+        self.assertIn('self.roi_candidate_banks = {"fast": None, "caiman": None}', source)
+        self.assertIn("self.movie_generation = 0", source)
+        self.assertIn("def mark_movie_changed(self):", source)
+        self.assertGreaterEqual(source.count("self.mark_movie_changed()"), 8)
+        self.assertIn("roi_fit.candidate_source_signature(", source)
+        self.assertIn("roi_fit.adaptive_result_is_current(", source)
+        self.assertIn("source_roi_revision = int(self.state.roi_revision)", source)
+        self.assertIn("candidate_mode=True", source)
+        self.assertIn("self.roi_candidate_banks[engine]", source)
+
+    def test_parameter_choices_support_selection_callbacks_for_presets(self):
+        source = Path("NewLight_Analysis.py").read_text(encoding="utf-8")
+        start = source.index("    def show_parameter_panel(")
+        end = source.index("    def reset_parameter_panel", start)
+        method = source[start:end]
+
+        self.assertIn('entry.bind("<<ComboboxSelected>>"', method)
+        self.assertIn('spec.get("on_change")', method)
+
     def test_roi_toolbar_exposes_embedded_roi_list(self):
         source = Path("NewLight_Analysis.py").read_text(encoding="utf-8")
 

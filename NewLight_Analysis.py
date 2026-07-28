@@ -1646,6 +1646,8 @@ class NewLightApp:
         self._setting_frame_scale = False
         self.user_settings = load_user_settings()
         self.last_roi_backend_result = None
+        self.roi_candidate_banks = {"fast": None, "caiman": None}
+        self.movie_generation = 0
         self.last_atlas_reference_json = ""
         self.last_neuroalign_output_dir = ""
         self.window_background = None
@@ -2369,6 +2371,9 @@ class NewLightApp:
                 )
                 self.parameter_choice_values[key] = display_to_value
                 self.parameter_choice_displays[key] = value_to_display
+                on_change = spec.get("on_change")
+                if callable(on_change):
+                    entry.bind("<<ComboboxSelected>>", lambda _event, callback=on_change: callback())
             else:
                 value_var = tk.StringVar(value=str(default))
                 entry = ttk.Entry(input_row, textvariable=value_var)
@@ -2628,6 +2633,10 @@ class NewLightApp:
         self._converted_frame_cache = (None, None, None)
         self._converted_projection_cache = {}
 
+    def mark_movie_changed(self):
+        self.movie_generation += 1
+        self.roi_candidate_banks = {"fast": None, "caiman": None}
+
     def clear_converted_color_source(self):
         self.state.converted_color_avi_path = ""
         self.state.converted_source_folder = ""
@@ -2723,6 +2732,7 @@ class NewLightApp:
             self.state = core.AnalysisState(fs=float(self.fs_var.get() or 10.0))
             self.state.display_image = None
             self.state.baseline_image = None
+            self.mark_movie_changed()
             self.display_source = ("projection", self.projection_mode.get())
             self.update_frame_controls()
             self.update_channel_color_buttons()
@@ -2732,6 +2742,7 @@ class NewLightApp:
         self.state.converted_channel_movies = tuple(movies)
         self.state.channel_colors = tuple(colors)
         self.state.movie = core.two_photon_analysis_movie(self.state.converted_channel_movies)
+        self.mark_movie_changed()
         self.state.baseline_image = None
         self.state.dff_movie = None
         self.update_frame_controls()
@@ -3174,6 +3185,7 @@ class NewLightApp:
         entry = self.state.history.pop()
         label, movie = entry[0], entry[1]
         self.state.movie = movie
+        self.mark_movie_changed()
         if len(entry) > 2:
             self.state.converted_channel_movies = tuple(entry[2])
         if len(entry) > 3:
@@ -3218,6 +3230,7 @@ class NewLightApp:
             self.state.converted_channel_movies = combined
             self.state.channel_colors = tuple(existing_colors + ["gray"] * len(new_movies))
             self.state.movie = core.two_photon_analysis_movie(combined)
+            self.mark_movie_changed()
             self.state.import_bit_depth = import_bit_depth
             self.state.converted_color_avi_path = ""
             self.state.converted_channel_avi_paths = ()
@@ -3237,6 +3250,7 @@ class NewLightApp:
             import_bit_depth=import_bit_depth,
             converted_source_folder=source_label,
         )
+        self.mark_movie_changed()
         self.reset_loaded_movie_view(fs, preserve_view=False)
         self.log(f"已从 {source_label} 载入 {len(new_movies)} 个通道：{self.state.movie.shape}，帧率={float(fs):.3g} Hz")
 
@@ -3298,6 +3312,7 @@ class NewLightApp:
                 source_path=path,
                 import_bit_depth=import_depth,
             )
+            self.mark_movie_changed()
             self.reset_loaded_movie_view(fs, preserve_view=False)
             self.log(f"已载入 {Path(path).name}：{movie.shape}，帧率={fs:.3g} Hz，导入位深={import_depth}")
             self.task_controller.reset_history_for_new_dataset()
@@ -3344,6 +3359,7 @@ class NewLightApp:
             converted_channel_avi_paths=tuple(str(path) for path in result.channel_avi_paths),
             converted_source_folder=str(result.source_folder),
         )
+        self.mark_movie_changed()
         self.reset_loaded_movie_view(result.fs, preserve_view=False)
         self.show_frame(0)
         self.task_controller.reset_history_for_new_dataset()
@@ -4662,6 +4678,7 @@ class NewLightApp:
                     return
                 self.push_history(label)
                 self.state.movie = result["movie"]
+                self.mark_movie_changed()
                 if result["channels"]:
                     self.state.converted_channel_movies = result["channels"]
                     self._converted_frame_cache = (None, None, None)
@@ -4914,6 +4931,7 @@ class NewLightApp:
                     return
                 self.push_history("图像行偏移校正")
                 self.state.movie = result["movie"]
+                self.mark_movie_changed()
                 if result["channels"]:
                     self.state.converted_channel_movies = result["channels"]
                     self.clear_channel_render_cache()
@@ -5023,6 +5041,7 @@ class NewLightApp:
             self.push_history(label)
             self.vessel_mask = result["mask"]
             self.state.movie = result["movie"]
+            self.mark_movie_changed()
             if result["channels"]:
                 self.state.converted_channel_movies = result["channels"]
                 self.clear_channel_render_cache()
@@ -5646,6 +5665,64 @@ class NewLightApp:
 
         self.queue_analysis_operation("导出摘要 JSON", operation, lambda result: self.log(f"摘要 JSON 已导出：{result}"), need_baseline=False)
 
+    @staticmethod
+    def _roi_preset_updates(engine, preset_name):
+        if preset_name == "custom":
+            return {}
+        preset = roi_fit.QUALITY_PRESETS.get(preset_name, roi_fit.QUALITY_PRESETS["balanced"])
+        updates = {"similarity_limit": preset.similarity_limit}
+        if engine == "fast":
+            updates["confidence"] = preset.fast_confidence
+        else:
+            updates.update(
+                min_snr=preset.caiman_min_snr,
+                rval_threshold=preset.caiman_rval,
+                min_cnn_threshold=preset.caiman_cnn,
+            )
+        return updates
+
+    def _apply_roi_quality_preset(self, engine):
+        values = self.panel_parameter_values()
+        preset_name = str(values.get("quality_preset", "balanced"))
+        updates = self._roi_preset_updates(engine, preset_name)
+        if not updates:
+            self.set_parameter_feedback("自定义预设保留当前高级参数。")
+            return
+        for key, value in updates.items():
+            variable = self.parameter_vars.get(key)
+            if variable is not None:
+                variable.set(f"{float(value):.6g}")
+        self.set_parameter_feedback("质量预设已应用到可见参数；模型权重未改变。")
+
+    def _fill_fast_area_from_current_rois(self):
+        try:
+            current_min = self._param_int(self.panel_parameter_values(), "min_area", 20, min_value=1)
+            current_max = self._param_int(self.panel_parameter_values(), "max_area", 4000, min_value=1)
+        except (TypeError, ValueError) as exc:
+            self.set_parameter_feedback(f"面积参数无效：{exc}", error=True)
+            return
+        suggested_min, suggested_max = roi_fit.suggest_area_range(
+            self.state.roi_masks,
+            current_min,
+            current_max,
+        )
+        if not self.state.roi_masks:
+            self.set_parameter_feedback("当前没有 ROI，面积范围保持不变。")
+            return
+        self.parameter_vars["min_area"].set(str(suggested_min))
+        self.parameter_vars["max_area"].set(str(suggested_max))
+        if len(self.state.roi_masks) == 1:
+            self.set_parameter_feedback(f"已按 1 个 ROI 填入最大面积 {suggested_max}；最小面积保持不变。")
+        else:
+            self.set_parameter_feedback(f"已按当前 ROI 填入面积范围 {suggested_min}-{suggested_max} px^2。")
+
+    def _run_adaptive_roi_from_panel(self, engine):
+        values = self.panel_parameter_values()
+        if engine == "fast":
+            self._run_fast_roi_from_panel(values, adaptive=True)
+        else:
+            self._run_caiman_roi_from_panel(values, adaptive=True)
+
     def caiman_roi(self):
         if not self.require_movie():
             return
@@ -5653,6 +5730,13 @@ class NewLightApp:
         self.show_parameter_panel(
             MODEL_NAMES["caiman_roi"],
             [
+                {
+                    "key": "quality_preset",
+                    "label": "质量预设",
+                    "default": saved.get("quality_preset", "balanced"),
+                    "choices": (("recall", "高召回"), ("balanced", "均衡"), ("precision", "高精度"), ("custom", "自定义")),
+                    "on_change": lambda: self._apply_roi_quality_preset("caiman"),
+                },
                 ("mode", "成像模式", saved.get("mode", "two_photon"), (("two_photon", "双光子 CNMF"), ("one_photon", "一光子 CNMF-E"))),
                 ("cell_diameter", "细胞直径 (px)", saved.get("cell_diameter", 12)),
                 ("components_per_patch", "每 Patch 初始成分数", saved.get("components_per_patch", 4)),
@@ -5662,11 +5746,17 @@ class NewLightApp:
                 ("ar_order", "钙信号 AR 阶数", saved.get("ar_order", 1)),
                 ("merge_threshold", "成分合并阈值", saved.get("merge_threshold", 0.85)),
                 ("min_snr", "最小时间 SNR", saved.get("min_snr", 2.0)),
-                ("rval_threshold", "最小空间相关", saved.get("rval_threshold", 0.85)),
+                ("rval_threshold", "最小空间相关", saved.get("rval_threshold", 0.80)),
                 {"key": "use_cnn", "label": "启用 CaImAn CNN 质量筛选", "default": bool(saved.get("use_cnn", True)), "type": "checkbox"},
-                ("min_cnn_threshold", "最小 CNN 分数", saved.get("min_cnn_threshold", 0.99)),
+                ("min_cnn_threshold", "最小 CNN 分数", saved.get("min_cnn_threshold", 0.90)),
                 ("cnn_lowest", "CNN 最低拒绝界限", saved.get("cnn_lowest", 0.1)),
                 ("footprint_threshold", "空间轮廓阈值", saved.get("footprint_threshold", 0.20)),
+                ("similarity_limit", "自适应相似距离", saved.get("similarity_limit", 2.3)),
+                {
+                    "type": "buttons",
+                    "columns": 1,
+                    "actions": (("根据当前 ROI 自适应拟合并运行", lambda: self._run_adaptive_roi_from_panel("caiman"), "Accent.TButton"),),
+                },
             ],
             self._run_caiman_roi_from_panel,
             description="在当前已预处理视频上进行钙源分解，输出相互独立的任意形状 ROI。运行时间通常长于快速分割。",
@@ -5676,15 +5766,30 @@ class NewLightApp:
                 "每 Patch 成分数控制局部初始化密度；SNR、空间相关和 CNN 分数越高，筛选越严格。"
                 "空间轮廓阈值是每个 footprint 相对峰值阈值，降低可扩大轮廓，提高会收紧轮廓。"
                 "一光子 CNMF-E 使用环形背景模型；双光子数据通常保持默认 CNMF。"
+                "自适应拟合只校准轮廓、质量和相似度阈值，不训练或修改模型权重。"
             ),
         )
 
-    def _run_caiman_roi_from_panel(self, values):
+    def _run_caiman_roi_from_panel(self, values, adaptive=False):
         try:
+            values = dict(values)
+            quality_preset = str(values.get("quality_preset", "balanced"))
+            if quality_preset not in {"recall", "balanced", "precision", "custom"}:
+                raise ValueError("质量预设无效")
+            values.update(self._roi_preset_updates("caiman", quality_preset))
+            if adaptive and self.state.roi_masks:
+                fitted_diameter = roi_fit.suggest_cell_diameter(
+                    self.state.roi_masks,
+                    values.get("cell_diameter", 12),
+                )
+                values["cell_diameter"] = fitted_diameter
+                self.parameter_vars["cell_diameter"].set(f"{fitted_diameter:.4g}")
+                self.set_parameter_feedback(f"当前 ROI 建议细胞直径 {fitted_diameter:.3g} px；已加入自适应任务。")
             mode = str(values.get("mode", "two_photon"))
             if mode not in {"two_photon", "one_photon"}:
                 raise ValueError("成像模式无效")
             settings = {
+                "quality_preset": quality_preset,
                 "mode": mode,
                 "cell_diameter": self._param_float(values, "cell_diameter", 12, min_value=1),
                 "components_per_patch": self._param_int(values, "components_per_patch", 4, min_value=1),
@@ -5699,6 +5804,7 @@ class NewLightApp:
                 "min_cnn_threshold": self._param_float(values, "min_cnn_threshold", 0.99, min_value=0, max_value=1),
                 "cnn_lowest": self._param_float(values, "cnn_lowest", 0.1, min_value=0, max_value=1),
                 "footprint_threshold": self._param_float(values, "footprint_threshold", 0.20, min_value=0.01, max_value=1),
+                "similarity_limit": self._param_float(values, "similarity_limit", 2.3, min_value=0.1, max_value=10),
             }
         except (TypeError, ValueError) as exc:
             self.set_parameter_feedback(f"CaImAn 参数无效：{exc}", error=True)
@@ -5711,6 +5817,16 @@ class NewLightApp:
         frame_rate = float(self.state.fs)
         invalid_start_frames = int(self.state.invalid_start_frames)
 
+        if adaptive:
+            self._enqueue_adaptive_roi("caiman", settings)
+            return
+
+        backend_settings = {
+            key: value
+            for key, value in settings.items()
+            if key not in {"quality_preset", "similarity_limit"}
+        }
+
         def worker(cancel_event):
             movie_snapshot = np.array(movie_source, copy=True)
             if cancel_event.is_set():
@@ -5720,7 +5836,7 @@ class NewLightApp:
                 session_dir=str(self.session_temp_dir),
                 frame_rate=frame_rate,
                 invalid_start_frames=invalid_start_frames,
-                **settings,
+                **backend_settings,
             )
             if cancel_event.is_set():
                 raise TaskCancelled()
@@ -5764,6 +5880,13 @@ class NewLightApp:
         self.show_parameter_panel(
             MODEL_NAMES["fast_roi"],
             [
+                {
+                    "key": "quality_preset",
+                    "label": "质量预设",
+                    "default": saved.get("quality_preset", "balanced"),
+                    "choices": (("recall", "高召回"), ("balanced", "均衡"), ("precision", "高精度"), ("custom", "自定义")),
+                    "on_change": lambda: self._apply_roi_quality_preset("fast"),
+                },
                 ("projection_mode", "输入投影视图", default_projection, (("mean", "均值"), ("max", "最大值"), ("std", "标准差"), ("p25", "25% 分位"))),
                 ("confidence", "检测置信度", saved.get("confidence", 0.25)),
                 ("iou", "实例 IoU 阈值", saved.get("iou", 0.70)),
@@ -5771,6 +5894,15 @@ class NewLightApp:
                 ("min_area", "最小面积 (px^2)", saved.get("min_area", 20)),
                 ("max_area", "最大面积 (px^2)", saved.get("max_area", 4000)),
                 ("device", "运行设备", saved.get("device", "auto"), (("auto", "自动"), ("cpu", "CPU"), ("0", "CUDA 0"))),
+                ("similarity_limit", "自适应相似距离", saved.get("similarity_limit", 2.3)),
+                {
+                    "type": "buttons",
+                    "columns": 1,
+                    "actions": (
+                        ("从当前 ROI 填入面积", self._fill_fast_area_from_current_rois),
+                        ("根据当前 ROI 自适应拟合并运行", lambda: self._run_adaptive_roi_from_panel("fast"), "Accent.TButton"),
+                    ),
+                },
             ],
             self._run_fast_roi_from_panel,
             description="使用已授权的 NeuSuite 神经结构实例模型处理所选科学灰度投影；不使用伪彩或显示对比度。",
@@ -5779,15 +5911,22 @@ class NewLightApp:
                 "置信度越低召回越高，也会增加假阳性；建议从 0.25 开始。IoU 控制重叠实例的抑制，"
                 "较高值更容易保留邻近结构。模型输入尺寸越大越利于小结构，但显存占用和耗时增加。"
                 "面积范围按恢复到原始分辨率后的实际像素计算。"
+                "自适应拟合只校准轮廓、质量和相似度阈值，不训练或修改模型权重。"
             ),
         )
 
-    def _run_fast_roi_from_panel(self, values):
+    def _run_fast_roi_from_panel(self, values, adaptive=False):
         try:
+            values = dict(values)
+            quality_preset = str(values.get("quality_preset", "balanced"))
+            if quality_preset not in {"recall", "balanced", "precision", "custom"}:
+                raise ValueError("质量预设无效")
+            values.update(self._roi_preset_updates("fast", quality_preset))
             projection_mode = str(values.get("projection_mode", "mean"))
             if projection_mode not in {"mean", "max", "std", "p25"}:
                 raise ValueError("投影视图无效")
             settings = {
+                "quality_preset": quality_preset,
                 "projection_mode": projection_mode,
                 "confidence": self._param_float(values, "confidence", 0.25, min_value=0, max_value=1),
                 "iou": self._param_float(values, "iou", 0.70, min_value=0, max_value=1),
@@ -5795,6 +5934,7 @@ class NewLightApp:
                 "min_area": self._param_int(values, "min_area", 20, min_value=1),
                 "max_area": self._param_int(values, "max_area", 4000, min_value=1),
                 "device": str(values.get("device", "auto")),
+                "similarity_limit": self._param_float(values, "similarity_limit", 2.3, min_value=0.1, max_value=10),
             }
             if settings["max_area"] < settings["min_area"]:
                 raise ValueError("最大面积必须大于或等于最小面积")
@@ -5811,6 +5951,16 @@ class NewLightApp:
         invalid_start_frames = int(self.state.invalid_start_frames)
         acceleration = self.acceleration()
 
+        if adaptive:
+            self._enqueue_adaptive_roi("fast", settings)
+            return
+
+        backend_settings = {
+            key: value
+            for key, value in settings.items()
+            if key not in {"quality_preset", "similarity_limit"}
+        }
+
         def worker(cancel_event):
             projection = core.compute_projection(
                 np.asarray(movie_source, dtype=np.float32),
@@ -5825,7 +5975,7 @@ class NewLightApp:
             result = core.run_fast_roi_segmentation(
                 projection,
                 session_dir=str(self.session_temp_dir),
-                **settings,
+                **backend_settings,
             )
             if cancel_event.is_set():
                 raise TaskCancelled()
@@ -5855,6 +6005,228 @@ class NewLightApp:
             self.log(clean_backend_log(result.log)[-1200:])
         self.log(f"快速 ROI 摘要：{result.summary_path}")
         self.set_parameter_feedback(f"完成：检测到 {result.masks.shape[0]} 个 ROI。")
+
+    @staticmethod
+    def _roi_backend_settings(engine, settings):
+        excluded = {"quality_preset", "similarity_limit"}
+        values = {key: value for key, value in settings.items() if key not in excluded}
+        if engine == "fast":
+            return values
+        values.pop("projection_mode", None)
+        return values
+
+    @staticmethod
+    def _roi_generation_parameters(engine, settings, frame_rate):
+        if engine == "fast":
+            keys = ("image_size", "iou", "min_area", "max_area", "device")
+            values = {key: settings[key] for key in keys}
+            values["candidate_confidence"] = 0.05
+            return values
+        keys = (
+            "mode",
+            "cell_diameter",
+            "components_per_patch",
+            "background_components",
+            "spatial_subsample",
+            "temporal_subsample",
+            "ar_order",
+            "merge_threshold",
+            "use_cnn",
+            "footprint_threshold",
+        )
+        values = {key: settings[key] for key in keys}
+        values["frame_rate"] = float(frame_rate)
+        return values
+
+    @staticmethod
+    def _roi_model_identity(engine):
+        if engine != "fast":
+            return f"caiman:{core.NEWLIGHT_CAIMAN_PREFIX}"
+        path = core.NEUSUITE_DEFAULT_WEIGHTS.resolve()
+        try:
+            stat = path.stat()
+            return f"{path}|{stat.st_size}|{stat.st_mtime_ns}"
+        except OSError:
+            return str(path)
+
+    @staticmethod
+    def _candidate_bank_from_result(engine, result, signature, generation_parameters):
+        quality_keys = (
+            ("scores", "source_indices")
+            if engine == "fast"
+            else ("snr", "r_values", "cnn_scores", "component_indices", "preset_accepted")
+        )
+        quality = {
+            key: np.asarray(result.arrays[key]).copy()
+            for key in quality_keys
+            if key in result.arrays
+        }
+        return roi_fit.CandidateBank(
+            engine=engine,
+            masks=np.asarray(result.masks, dtype=bool).copy(),
+            names=tuple(result.names),
+            model_quality=quality,
+            source_signature=signature,
+            generation_parameters=dict(generation_parameters),
+        )
+
+    @staticmethod
+    def _adaptive_quality_preset(engine, settings):
+        preset_name = str(settings.get("quality_preset", "balanced"))
+        if preset_name != "custom":
+            return preset_name
+        balanced = roi_fit.QUALITY_PRESETS["balanced"]
+        return roi_fit.QualityPreset(
+            fast_confidence=float(settings.get("confidence", balanced.fast_confidence)),
+            caiman_min_snr=float(settings.get("min_snr", balanced.caiman_min_snr)),
+            caiman_rval=float(settings.get("rval_threshold", balanced.caiman_rval)),
+            caiman_cnn=float(settings.get("min_cnn_threshold", balanced.caiman_cnn)),
+            similarity_limit=float(settings.get("similarity_limit", balanced.similarity_limit)),
+        )
+
+    def _enqueue_adaptive_roi(self, engine, settings):
+        movie_source = self.state.movie
+        source_id = id(movie_source)
+        source_generation = int(self.movie_generation)
+        source_roi_revision = int(self.state.roi_revision)
+        reference_masks = tuple(np.asarray(mask, dtype=bool).copy() for mask in self.state.roi_masks)
+        reference_metadata = tuple(dict(item) for item in self.state.roi_metadata)
+        frame_rate = float(self.state.fs)
+        invalid_start_frames = int(self.state.invalid_start_frames)
+        baseline_window = (
+            int(self.state.baseline_start_frame),
+            int(self.state.baseline_duration_frames),
+        )
+        projection_mode = str(settings.get("projection_mode", "mean")) if engine == "fast" else "mean"
+        generation_parameters = self._roi_generation_parameters(engine, settings, frame_rate)
+        signature = roi_fit.candidate_source_signature(
+            engine,
+            source_generation,
+            tuple(movie_source.shape[1:]),
+            invalid_start_frames,
+            projection_mode,
+            baseline_window if engine == "fast" else (0, 0),
+            self._roi_model_identity(engine),
+            generation_parameters,
+        )
+        cached_bank = self.roi_candidate_banks[engine]
+        quality_preset = self._adaptive_quality_preset(engine, settings)
+        backend_settings = self._roi_backend_settings(engine, settings)
+        acceleration = self.acceleration()
+
+        def worker(cancel_event):
+            movie_snapshot = np.asarray(movie_source, dtype=np.float32).copy()
+            valid_movie = movie_snapshot[invalid_start_frames:]
+            if cancel_event.is_set():
+                raise TaskCancelled()
+            if engine == "fast":
+                projection = core.compute_projection(
+                    movie_snapshot,
+                    projection_mode,
+                    acceleration=acceleration,
+                    mean_start_frame=baseline_window[0],
+                    mean_duration_frames=baseline_window[1],
+                    invalid_start_frames=invalid_start_frames,
+                )
+            else:
+                projection = core.compute_projection(
+                    movie_snapshot,
+                    "mean",
+                    acceleration=acceleration,
+                    invalid_start_frames=invalid_start_frames,
+                )
+            bank = cached_bank
+            reused = bank is not None and bank.source_signature == signature
+            backend_result = None
+            if not reused:
+                if engine == "fast":
+                    backend_result = core.run_fast_roi_segmentation(
+                        projection,
+                        session_dir=str(self.session_temp_dir),
+                        candidate_mode=True,
+                        candidate_confidence=0.05,
+                        **backend_settings,
+                    )
+                else:
+                    backend_result = core.run_caiman_roi_segmentation(
+                        movie_snapshot,
+                        session_dir=str(self.session_temp_dir),
+                        frame_rate=frame_rate,
+                        invalid_start_frames=invalid_start_frames,
+                        candidate_mode=True,
+                        **backend_settings,
+                    )
+                bank = self._candidate_bank_from_result(
+                    engine,
+                    backend_result,
+                    signature,
+                    generation_parameters,
+                )
+            if cancel_event.is_set():
+                raise TaskCancelled()
+            fitted = roi_fit.adapt_candidate_bank(
+                valid_movie,
+                projection,
+                reference_masks,
+                reference_metadata,
+                bank,
+                quality_preset,
+            )
+            if cancel_event.is_set():
+                raise TaskCancelled()
+            return {
+                "source_id": source_id,
+                "source_generation": source_generation,
+                "source_roi_revision": source_roi_revision,
+                "bank": bank,
+                "reused": reused,
+                "backend_result": backend_result,
+                "fitted": fitted,
+            }
+
+        def finish(payload):
+            if (
+                payload["source_id"] != id(self.state.movie)
+                or payload["source_generation"] != self.movie_generation
+            ):
+                self.log("视频已变化，已忽略过期的自适应 ROI 结果。")
+                return
+            self.roi_candidate_banks[engine] = payload["bank"]
+            if not roi_fit.adaptive_result_is_current(
+                payload["source_generation"],
+                payload["source_roi_revision"],
+                current_generation=self.movie_generation,
+                current_roi_revision=self.state.roi_revision,
+            ):
+                self.log("ROI 列表已变化；候选缓存已保留，请重新运行自适应拟合。")
+                self.set_parameter_feedback("ROI 已在任务期间变化，未覆盖当前列表；请重新运行。", error=True)
+                return
+            fitted = payload["fitted"]
+            if not fitted.masks:
+                self.log("自适应候选为空；当前 ROI 列表保持不变。")
+                self.set_parameter_feedback("未找到可用候选，当前 ROI 未改变。", error=True)
+                return
+            names = [item["base_name"] for item in fitted.metadata]
+            self.set_rois(
+                fitted.masks,
+                f"{MODEL_NAMES['fast_roi'] if engine == 'fast' else MODEL_NAMES['caiman_roi']} 自适应",
+                names=names,
+                metadata=fitted.metadata,
+            )
+            cache_text = "复用候选缓存" if payload["reused"] else "新建候选缓存"
+            if payload["backend_result"] is not None:
+                self.last_roi_backend_result = payload["backend_result"]
+            summary = (
+                f"{cache_text}；保护 {fitted.protected_count} 个，新增 {fitted.selected_count} 个，"
+                f"低质量保留 {fitted.low_quality_count} 个。"
+            )
+            self.log(f"自适应 ROI 完成：{summary}")
+            self.set_parameter_feedback(summary)
+
+        label = f"{MODEL_NAMES['fast_roi'] if engine == 'fast' else MODEL_NAMES['caiman_roi']} 自适应拟合"
+        self.enqueue_task(label, worker, finish)
+        reference_text = f"参考 ROI={len(reference_masks)}" if reference_masks else "无参考 ROI，将按质量预设筛选"
+        self.set_parameter_feedback(f"已加入任务流；{reference_text}。拟合只校准参数，不训练模型权重。")
 
     def auto_roi(self):
         if not self.require_movie():
@@ -6052,6 +6424,7 @@ class NewLightApp:
     def _finish_caiman_motion(self, result, previous_source=("projection", "mean")):
         movie, log, preview_path = result
         self.state.movie = movie
+        self.mark_movie_changed()
         self.clear_converted_color_source()
         self.state.converted_channel_movies = (movie,)
         self.state.channel_colors = ("gray",)
