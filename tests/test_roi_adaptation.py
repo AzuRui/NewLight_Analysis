@@ -1,7 +1,9 @@
 import numpy as np
 
 from roi_adaptation import (
+    CandidateBank,
     QUALITY_PRESETS,
+    adapt_candidate_bank,
     build_feature_table,
     display_roi_name,
     normalized_roi_metadata,
@@ -125,3 +127,128 @@ def test_convolution_and_shape_features_are_finite():
         "log_mean",
         "temporal_snr",
     }.issubset(table.columns)
+
+
+def test_adaptation_retains_low_quality_reference_with_star_metadata():
+    movie = np.zeros((20, 20, 20), dtype=np.float32)
+    reference = square(4, shape=(20, 20))
+    result = adapt_candidate_bank(
+        movie,
+        movie.mean(axis=0),
+        [reference],
+        [{"source": "manual", "base_name": "ROI1"}],
+        CandidateBank.empty("fast", (20, 20)),
+        "balanced",
+    )
+    assert len(result.masks) == 1
+    assert result.metadata[0]["protected"]
+    assert result.metadata[0]["low_quality"]
+    assert display_roi_name(result.metadata[0]) == "ROI1*"
+
+
+def test_adaptation_adds_similar_candidate_and_rejects_distant_shape():
+    movie = np.zeros((20, 20, 20), dtype=np.float32)
+    reference = np.zeros((20, 20), dtype=bool)
+    reference[2:6, 2:6] = True
+    similar = np.zeros((20, 20), dtype=bool)
+    similar[10:14, 10:14] = True
+    too_large = np.zeros((20, 20), dtype=bool)
+    too_large[8:18, 8:18] = True
+    signal = np.sin(np.linspace(0, 6, 20)).astype(np.float32)
+    movie[:, reference | similar] = signal[:, None] + 2.0
+    bank = CandidateBank(
+        "fast",
+        np.stack([similar, too_large]),
+        ("candidate-1", "candidate-2"),
+        {"scores": np.array([0.9, 0.95], dtype=np.float32)},
+        ("fast", 1),
+        {"confidence": 0.05},
+    )
+    result = adapt_candidate_bank(
+        movie,
+        movie.mean(axis=0),
+        [reference],
+        [{"source": "manual", "base_name": "ROI1"}],
+        bank,
+        "balanced",
+    )
+    assert result.protected_count == 1
+    assert result.selected_count == 1
+    assert len(result.masks) == 2
+    assert np.count_nonzero(result.masks[1]) == 16
+
+
+def test_matching_candidate_is_not_duplicated_after_reference_refinement():
+    movie = np.ones((20, 20, 20), dtype=np.float32)
+    reference = np.zeros((20, 20), dtype=bool)
+    reference[4:9, 4:9] = True
+    bank = CandidateBank(
+        "fast",
+        reference[None, ...],
+        ("candidate-1",),
+        {"scores": np.array([0.95], dtype=np.float32)},
+        ("fast", 1),
+        {"confidence": 0.05},
+    )
+    result = adapt_candidate_bank(
+        movie,
+        movie.mean(axis=0),
+        [reference],
+        [{"source": "manual", "base_name": "ROI1"}],
+        bank,
+        "balanced",
+    )
+    assert result.protected_count == 1
+    assert result.selected_count == 0
+    assert len(result.masks) == 1
+
+
+def test_single_reference_uses_preset_scales_instead_of_zero_mad():
+    movie = np.ones((20, 20, 20), dtype=np.float32)
+    reference = np.zeros((20, 20), dtype=bool)
+    reference[4:9, 4:9] = True
+    result = adapt_candidate_bank(
+        movie,
+        movie.mean(axis=0),
+        [reference],
+        [{"source": "manual", "base_name": "ROI1"}],
+        CandidateBank.empty("fast", (20, 20)),
+        "balanced",
+    )
+    scales = np.asarray(result.fitted_parameters["feature_scales"], dtype=np.float32)
+    assert np.isfinite(scales).all()
+    assert np.all(scales > 0)
+
+
+def test_caiman_candidate_requires_snr_and_either_spatial_or_cnn_quality():
+    movie = np.zeros((30, 32, 32), dtype=np.float32)
+    reference = np.zeros((32, 32), dtype=bool)
+    reference[2:10, 2:10] = True
+    candidate_good = np.zeros((32, 32), dtype=bool)
+    candidate_good[2:10, 20:28] = True
+    candidate_bad = np.zeros((32, 32), dtype=bool)
+    candidate_bad[20:28, 2:10] = True
+    signal = np.sin(np.linspace(0, 4 * np.pi, movie.shape[0])).astype(np.float32)
+    movie[:, reference | candidate_good | candidate_bad] = signal[:, None] + 2.0
+    bank = CandidateBank(
+        "caiman",
+        np.stack([candidate_good, candidate_bad]),
+        ("good", "bad"),
+        {
+            "snr": np.array([3.0, 3.0], dtype=np.float32),
+            "r_values": np.array([0.85, 0.2], dtype=np.float32),
+            "cnn_scores": np.array([0.4, 0.4], dtype=np.float32),
+        },
+        ("caiman", 1),
+        {},
+    )
+    result = adapt_candidate_bank(
+        movie,
+        movie.mean(axis=0),
+        [reference],
+        [{"source": "manual", "base_name": "ROI1"}],
+        bank,
+        "balanced",
+    )
+    assert result.selected_count == 1
+    assert result.metadata[-1]["base_name"] == "good"

@@ -63,6 +63,48 @@ class FeatureTable:
     columns: tuple[str, ...] = FEATURE_COLUMNS
 
 
+@dataclass(frozen=True)
+class CandidateBank:
+    engine: str
+    masks: np.ndarray
+    names: tuple[str, ...]
+    model_quality: dict[str, np.ndarray]
+    source_signature: tuple
+    generation_parameters: dict
+
+    def __post_init__(self):
+        masks = np.asarray(self.masks, dtype=bool)
+        if masks.ndim != 3:
+            raise ValueError("Candidate masks must have shape (count, height, width)")
+        if masks.shape[0] != len(self.names):
+            raise ValueError("Candidate mask and name counts do not match")
+        for key, values in self.model_quality.items():
+            if np.asarray(values).reshape(-1).size != masks.shape[0]:
+                raise ValueError(f"Candidate quality array '{key}' is not aligned with masks")
+
+    @classmethod
+    def empty(cls, engine, image_shape):
+        shape = tuple(int(value) for value in image_shape)
+        return cls(
+            str(engine),
+            np.zeros((0,) + shape, dtype=bool),
+            (),
+            {},
+            (),
+            {},
+        )
+
+
+@dataclass(frozen=True)
+class AdaptiveROIResult:
+    masks: tuple[np.ndarray, ...]
+    metadata: tuple[dict, ...]
+    fitted_parameters: dict
+    protected_count: int
+    selected_count: int
+    low_quality_count: int
+
+
 def normalized_finite_image(image):
     array = np.asarray(image, dtype=np.float32)
     finite = np.isfinite(array)
@@ -227,6 +269,154 @@ def build_feature_table(movie, projection, masks):
     values = np.stack(rows) if rows else np.zeros((0, len(FEATURE_COLUMNS)), dtype=np.float32)
     values = np.nan_to_num(values, nan=0.0, posinf=0.0, neginf=0.0)
     return FeatureTable(values=values, columns=FEATURE_COLUMNS)
+
+
+_FEATURE_SCALE_FLOORS = np.asarray(
+    [0.35, 3.0, 0.20, 0.15, 0.20, 0.12, 0.15, 0.15, 0.15, 0.15, 0.15, 0.25, 0.15, 1.5, 0.20],
+    dtype=np.float32,
+)
+_FEATURE_DISTANCE_WEIGHTS = np.asarray(
+    [2.0, 2.0, 1.5, 1.5, 1.5, 1.5, 1.0, 1.0, 1.25, 1.0, 1.0, 1.0, 1.0, 1.25, 1.25],
+    dtype=np.float32,
+)
+
+
+def _weighted_median(values, weights):
+    order = np.argsort(values)
+    sorted_values = np.asarray(values, dtype=np.float32)[order]
+    sorted_weights = np.asarray(weights, dtype=np.float32)[order]
+    cumulative = np.cumsum(sorted_weights)
+    cutoff = float(cumulative[-1]) * 0.5
+    return float(sorted_values[min(int(np.searchsorted(cumulative, cutoff, side="left")), len(sorted_values) - 1)])
+
+
+def _fit_reference_distribution(features, metadata):
+    values = np.asarray(features, dtype=np.float32)
+    if values.shape[0] == 0:
+        return np.zeros(len(FEATURE_COLUMNS), dtype=np.float32), np.ones(len(FEATURE_COLUMNS), dtype=np.float32)
+    weights = np.asarray(
+        [SOURCE_WEIGHTS.get(str(item.get("source", "loaded")), 0.7) for item in metadata],
+        dtype=np.float32,
+    )
+    centers = np.asarray(
+        [_weighted_median(values[:, column], weights) for column in range(values.shape[1])],
+        dtype=np.float32,
+    )
+    deviations = np.abs(values - centers[None, :])
+    scales = np.asarray(
+        [_weighted_median(deviations[:, column], weights) * 1.4826 for column in range(values.shape[1])],
+        dtype=np.float32,
+    )
+    return centers, np.maximum(scales, _FEATURE_SCALE_FLOORS)
+
+
+def _mask_iou(first, second):
+    first_mask = np.asarray(first, dtype=bool)
+    second_mask = np.asarray(second, dtype=bool)
+    union = int(np.count_nonzero(first_mask | second_mask))
+    return float(np.count_nonzero(first_mask & second_mask) / union) if union else 0.0
+
+
+def _candidate_quality_passes(bank, index, preset):
+    quality = bank.model_quality
+    if bank.engine == "fast":
+        scores = np.asarray(quality.get("scores", np.ones(len(bank.names))), dtype=np.float32)
+        return float(scores[index]) >= preset.fast_confidence
+    if bank.engine == "caiman":
+        snr = np.asarray(quality.get("snr", np.full(len(bank.names), np.inf)), dtype=np.float32)
+        r_values = np.asarray(quality.get("r_values", np.full(len(bank.names), np.inf)), dtype=np.float32)
+        cnn = np.asarray(quality.get("cnn_scores", np.full(len(bank.names), np.inf)), dtype=np.float32)
+        return float(snr[index]) >= preset.caiman_min_snr and (
+            float(r_values[index]) >= preset.caiman_rval or float(cnn[index]) >= preset.caiman_cnn
+        )
+    return True
+
+
+def _candidate_distance(feature, centers, scales):
+    standardized = np.abs((np.asarray(feature, dtype=np.float32) - centers) / scales)
+    weighted = standardized * _FEATURE_DISTANCE_WEIGHTS
+    return float(np.sqrt(np.mean(weighted * weighted)))
+
+
+def _overlaps_existing(mask, existing, threshold=0.5):
+    return any(_mask_iou(mask, other) >= float(threshold) for other in existing)
+
+
+def adapt_candidate_bank(movie, projection, reference_masks, reference_metadata, bank, quality_preset="balanced"):
+    data = np.asarray(movie, dtype=np.float32)
+    image = np.asarray(projection, dtype=np.float32)
+    if data.ndim != 3 or data.shape[1:] != image.shape:
+        raise ValueError("Adaptive ROI fitting requires a movie and matching 2D projection")
+    if bank.masks.shape[1:] != image.shape:
+        raise ValueError("Candidate bank spatial shape does not match the projection")
+    if len(reference_masks) != len(reference_metadata):
+        raise ValueError("Reference mask and metadata counts do not match")
+    preset = QUALITY_PRESETS.get(str(quality_preset), QUALITY_PRESETS["balanced"])
+
+    protected_masks = []
+    protected_metadata = []
+    for index, (mask, metadata) in enumerate(zip(reference_masks, reference_metadata)):
+        item = normalized_roi_metadata(metadata, str(metadata.get("source", "loaded")), f"ROI{index + 1}")
+        item["protected"] = True
+        refined = refine_protected_mask(data, image, mask)
+        reasons = list(item.get("quality_reasons", []))
+        reasons.extend(reason for reason in refined.reasons if reason not in reasons)
+        item["low_quality"] = bool(item.get("low_quality", False) or refined.low_quality)
+        item["quality_reasons"] = reasons
+        protected_masks.append(np.asarray(refined.mask, dtype=bool).copy())
+        protected_metadata.append(item)
+
+    reference_features = build_feature_table(data, image, protected_masks).values
+    centers, scales = _fit_reference_distribution(reference_features, protected_metadata)
+    candidate_features = build_feature_table(data, image, bank.masks).values
+
+    output_masks = list(protected_masks)
+    output_metadata = list(protected_metadata)
+    ranked = []
+    for index, mask in enumerate(np.asarray(bank.masks, dtype=bool)):
+        if _overlaps_existing(mask, protected_masks, threshold=0.35):
+            continue
+        if not _candidate_quality_passes(bank, index, preset):
+            continue
+        distance = 0.0 if not protected_masks else _candidate_distance(candidate_features[index], centers, scales)
+        if protected_masks and distance > preset.similarity_limit:
+            continue
+        ranked.append((distance, index))
+
+    for distance, index in sorted(ranked, key=lambda value: (value[0], value[1])):
+        mask = np.asarray(bank.masks[index], dtype=bool)
+        if _overlaps_existing(mask, output_masks, threshold=0.5):
+            continue
+        metadata = normalized_roi_metadata(
+            {"base_name": bank.names[index], "source": bank.engine},
+            bank.engine,
+            f"ROI{len(output_masks) + 1}",
+        )
+        metadata["adaptive_distance"] = float(distance)
+        output_masks.append(mask.copy())
+        output_metadata.append(metadata)
+
+    selected_count = len(output_masks) - len(protected_masks)
+    low_quality_count = sum(bool(item.get("low_quality")) for item in protected_metadata)
+    fitted_parameters = {
+        "quality_preset": str(quality_preset),
+        "feature_columns": list(FEATURE_COLUMNS),
+        "feature_centers": centers.astype(float).tolist(),
+        "feature_scales": scales.astype(float).tolist(),
+        "similarity_limit": float(preset.similarity_limit),
+        "fast_confidence": float(preset.fast_confidence),
+        "caiman_min_snr": float(preset.caiman_min_snr),
+        "caiman_rval": float(preset.caiman_rval),
+        "caiman_cnn": float(preset.caiman_cnn),
+    }
+    return AdaptiveROIResult(
+        masks=tuple(np.asarray(mask, dtype=bool).copy() for mask in output_masks),
+        metadata=tuple(dict(item) for item in output_metadata),
+        fitted_parameters=fitted_parameters,
+        protected_count=len(protected_masks),
+        selected_count=selected_count,
+        low_quality_count=low_quality_count,
+    )
 
 
 def suggest_area_range(masks, current_min, current_max):
