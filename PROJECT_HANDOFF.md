@@ -545,3 +545,19 @@ For future updates:
   key source/worker compile checks and Tk state smoke pass.
   No EXE was built. The Conda OpenCL `temp.txt` text remains harmless when the
   command exits with code 0.
+
+## ROI List Selection Highlight (2026-07-28)
+
+- `show_roi_list()` supplies stable zero-based indices to the embedded
+  `roi_table`. `<<TreeviewSelect>>` calls `select_roi_from_list(index)`.
+- The selected ROI flashes with a white `4 px` boundary for approximately
+  `480 ms`, then remains highlighted in its assigned color with a `3 px`
+  boundary and larger label. Normal ROI boundaries remain `1 px`.
+- Highlight state is held by `highlighted_roi_index` and
+  `roi_highlight_flash_on`. Leaving the ROI-list panel or mutating the ROI list
+  cancels its Tk `after` callback and clears the selection safely.
+- `analysis_core.draw_roi_overlay()` accepts optional `highlighted_index` and
+  `highlight_flash`; default callers and exported snapshots remain unchanged.
+- Current source verification is `171 passed`, with `41 passed` in the focused
+  ROI color/GUI suite and a successful real Tk selection smoke test. No EXE was
+  rebuilt.

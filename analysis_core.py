@@ -2390,21 +2390,40 @@ def roi_color_hex(index: int) -> str:
     return "#" + "".join(f"{channel:02x}" for channel in roi_color_uint8(index))
 
 
-def draw_roi_overlay(image: np.ndarray, roi_masks: list[np.ndarray], roi_names: list[str]) -> np.ndarray:
+def draw_roi_overlay(
+    image: np.ndarray,
+    roi_masks: list[np.ndarray],
+    roi_names: list[str],
+    highlighted_index: int | None = None,
+    highlight_flash: bool = False,
+) -> np.ndarray:
     base = (normalize_image(image) * 255).astype(np.uint8)
     rgb = cv2.cvtColor(base, cv2.COLOR_GRAY2RGB)
     if not roi_masks:
         return rgb
     for i, mask in enumerate(roi_masks):
         contours = measure.find_contours(mask.astype(np.uint8), 0.5)
-        color = roi_color_uint8(i)
+        highlighted = highlighted_index is not None and i == int(highlighted_index)
+        color = (255, 255, 255) if highlighted and highlight_flash else roi_color_uint8(i)
+        thickness = 4 if highlighted and highlight_flash else (3 if highlighted else 1)
         for contour in contours:
             pts = np.round(contour[:, ::-1]).astype(np.int32)
-            cv2.polylines(rgb, [pts], True, color, 1, cv2.LINE_AA)
+            cv2.polylines(rgb, [pts], True, color, thickness, cv2.LINE_AA)
         props = measure.regionprops(mask.astype(np.uint8))
         if props:
             y, x = props[0].centroid
-            cv2.putText(rgb, str(i + 1), (int(x), int(y)), cv2.FONT_HERSHEY_SIMPLEX, 0.35, color, 1, cv2.LINE_AA)
+            font_scale = 0.50 if highlighted else 0.35
+            text_thickness = 2 if highlighted else 1
+            cv2.putText(
+                rgb,
+                str(i + 1),
+                (int(x), int(y)),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                font_scale,
+                color,
+                text_thickness,
+                cv2.LINE_AA,
+            )
     return rgb
 
 

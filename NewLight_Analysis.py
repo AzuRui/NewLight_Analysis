@@ -1640,6 +1640,10 @@ class NewLightApp:
         self.parameter_cancel_command = None
         self.active_parameter_panel_id = None
         self.roi_table_images = []
+        self.highlighted_roi_index = None
+        self.roi_highlight_flash_on = False
+        self._roi_highlight_after_id = None
+        self._roi_highlight_steps_remaining = 0
         self._view_limits = None
         self._view_is_fit = True
         self._view_lock = False
@@ -2082,8 +2086,11 @@ class NewLightApp:
         self.ui_callback_queue.put((callback, args))
 
     def clear_parameter_panel(self):
+        leaving_roi_list = self.active_parameter_panel_id == "roi_list"
         self.active_parameter_panel_id = None
         self.roi_table_images = []
+        if leaving_roi_list:
+            self.clear_roi_highlight()
         if self.parameter_content is None:
             return
         for child in self.parameter_content.winfo_children():
@@ -2155,6 +2162,8 @@ class NewLightApp:
     ):
         if self.parameter_content is None:
             return
+        if self.active_parameter_panel_id == "roi_list" and panel_id != "roi_list":
+            self.clear_roi_highlight()
         self.active_parameter_panel_id = panel_id
         self.roi_table_images = []
         for child in self.parameter_content.winfo_children():
@@ -2323,16 +2332,33 @@ class NewLightApp:
                 table.configure(yscrollcommand=scrollbar.set)
                 table.grid(row=0, column=0, sticky="ew")
                 scrollbar.grid(row=0, column=1, sticky="ns")
+                roi_indices = {}
                 for roi_row in rows:
                     swatch = tk.PhotoImage(width=14, height=14)
                     swatch.put(roi_row["color"], to=(0, 0, 14, 14))
                     self.roi_table_images.append(swatch)
+                    item_id = f"roi_{roi_row['index']}"
+                    roi_indices[item_id] = int(roi_row["index"])
                     table.insert(
                         "",
                         "end",
+                        iid=f"roi_{roi_row['index']}",
                         image=swatch,
                         values=(roi_row["name"], roi_row["area"], roi_row["quality"]),
                     )
+                on_select = spec.get("on_select")
+                if callable(on_select):
+                    def handle_roi_selection(_event, tree=table, mapping=roi_indices, callback=on_select):
+                        selection = tree.selection()
+                        if selection and selection[0] in mapping:
+                            callback(mapping[selection[0]])
+
+                    table.bind("<<TreeviewSelect>>", handle_roi_selection)
+                selected_index = spec.get("selected_index")
+                selected_item = f"roi_{selected_index}"
+                if selected_index is not None and selected_item in roi_indices:
+                    table.selection_set(selected_item)
+                    table.see(selected_item)
                 row += 1
                 continue
             item = ttk.Frame(self.parameter_content)
@@ -2423,6 +2449,7 @@ class NewLightApp:
             metadata = self.state.roi_metadata[index] if index < len(self.state.roi_metadata) else {}
             rows.append(
                 {
+                    "index": index,
                     "color": core.roi_color_hex(index),
                     "name": name,
                     "area": int(np.count_nonzero(mask)),
@@ -2436,14 +2463,63 @@ class NewLightApp:
         )
         self.show_parameter_panel(
             "当前 ROI 列表",
-            [{"type": "roi_table", "rows": rows}],
+            [{
+                "type": "roi_table",
+                "rows": rows,
+                "on_select": self.select_roi_from_list,
+                "selected_index": self.highlighted_roi_index,
+            }],
             description=description,
             panel_id="roi_list",
         )
 
+    def clear_roi_highlight(self, redraw=True):
+        if self._roi_highlight_after_id is not None:
+            try:
+                self.root.after_cancel(self._roi_highlight_after_id)
+            except tk.TclError:
+                pass
+        self._roi_highlight_after_id = None
+        self._roi_highlight_steps_remaining = 0
+        self.roi_highlight_flash_on = False
+        self.highlighted_roi_index = None
+        if redraw:
+            self.redraw(preserve_view=True)
+
+    def select_roi_from_list(self, index):
+        index = int(index)
+        if index < 0 or index >= len(self.state.roi_masks):
+            self.clear_roi_highlight()
+            return
+        if self._roi_highlight_after_id is not None:
+            try:
+                self.root.after_cancel(self._roi_highlight_after_id)
+            except tk.TclError:
+                pass
+        self.highlighted_roi_index = index
+        self.roi_highlight_flash_on = True
+        self._roi_highlight_steps_remaining = 4
+        self.redraw(preserve_view=True)
+        self._roi_highlight_after_id = self.root.after(120, self._advance_roi_highlight_flash)
+
+    def _advance_roi_highlight_flash(self):
+        self._roi_highlight_after_id = None
+        if self.highlighted_roi_index is None:
+            return
+        self._roi_highlight_steps_remaining -= 1
+        if self._roi_highlight_steps_remaining <= 0:
+            self.roi_highlight_flash_on = False
+            self.redraw(preserve_view=True)
+            return
+        self.roi_highlight_flash_on = not self.roi_highlight_flash_on
+        self.redraw(preserve_view=True)
+        self._roi_highlight_after_id = self.root.after(120, self._advance_roi_highlight_flash)
+
     def refresh_roi_list_if_visible(self):
         if self.active_parameter_panel_id == "roi_list":
+            self.clear_roi_highlight(redraw=False)
             self.show_roi_list()
+            self.redraw(preserve_view=True)
 
     def reset_parameter_panel(self):
         for key, default in self.parameter_defaults.items():
@@ -3630,7 +3706,13 @@ class NewLightApp:
             overlay_source = raw_img if raw_img is not None else img
             if np.asarray(overlay_source).ndim == 3:
                 overlay_source = np.mean(np.asarray(overlay_source), axis=2)
-            overlay = core.draw_roi_overlay(overlay_source, self.state.roi_masks, self.state.roi_names)
+            overlay = core.draw_roi_overlay(
+                overlay_source,
+                self.state.roi_masks,
+                self.state.roi_names,
+                highlighted_index=self.highlighted_roi_index,
+                highlight_flash=self.roi_highlight_flash_on,
+            )
             self._view_lock = True
             try:
                 self._apply_image_axes(img.shape, view_limits)

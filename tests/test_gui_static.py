@@ -343,6 +343,26 @@ class GuiStaticTests(unittest.TestCase):
         self.assertIn('text="ROI"', method)
         self.assertIn('text="面积 (px^2)"', method)
 
+    def test_roi_table_selection_highlights_the_corresponding_overlay(self):
+        source = Path("NewLight_Analysis.py").read_text(encoding="utf-8")
+        panel_start = source.index("    def show_parameter_panel(")
+        reset_start = source.index("    def reset_parameter_panel", panel_start)
+        panel = source[panel_start:reset_start]
+        select_start = source.index("    def select_roi_from_list(")
+        refresh_start = source.index("    def refresh_roi_list_if_visible", select_start)
+        selection = source[select_start:refresh_start]
+        redraw_start = source.index("    def redraw(")
+        empty_start = source.index("    def draw_empty_preview_background", redraw_start)
+        redraw = source[redraw_start:empty_start]
+
+        self.assertIn('table.bind("<<TreeviewSelect>>"', panel)
+        self.assertIn('iid=f"roi_{roi_row[\'index\']}"', panel)
+        self.assertIn('"on_select": self.select_roi_from_list', source)
+        self.assertIn("self.highlighted_roi_index = index", selection)
+        self.assertIn("self.root.after", selection)
+        self.assertIn("highlighted_index=self.highlighted_roi_index", redraw)
+        self.assertIn("highlight_flash=self.roi_highlight_flash_on", redraw)
+
     def test_roi_list_refreshes_after_roi_mutations(self):
         source = Path("NewLight_Analysis.py").read_text(encoding="utf-8")
 
