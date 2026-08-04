@@ -87,6 +87,15 @@ def test_build_environment_script_preserves_existing_cuda_environment():
     assert "pyinstaller" in script.lower()
 
 
+def test_build_readme_documents_both_entrypoints_and_cuda_limit():
+    readme = (ROOT / "BUILD_README.md").read_text(encoding="utf-8")
+
+    assert "setup_build_environment.bat" in readme
+    assert "build_portable_exe.bat" in readme
+    assert "DeepCAD-RT" in readme
+    assert "2 GiB" in readme
+
+
 def test_release_builds_never_publish_legacy_setup_or_batch_launcher():
     portable = (ROOT / "build_exe.bat").read_text(encoding="utf-8")
     full = (ROOT / "build_full_release.bat").read_text(encoding="utf-8")

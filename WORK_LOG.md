@@ -1563,3 +1563,11 @@
 - Python compilation passed and the full `caiman_latest` test run passed: `307 passed, 15 subtests passed`. The CaImAn OpenCL cleanup message remains a non-fatal environment warning.
 - Pushed branch `codex/dual-roi-engines` to `https://github.com/AzuRui/NewLight_Analysis.git`.
 - GitHub Release upload was rejected because the installer is `2,396,163,952` bytes and GitHub limits a single release asset to less than `2,147,483,648` bytes. The empty temporary release was deleted. Use external artifact storage or split/reassemble assets for distribution.
+
+## 2026-08-04 - Added build environment and EXE README
+
+- Added `BUILD_README.md` with the Windows build prerequisites, Conda setup,
+  CUDA/NVIDIA constraints, portable EXE workflow, installer workflow,
+  backend verification, troubleshooting, and GitHub large-file limitation.
+- Linked the build guide from `README.md` and added a packaging documentation
+  contract test.
