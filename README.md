@@ -73,9 +73,6 @@ BUILD_README.md
 NewLight_Analysis_User_Manual.pdf
 ```
 
-发布构建会将手册复制到 `dist\NewLight_Analysis`。手册中保留了编号的
-截图占位位置，后续可以补充界面截图而不需要重写操作流程。
-
 ## 主要功能
 
 - 导入 `.tif`、`.tiff`、`.avi`、`.mp4`、`.mov`、`.mkv` 等视频或图像数据。
