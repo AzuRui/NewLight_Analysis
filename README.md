@@ -48,9 +48,7 @@ For the complete Chinese build and release guide, see `BUILD_README.md`.
 The detailed Chinese user manual is maintained at:
 
 ```text
-docs\NewLight_Analysis_User_Manual.md
-docs\NewLight_Analysis_User_Manual.docx
-docs\NewLight_Analysis_User_Manual.pdf
+NewLight_Analysis_User_Manual.pdf
 ```
 
 Release builds copy these files into `dist\NewLight_Analysis`. The manual
