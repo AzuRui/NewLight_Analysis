@@ -1561,4 +1561,5 @@
 - Kept the portable release directory and the installer outside normal Git tracking. The installer is `Output/NewLight_Analysis_setup.exe` (SHA-256: `AED6D7EC02F9DE6414BD3BAD52DC3ACC1BB8EE45656DDD76A166E2EF73E1BA8A`).
 - Excluded the uncompressed 100 MB startup GIF from GitHub tracking; the packaged startup asset is `neural_starlight_startup.gif`.
 - Python compilation passed and the full `caiman_latest` test run passed: `307 passed, 15 subtests passed`. The CaImAn OpenCL cleanup message remains a non-fatal environment warning.
-- Upload is pending because this repository has no configured GitHub remote. The installer should be published as a GitHub Release asset rather than committed into the repository.
+- Pushed branch `codex/dual-roi-engines` to `https://github.com/AzuRui/NewLight_Analysis.git`.
+- GitHub Release upload was rejected because the installer is `2,396,163,952` bytes and GitHub limits a single release asset to less than `2,147,483,648` bytes. The empty temporary release was deleted. Use external artifact storage or split/reassemble assets for distribution.
