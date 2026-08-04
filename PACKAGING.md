@@ -94,6 +94,16 @@ An isolated build comparison reduced the portable directory from about
 all frozen backend checks passed. The final compressed installer size still
 needs to be measured on a machine with Inno Setup installed.
 
+To package the isolated slim2 build directly, install Inno Setup 6 and run:
+
+```bat
+build_slim2_installer.bat
+```
+
+This uses `NewLight_Analysis_slim2_setup.iss` and writes
+`Output\NewLight_Analysis_slim2_setup.exe` with explicit solid LZMA2 ultra64
+compression settings.
+
 PyTorch/DeepCAD-RT CUDA builds also need the full conda CUDA/cuDNN runtime from
 `Library\bin`. The spec explicitly collects cuDNN split DLLs, NVRTC, cuFFT
 wrappers, and related CUDA runtime DLLs. `check_backends.bat` verifies this by

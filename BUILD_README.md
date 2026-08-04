@@ -86,6 +86,16 @@ Output\NewLight_Analysis_setup.exe
 
 没有 Inno Setup 时，脚本仍会保留完整的便携版目录。
 
+对于已经生成的 `dist_slim2_20260804` 精简包，可以单独运行：
+
+```bat
+build_slim2_installer.bat
+```
+
+该脚本使用 `NewLight_Analysis_slim2_setup.iss`，输出
+`Output\NewLight_Analysis_slim2_setup.exe`，并采用固实
+`lzma2/ultra64` 压缩。当前机器没有 `ISCC.exe`，因此尚未实际生成该安装包。
+
 ## 五、编译后验证
 
 在发布目录执行：

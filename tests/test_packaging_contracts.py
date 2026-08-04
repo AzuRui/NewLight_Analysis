@@ -139,3 +139,15 @@ def test_pyinstaller_spec_excludes_unused_desktop_and_notebook_stacks():
     assert "slim_excludes" in spec
     for package in ("jupyterlab", "notebook", "panel", "bokeh", "PySide6", "openvino", "hdmf", "pynwb"):
         assert f"'{package}'" in spec
+
+
+def test_slim2_inno_script_targets_experimental_package_with_high_ratio_compression():
+    script = (ROOT / "NewLight_Analysis_slim2_setup.iss").read_text(encoding="utf-8")
+    builder = (ROOT / "build_slim2_installer.bat").read_text(encoding="utf-8")
+
+    assert "dist_slim2_20260804\\NewLight_Analysis" in script
+    assert "Compression=lzma2/ultra64" in script
+    assert "SolidCompression=yes" in script
+    assert "LZMAUseSeparateProcess=yes" in script
+    assert "build_slim2_installer.bat" not in builder
+    assert "NewLight_Analysis_slim2_setup.iss" in builder

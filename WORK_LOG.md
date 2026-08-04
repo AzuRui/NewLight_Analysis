@@ -1592,3 +1592,13 @@
 - Inno Setup is unavailable on this machine, so the compressed installer size
   was not measured in this experiment. Measure it with
   `build_full_release.bat` on a machine with `ISCC.exe`.
+
+## 2026-08-04 - Added slim2 Inno Setup packaging script
+
+- Added `NewLight_Analysis_slim2_setup.iss` targeting the isolated
+  `dist_slim2_20260804\NewLight_Analysis` package.
+- Added `build_slim2_installer.bat` to validate the slim package, locate Inno
+  Setup 6, and produce `Output\NewLight_Analysis_slim2_setup.exe`.
+- Configured solid `lzma2/ultra64`, a separate compression process, maximum
+  fast bytes, and two LZMA2 block threads. The installer was not built here
+  because `ISCC.exe` is unavailable.
