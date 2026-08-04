@@ -116,3 +116,7 @@ gSig = max(1, round(细胞直径 / 4))
 - 投影、dF/F、平滑和 ROI 曲线提取在安装 CuPy 时可以使用 GPU。
 - 没有 CuPy 时，这些基础运算回退到 CPU/NumPy。
 - CaImAn 运动矫正速度取决于版本、CPU、磁盘和参数。
+
+## 联系方式
+
+如有其他需求，请通过 **[lzr01070323@gmail.com](mailto:lzr01070323@gmail.com)** 联系。
