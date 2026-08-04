@@ -87,6 +87,13 @@ The build also patches frozen OpenCV loader config files after PyInstaller
 collection. This removes conda build-machine paths from `_internal\cv2` and
 keeps `cv2` import self-contained on other computers.
 
+The PyInstaller spec excludes unused notebook/desktop stacks such as Jupyter,
+Panel, Bokeh, PySide6, OpenVINO, PyAV, imagecodecs, and optional NWB schemas.
+An isolated build comparison reduced the portable directory from about
+`4.08 GB` to `3.75 GB`; the bundled CUDA/PyTorch libraries remain intact and
+all frozen backend checks passed. The final compressed installer size still
+needs to be measured on a machine with Inno Setup installed.
+
 PyTorch/DeepCAD-RT CUDA builds also need the full conda CUDA/cuDNN runtime from
 `Library\bin`. The spec explicitly collects cuDNN split DLLs, NVRTC, cuFFT
 wrappers, and related CUDA runtime DLLs. `check_backends.bat` verifies this by

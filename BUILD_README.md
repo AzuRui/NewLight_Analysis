@@ -58,6 +58,12 @@ dist\NewLight_Analysis\NewLight_Analysis.exe
 必须整体复制 `dist\NewLight_Analysis`，不能只复制主 EXE；Python、CUDA、
 模型和 worker 位于 `_internal` 目录。
 
+当前 PyInstaller spec 已排除未使用的 Jupyter、Panel、Bokeh、PySide6、
+OpenVINO、PyAV、imagecodecs 和可选 NWB schema 组件。实验构建显示便携目录
+从约 4.08 GB 降至约 3.75 GB，同时 CUDA、CaImAn、NeuSuite 和 DeepCAD-RT
+后端检查通过。CUDA/PyTorch 核心 DLL 没有删除；最终安装包压缩大小仍需在
+安装了 Inno Setup 的机器上实测。
+
 无人值守编译：
 
 ```bat

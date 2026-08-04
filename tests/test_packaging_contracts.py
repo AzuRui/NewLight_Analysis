@@ -131,3 +131,11 @@ def test_pyinstaller_bundles_only_optimized_initialization_gif():
 
     assert "('neural_starlight_startup.gif', '.')" in spec
     assert "('neural_starlight.gif', '.')" not in spec
+
+
+def test_pyinstaller_spec_excludes_unused_desktop_and_notebook_stacks():
+    spec = (ROOT / "NewLight_Analysis.spec").read_text(encoding="utf-8")
+
+    assert "slim_excludes" in spec
+    for package in ("jupyterlab", "notebook", "panel", "bokeh", "PySide6", "openvino", "hdmf", "pynwb"):
+        assert f"'{package}'" in spec

@@ -75,6 +75,36 @@ hiddenimports = [
     'leidenalg',
 ]
 cuda_binaries = collect_conda_cuda_runtime_dlls()
+slim_excludes = [
+    # These optional GUI/notebook stacks are not used by the Tkinter app or
+    # its bundled workers.
+    'IPython',
+    'ipykernel',
+    'ipywidgets',
+    'jupyter',
+    'jupyter_client',
+    'jupyter_core',
+    'jupyter_server',
+    'jupyterlab',
+    'nbclassic',
+    'nbconvert',
+    'nbformat',
+    'notebook',
+    'panel',
+    'bokeh',
+    'holoviews',
+    'param',
+    'pyviz_comms',
+    'PySide6',
+    'openvino',
+    'hf_xet',
+    'av',
+    'imagecodecs',
+    # The application accepts TIFF/AVI/video inputs, not NWB files. CaImAn's
+    # optional NWB schema stack is therefore outside the packaged workflow.
+    'hdmf',
+    'pynwb',
+]
 datas = [
     ('xhr.ico', '.'),
     ('background.png', '.'),
@@ -97,9 +127,6 @@ datas = [
     (str(WORKSPACE / 'DeepCAD-RT' / 'DeepCAD_RT_pytorch' / 'deepcad'), 'DeepCAD-RT/DeepCAD_RT_pytorch/deepcad'),
     (str(WORKSPACE / '2cafe_analysis' / 'NeuroAlign'), 'NeuroAlign'),
 ]
-datas += collect_data_files('hdmf')
-datas += collect_data_files('pynwb')
-
 ipyparallel_spec = importlib.util.find_spec('ipyparallel')
 if ipyparallel_spec and ipyparallel_spec.origin:
     ipyparallel_root = Path(ipyparallel_spec.origin).parent
@@ -117,7 +144,7 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=[],
+    excludes=slim_excludes,
     noarchive=False,
     optimize=0,
 )

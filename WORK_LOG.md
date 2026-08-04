@@ -1579,3 +1579,16 @@
 - Added Git LFS guidance explaining pointers, storage/bandwidth quotas,
   collaborator requirements, Release separation, and why the current
   `2,396,163,952` byte installer still exceeds the common 2 GiB per-file limit.
+
+## 2026-08-04 - PyInstaller dependency slimming experiment
+
+- Added a conservative `slim_excludes` list to `NewLight_Analysis.spec` for
+  unused Jupyter/Panel/Bokeh/PySide6/OpenVINO/PyAV/imagecodecs and optional NWB
+  schema stacks.
+- Built an isolated comparison package under ignored `dist_slim2_20260804`;
+  portable size decreased from approximately `4.08 GB` to `3.75 GB`.
+- Frozen verification passed for bundled Python, CUDA/cuDNN, NeuSuite, CaImAn,
+  and DeepCAD-RT. No CUDA/PyTorch DLLs were removed.
+- Inno Setup is unavailable on this machine, so the compressed installer size
+  was not measured in this experiment. Measure it with
+  `build_full_release.bat` on a machine with `ISCC.exe`.
