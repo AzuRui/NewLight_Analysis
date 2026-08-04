@@ -1,7 +1,7 @@
 # NewLight_Analysis
 
-NewLight_Analysis 是面向实验人员的双光子成像分析软件。它整合了
-LabVIEW 双光子分析流程、`2cafe_analysis` 的 ROI 与热图分析方式、
+NewLight_Analysis 是面向实验人员的荧光成像分析软件。它整合了
+双光子分析流程常用分析流程、宽场荧光 ROI 与热图分析方式、
 CaImAn 源提取算法，以及已授权的 NeuSuite 实例分割模型。
 
 软件采用低眩光的深色神经成像工作站风格，同时保持灰度图像区域的高
@@ -70,13 +70,8 @@ BUILD_README.md
 详细中文用户手册位于：
 
 ```text
-docs\NewLight_Analysis_User_Manual.md
-docs\NewLight_Analysis_User_Manual.docx
-docs\NewLight_Analysis_User_Manual.pdf
+NewLight_Analysis_User_Manual.pdf
 ```
-
-发布构建会将手册复制到 `dist\NewLight_Analysis`。手册中保留了编号的
-截图占位位置，后续可以补充界面截图而不需要重写操作流程。
 
 ## 主要功能
 
@@ -148,30 +143,6 @@ setup_neusuite_runtime.bat
 - 没有 CuPy 时，这些基础运算回退到 CPU/NumPy。
 - CaImAn 运动矫正速度取决于版本、CPU、磁盘和参数。
 
-## Git LFS 与大文件
-
-Git LFS 会把大文件以指针形式放入 Git 仓库，把真实二进制内容放到 LFS
-对象存储中。它适合管理模型文件、较大的示例资源或其他二进制文件。
-
-但 Git LFS 不是无限容量，也不能绕过 GitHub 的所有限制：
-
-- 单个 LFS 文件仍受 GitHub 单文件大小限制。当前安装包约 2.4 GB，仍超过常用的 2 GiB 上限。
-- LFS 还受仓库存储容量和下载流量配额限制，额度取决于 GitHub 账户计划。
-- 使用 LFS 后，协作者需要安装 Git LFS，并执行 `git lfs pull` 才能取回真实文件。
-- GitHub Release 附件和 Git LFS 是两套机制；LFS 文件不会自动成为 Release 附件。
-
-建议：源码、配置和小型模型正常提交 Git；小于限制的模型可以使用 LFS；
-2.4 GB 安装包放到 OneDrive、Google Drive、OSS 等大文件存储中，并在
-GitHub Release 或 README 中提供下载地址和 SHA-256 校验值。
-
-启用 LFS 的示例：
-
-```powershell
-git lfs install
-git lfs track "DeepCADRT_Model/*.pth"
-git add .gitattributes DeepCADRT_Model/*.pth
-git commit -m "chore: track model with Git LFS"
-```
 
 使用前请确认模型大小、LFS 存储配额和团队成员的下载方式。不要对当前
 2.4 GB 安装包直接执行 `git lfs track`，因为它仍超过单文件限制。
