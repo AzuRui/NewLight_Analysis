@@ -71,6 +71,22 @@ def test_full_release_also_runs_verification_only_gate():
     assert 'call "build_release\\NewLight_Analysis\\check_backends.bat" /verify-only' in script
 
 
+def test_combined_build_entrypoint_prepares_environment_before_building():
+    script = (ROOT / "build_portable_exe.bat").read_text(encoding="utf-8")
+
+    assert "setup_build_environment.bat /nopause" in script
+    assert "call build_exe.bat /nopause" in script
+
+
+def test_build_environment_script_preserves_existing_cuda_environment():
+    script = (ROOT / "setup_build_environment.bat").read_text(encoding="utf-8")
+
+    assert "caiman_latest" in script
+    assert "environment-build.yml" in script
+    assert "CUDA packages will not be replaced" in script
+    assert "pyinstaller" in script.lower()
+
+
 def test_release_builds_never_publish_legacy_setup_or_batch_launcher():
     portable = (ROOT / "build_exe.bat").read_text(encoding="utf-8")
     full = (ROOT / "build_full_release.bat").read_text(encoding="utf-8")

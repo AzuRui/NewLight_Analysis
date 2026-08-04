@@ -27,6 +27,20 @@ cd E:\WorkSpace\NewLight_Analysis
 python NewLight_Analysis.py
 ```
 
+## Build The EXE
+
+On a build machine with Conda, run:
+
+```powershell
+build_portable_exe.bat
+```
+
+This prepares or checks the `caiman_latest` build environment and then creates
+the portable onedir application under `dist\NewLight_Analysis`. Existing
+CUDA-enabled packages are preserved. Use `setup_build_environment.bat` when
+only environment setup is needed, or `build_full_release.bat` when Inno Setup
+is installed and an installer is required.
+
 ## User Manual
 
 The detailed Chinese user manual is maintained at:

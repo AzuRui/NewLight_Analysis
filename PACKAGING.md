@@ -2,6 +2,28 @@
 
 Use `build_exe.bat` to create a portable Windows folder build, or `build_full_release.bat` to create the portable build and then compile the Inno Setup installer when `ISCC.exe` is available.
 
+For a new build machine, use the combined entry point:
+
+```powershell
+E:\WorkSpace\NewLight_Analysis\build_portable_exe.bat
+```
+
+It first runs `setup_build_environment.bat`, then invokes the existing
+portable build. The setup script uses an existing `caiman_latest` environment
+without replacing its CUDA packages. If that environment does not exist, it
+creates a conservative Python 3.8 base from `environment-build.yml`; install
+the matching CUDA-enabled PyTorch build separately when DeepCAD-RT or GPU ROI
+inference is required.
+
+To prepare only the environment:
+
+```powershell
+E:\WorkSpace\NewLight_Analysis\setup_build_environment.bat
+```
+
+Both scripts accept `/nopause` for unattended execution. The scripts require
+Conda and the external source/model folders referenced by `NewLight_Analysis.spec`.
+
 Do not start a build unless the user explicitly asks for compilation.
 
 ## Build
