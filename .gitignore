@@ -33,6 +33,14 @@ build_gpu_addon/
 Output/
 *.spec.log
 
+# Local release tools and complete portable output are intentionally not
+# published in the user-facing source repository.
+/build_cpu_exe.bat
+/build_full_exe.bat
+/NewLight_Analysis.spec
+/tools/patch_frozen_cv2.py
+/full_diss/
+
 # Runtime output and temporary analysis data
 NewLight_temp/
 NeuroAlign_runs/
