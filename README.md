@@ -70,9 +70,7 @@ BUILD_README.md
 详细中文用户手册位于：
 
 ```text
-docs\NewLight_Analysis_User_Manual.md
-docs\NewLight_Analysis_User_Manual.docx
-docs\NewLight_Analysis_User_Manual.pdf
+NewLight_Analysis_User_Manual.pdf
 ```
 
 发布构建会将手册复制到 `dist\NewLight_Analysis`。手册中保留了编号的
