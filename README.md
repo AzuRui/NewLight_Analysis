@@ -53,12 +53,8 @@ python NewLight_Analysis.py
 详细中文用户手册位于：
 
 ```text
-docs\NewLight_Analysis_User_Manual.md
-docs\NewLight_Analysis_User_Manual.docx
-docs\NewLight_Analysis_User_Manual.pdf
+NewLight_Analysis_User_Manual.pdf
 ```
-
-用户手册独立发布，不会放入核心安装包或 `dist` 目录。
 
 ## 主要功能
 
