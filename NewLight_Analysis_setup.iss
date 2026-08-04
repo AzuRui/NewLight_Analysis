@@ -3,7 +3,7 @@
 ; 仅供非商业使用
 
 #define MyAppName "NewLight_Analysis"
-#define MyAppVersion "1.0"
+#define MyAppVersion "1.0.1"
 #define MyAppPublisher "Azu"
 #define MyAppExeName "NewLight_Analysis.exe"
 #define SourceRoot "E:\WorkSpace\NewLight_Analysis\dist\NewLight_Analysis"
@@ -30,10 +30,8 @@ DefaultGroupName={#MyAppName}
 AllowNoIcons=yes
 ; 首次启动需要管理员权限完成显卡/CUDA初始化，因此安装程序也要求管理员权限。
 PrivilegesRequired=admin
-OutputBaseFilename=NewLight_Analysis_setup
+OutputBaseFilename=NewLight_Analysis_Core_Setup_v1.0.1
 SetupIconFile=E:\WorkSpace\NewLight_Analysis\xhr.ico
-Password=xhr8880601
-Encryption=yes
 Compression=lzma2/ultra64
 SolidCompression=yes
 LZMAUseSeparateProcess=yes

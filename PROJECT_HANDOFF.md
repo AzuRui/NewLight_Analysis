@@ -1435,3 +1435,18 @@ For future updates:
   rebuilt core is 1,102,414,238 bytes (about 1.027 GiB) with zero Torch/CUDA
   files. Focused packaging and
   backend tests passed: `60 passed`; the Inno installer still needs to be built.
+
+## Core Installer and GitHub Branch Publication (2026-08-04)
+
+- The GitHub default branch is `codex/unified-gpu-addon`; the obsolete remote
+  `codex/dual-roi-engines` branch was deleted after the default switch.
+- The public-facing core installer is version `1.0.1` and is named
+  `NewLight_Analysis_Core_Setup_v1.0.1.exe`. It has no installer password.
+- A user release contains only the GUI executable, `_internal`, and the required
+  `check_backends.bat`. Do not copy PDF/DOCX/Markdown manuals, project build
+  scripts, source launchers, or transient PyInstaller directories into `dist`
+  or the installer; manuals are distributed separately.
+- Verified `v1.0.1` core installer:
+  `Output\NewLight_Analysis_Core_Setup_v1.0.1.exe`, `335,482,844` bytes,
+  SHA-256 `b1d727e161e10a9c922ea0401ed6f311548d4c7d0ec80ada41f4973252de5538`.
+  Its source directory has zero manuals and zero Torch/CUDA/model artifacts.

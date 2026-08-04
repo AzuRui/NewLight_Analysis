@@ -83,10 +83,12 @@ if errorlevel 1 (
   exit /b 1
 )
 
+echo Preparing user release files...
+copy /y check_backends.bat dist\NewLight_Analysis\check_backends.bat >nul
+
 echo Preparing portable release folder...
 mkdir build_release
 xcopy /e /i /y dist\NewLight_Analysis build_release\NewLight_Analysis >nul
-copy /y check_backends.bat build_release\NewLight_Analysis\check_backends.bat >nul
 
 echo Verifying frozen backend imports...
 call "build_release\NewLight_Analysis\check_backends.bat" /verify-only
@@ -101,6 +103,7 @@ where ISCC.exe >nul 2>nul
 if not errorlevel 1 set "ISCC=ISCC.exe"
 if not defined ISCC if exist "%ProgramFiles(x86)%\Inno Setup 6\ISCC.exe" set "ISCC=%ProgramFiles(x86)%\Inno Setup 6\ISCC.exe"
 if not defined ISCC if exist "%ProgramFiles%\Inno Setup 6\ISCC.exe" set "ISCC=%ProgramFiles%\Inno Setup 6\ISCC.exe"
+if not defined ISCC if exist "D:\Inno Setup 6\ISCC.exe" set "ISCC=D:\Inno Setup 6\ISCC.exe"
 
 if defined ISCC (
   echo Building installer with Inno Setup...
@@ -122,7 +125,7 @@ echo.
 echo Notes:
 echo - Start the packaged application with NewLight_Analysis.exe.
 echo - No legacy setup or batch launcher is published in the release folder.
-echo - DeepCAD-RT is an optional CUDA addon downloaded after first-run CUDA detection.
+echo - CUDA Torch, DeepCAD-RT, and NeuSuite Fast ROI are supplied by one optional GPU addon.
 echo - NewLight_Worker.exe is bundled under _internal for backend worker tasks.
 echo - NeuroSeg3 source/weights and NeuroAlign source are bundled.
 echo - DeepCAD-RT and CUDA Torch are supplied by the optional GPU addon.

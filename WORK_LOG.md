@@ -1,5 +1,26 @@
 # Work Log
 
+## 2026-08-04 - User-facing core installer release cleanup
+
+- Promoted `codex/unified-gpu-addon` to the GitHub default branch and deleted
+  the obsolete remote `codex/dual-roi-engines` branch without force-pushing or
+  rewriting either branch history.
+- Changed the core installer version to `1.0.1`, removed the installer password,
+  and renamed the output to `NewLight_Analysis_Core_Setup_v1.0.1.exe` so users
+  can distinguish it from the optional GPU addon.
+- Release staging now includes only the executable, `_internal` runtime, and
+  required `check_backends.bat`. PDF, DOCX, Markdown, source launchers, and
+  build scripts are not copied into `dist` or the user installation. Manuals
+  are maintained and distributed separately.
+- Added the locally installed `D:\Inno Setup 6\ISCC.exe` lookup to the full
+  release builder.
+- Rebuilt and verified the user-facing core package. The portable directory is
+  `1,088,505,217` bytes with zero GPU artifacts and zero manual files. The
+  installer is `335,482,844` bytes with SHA-256
+  `b1d727e161e10a9c922ea0401ed6f311548d4c7d0ec80ada41f4973252de5538`.
+- Frozen CPU/CaImAn backend verification passed, and the focused packaging,
+  setup, GPU-routing, and short-movie suite passed `66` tests.
+
 ## 2026-08-04 - GPU setup is optional and rechecked on every launch
 
 - Removed CUDA, NVIDIA driver installation, adapter detection, and pending

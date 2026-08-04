@@ -91,15 +91,6 @@ if errorlevel 1 (
 
 echo Preparing dist release files...
 copy /y check_backends.bat dist\NewLight_Analysis\check_backends.bat >nul
-if exist "docs\NewLight_Analysis_User_Manual.md" (
-  copy /y "docs\NewLight_Analysis_User_Manual.md" "dist\NewLight_Analysis\NewLight_Analysis_User_Manual.md" >nul
-)
-if exist "docs\NewLight_Analysis_User_Manual.docx" (
-  copy /y "docs\NewLight_Analysis_User_Manual.docx" "dist\NewLight_Analysis\NewLight_Analysis_User_Manual.docx" >nul
-)
-if exist "docs\NewLight_Analysis_User_Manual.pdf" (
-  copy /y "docs\NewLight_Analysis_User_Manual.pdf" "dist\NewLight_Analysis\NewLight_Analysis_User_Manual.pdf" >nul
-)
 
 echo Verifying frozen backend imports...
 call "dist\NewLight_Analysis\check_backends.bat" /verify-only
