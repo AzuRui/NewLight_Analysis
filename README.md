@@ -1,7 +1,7 @@
 # NewLight_Analysis
 
-NewLight_Analysis 是面向实验人员的双光子成像分析软件。它整合了
-LabVIEW 双光子分析流程、`2cafe_analysis` 的 ROI 与热图分析方式、
+NewLight_Analysis 是面向实验人员的荧光成像分析软件。它整合了
+双光子分析流程、宽场荧光的 ROI 与热图分析方式、
 CaImAn 源提取算法，以及已授权的 NeuSuite 实例分割模型。
 
 软件采用低眩光的深色神经成像工作站风格，同时保持灰度图像区域的高
