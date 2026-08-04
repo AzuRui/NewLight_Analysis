@@ -6,9 +6,7 @@
 #define MyAppVersion "1.0"
 #define MyAppPublisher "Azu"
 #define MyAppExeName "NewLight_Analysis.exe"
-#define MyAppAssocName MyAppName + ""
-#define MyAppAssocExt ".myp"
-#define MyAppAssocKey StringChange(MyAppAssocName, " ", "") + MyAppAssocExt
+#define SourceRoot "E:\WorkSpace\NewLight_Analysis\dist\NewLight_Analysis"
 
 [Setup]
 ; 注意：AppId 的值唯一标识此应用程序。不要在其他应用程序的安装程序中使用相同的 AppId 值。
@@ -28,18 +26,22 @@ ArchitecturesAllowed=x64compatible
 ; 这意味着它应该使用本地 64 位 Program Files 目录
 ; 和注册表的 64 位视图。
 ArchitecturesInstallIn64BitMode=x64compatible
-ChangesAssociations=yes
 DefaultGroupName={#MyAppName}
 AllowNoIcons=yes
-; 取消注释以下行以在非管理安装模式下运行 (仅为当前用户安装)。
-;PrivilegesRequired=lowest
-PrivilegesRequiredOverridesAllowed=dialog
+; 首次启动需要管理员权限完成显卡/CUDA初始化，因此安装程序也要求管理员权限。
+PrivilegesRequired=admin
 OutputBaseFilename=NewLight_Analysis_setup
 SetupIconFile=E:\WorkSpace\NewLight_Analysis\xhr.ico
 Password=xhr8880601
 Encryption=yes
+Compression=lzma2/ultra64
 SolidCompression=yes
-WizardStyle=modern zircon
+LZMAUseSeparateProcess=yes
+LZMAAlgorithm=1
+LZMANumFastBytes=273
+LZMANumBlockThreads=2
+WizardStyle=modern
+Uninstallable=yes
 
 [Languages]
 Name: "chinesesimp"; MessagesFile: "compiler:Default.isl"
@@ -48,15 +50,8 @@ Name: "chinesesimp"; MessagesFile: "compiler:Default.isl"
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
 
 [Files]
-Source: "E:\WorkSpace\NewLight_Analysis\dist\NewLight_Analysis\{#MyAppExeName}"; DestDir: "{app}"; Flags: ignoreversion
-Source: "E:\WorkSpace\NewLight_Analysis\dist\NewLight_Analysis\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "{#SourceRoot}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 ; 注意：不要在任何共享系统文件上使用 "Flags: ignoreversion" 
-
-[Registry]
-Root: HKA; Subkey: "Software\Classes\{#MyAppAssocExt}\OpenWithProgids"; ValueType: string; ValueName: "{#MyAppAssocKey}"; ValueData: ""; Flags: uninsdeletevalue
-Root: HKA; Subkey: "Software\Classes\{#MyAppAssocKey}"; ValueType: string; ValueName: ""; ValueData: "{#MyAppAssocName}"; Flags: uninsdeletekey
-Root: HKA; Subkey: "Software\Classes\{#MyAppAssocKey}\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: "{app}\{#MyAppExeName},0"
-Root: HKA; Subkey: "Software\Classes\{#MyAppAssocKey}\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#MyAppExeName}"" ""%1"""
 
 [Icons]
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"

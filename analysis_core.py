@@ -46,12 +46,24 @@ def resource_dir(relative: str | Path, fallback: Path) -> Path:
 
 NEUROSEG3_DIR = resource_dir("NeuroSeg3", WORKSPACE / "NeuroSeg3")
 NEUROALIGN_DIR = resource_dir("NeuroAlign", WORKSPACE / "2cafe_analysis" / "NeuroAlign")
-DEEPCADRT_DIR = resource_dir(Path("DeepCAD-RT") / "DeepCAD_RT_pytorch", WORKSPACE / "DeepCAD-RT" / "DeepCAD_RT_pytorch")
-DEEPCADRT_MODEL_DIR = APP_RESOURCE_DIR / "DeepCADRT_Model"
+GPU_ADDON_DIR = resource_dir("GPU_Addon", PROJECT_DIR / "GPU_Addon")
+DEEPCADRT_ADDON_DIR = GPU_ADDON_DIR
+DEEPCADRT_DIR = resource_dir(
+    Path("GPU_Addon") / "DeepCAD-RT" / "DeepCAD_RT_pytorch",
+    WORKSPACE / "DeepCAD-RT" / "DeepCAD_RT_pytorch",
+)
+DEEPCADRT_MODEL_DIR = resource_dir(
+    Path("GPU_Addon") / "DeepCADRT_Model",
+    PROJECT_DIR / "DeepCADRT_Model",
+)
 DEEPCADRT_DEFAULT_MODEL_FILE = DEEPCADRT_MODEL_DIR / "E_02_Iter_6416.pth"
+GPU_WORKER_EXE = GPU_ADDON_DIR / "NewLight_GPU_Worker.exe"
 NEUSUITE_DIR = resource_dir("NeuSuite2p", WORKSPACE / "NeuSuite2p")
 NEUSUITE_DEFAULT_WEIGHTS = NEUSUITE_DIR / "segment_model.pt"
 NEUSUITE_RUNTIME_ROOT = NEUSUITE_DIR / "method"
+GPU_NEUSUITE_DIR = GPU_ADDON_DIR / "NeuSuite2p"
+GPU_NEUSUITE_DEFAULT_WEIGHTS = GPU_NEUSUITE_DIR / "segment_model.pt"
+GPU_NEUSUITE_RUNTIME_ROOT = GPU_NEUSUITE_DIR / "method"
 CAIMAN_RESOURCE_DIR = resource_dir("CaImAn_Resources", PROJECT_DIR / "CaImAn_Resources")
 NEWLIGHT_CAIMAN_PREFIX = PROJECT_DIR / ".conda_envs" / "newlight_caiman"
 _CUPY_CACHE = None
@@ -188,14 +200,29 @@ def cuda_status(check_neuroseg3: bool = False) -> dict[str, object]:
                 status["cupy_device"] = name.decode("utf-8", "ignore") if isinstance(name, bytes) else str(name)
         except Exception:
             pass
-    try:
-        import torch
-
-        status["torch_cuda_available"] = bool(torch.cuda.is_available())
-        if status["torch_cuda_available"]:
-            status["torch_device"] = torch.cuda.get_device_name(0)
-    except Exception:
-        pass
+    if not IS_FROZEN:
+        try:
+            torch_module = __import__("torch")
+            status["torch_cuda_available"] = bool(torch_module.cuda.is_available())
+            if status["torch_cuda_available"]:
+                status["torch_device"] = torch_module.cuda.get_device_name(0)
+        except Exception:
+            pass
+    elif GPU_WORKER_EXE.is_file():
+        try:
+            proc = subprocess.run(
+                [str(GPU_WORKER_EXE), "-c", "import torch; print(torch.cuda.is_available()); print(torch.cuda.get_device_name(0) if torch.cuda.is_available() else '')"],
+                capture_output=True,
+                text=True,
+                timeout=30,
+                **hidden_subprocess_kwargs(),
+            )
+            lines = [line.strip() for line in (proc.stdout or "").splitlines() if line.strip()]
+            status["torch_cuda_available"] = bool(lines and lines[0].lower() == "true")
+            if len(lines) > 1:
+                status["torch_device"] = lines[1]
+        except Exception:
+            pass
     try:
         status["opencv_cuda_devices"] = int(cv2.cuda.getCudaEnabledDeviceCount())
     except Exception:
@@ -1203,10 +1230,9 @@ def ensure_deepcadrt_model_available(model: str | None = None) -> str:
     if model_path.is_dir() and list(model_path.glob("*.pth")):
         return str(model_path)
     raise FileNotFoundError(
-        "No usable DeepCAD-RT .pth model file was found.\n"
-        f"Default project model:\n{DEEPCADRT_DEFAULT_MODEL_FILE}\n\n"
-        "Put the trained .pth model in NewLight_Analysis\\DeepCADRT_Model, "
-        "or pass an explicit .pth file / model folder."
+        "未安装统一 GPU 扩展，或其中的 DeepCAD-RT 模型文件缺失。\n"
+        f"当前扩展目录：\n{DEEPCADRT_ADDON_DIR}\n\n"
+        "请允许软件下载统一 GPU 扩展，或手动安装 GPU_Addon 后重试。"
     )
 
 
@@ -3161,14 +3187,22 @@ def save_heatmap_video(
     return completed
 
 
-def run_conda_worker(env_name: str, script: str, args: list[str], cwd: str | None = None, timeout: int | None = None) -> subprocess.CompletedProcess:
+def run_conda_worker(
+    env_name: str,
+    script: str,
+    args: list[str],
+    cwd: str | None = None,
+    timeout: int | None = None,
+    worker_exe: Path | None = None,
+) -> subprocess.CompletedProcess:
     if IS_FROZEN:
-        worker_candidates = [
+        worker_candidates = [candidate for candidate in [worker_exe] if candidate is not None]
+        worker_candidates.extend([
             APP_RESOURCE_DIR / "NewLight_Worker.exe",
             APP_EXEC_DIR / "NewLight_Worker.exe",
             APP_RESOURCE_DIR.parent / "NewLight_Worker.exe",
             PROJECT_DIR / "NewLight_Worker.exe",
-        ]
+        ])
         worker_exe = next((candidate for candidate in worker_candidates if candidate.exists()), None)
         if worker_exe is not None:
             cmd = [str(worker_exe), script] + args
@@ -3507,8 +3541,14 @@ def run_fast_roi_segmentation(
     summary_path = job_dir / "fast_summary.json"
     tifffile.imwrite(input_path, image, photometric="minisblack")
     script = WORKER_DIR / "run_neusuite_roi.py"
-    weights_path = Path(weights).resolve() if weights else NEUSUITE_DEFAULT_WEIGHTS.resolve()
-    runtime_path = Path(runtime_root).resolve() if runtime_root else NEUSUITE_RUNTIME_ROOT.resolve()
+    if IS_FROZEN:
+        if not GPU_WORKER_EXE.is_file():
+            raise FileNotFoundError("未安装 GPU 扩展，快速 ROI 需要 CUDA GPU worker。")
+        weights_path = GPU_NEUSUITE_DEFAULT_WEIGHTS.resolve()
+        runtime_path = GPU_NEUSUITE_RUNTIME_ROOT.resolve()
+    else:
+        weights_path = Path(weights).resolve() if weights else NEUSUITE_DEFAULT_WEIGHTS.resolve()
+        runtime_path = Path(runtime_root).resolve() if runtime_root else NEUSUITE_RUNTIME_ROOT.resolve()
     args = [
         "--input", str(input_path),
         "--output", str(artifact_path),
@@ -3527,7 +3567,15 @@ def run_fast_roi_segmentation(
         args.append("--candidate-mode")
     succeeded = False
     try:
-        proc = run_conda_worker("neuroseg3", str(script), args, cwd=str(PROJECT_DIR), timeout=1800)
+        worker_kwargs = {"worker_exe": GPU_WORKER_EXE} if IS_FROZEN else {}
+        proc = run_conda_worker(
+            "neuroseg3",
+            str(script),
+            args,
+            cwd=str(PROJECT_DIR),
+            timeout=1800,
+            **worker_kwargs,
+        )
         log = _roi_worker_log(proc)
         if proc.returncode != 0:
             raise RuntimeError(log or "Fast ROI extraction failed")
@@ -3621,6 +3669,10 @@ def run_deepcadrt_denoise(
     overlap: float = 0.6,
     invalid_start_frames: int = 0,
 ) -> tuple[np.ndarray, str]:
+    if not GPU_WORKER_EXE.exists() and IS_FROZEN:
+        raise FileNotFoundError(
+            "未安装 GPU 扩展，DeepCAD-RT 需要单独的 CUDA GPU 扩展包。"
+        )
     if not DEEPCADRT_DIR.exists():
         raise FileNotFoundError(f"未找到 DeepCAD-RT PyTorch 文件夹：{DEEPCADRT_DIR}")
     model_arg = ensure_deepcadrt_model_available(model)
@@ -3642,12 +3694,14 @@ def run_deepcadrt_denoise(
     ]
     if model_arg:
         args.extend(["--model", model_arg])
+    worker_kwargs = {"worker_exe": GPU_WORKER_EXE} if IS_FROZEN else {}
     proc = run_conda_worker(
         "deepcadrt",
         str(script),
         args,
         cwd=str(DEEPCADRT_DIR),
         timeout=None,
+        **worker_kwargs,
     )
     log = (proc.stdout or "") + ("\n" + proc.stderr if proc.stderr else "")
     try:

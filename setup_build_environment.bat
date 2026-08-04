@@ -44,10 +44,6 @@ if errorlevel 1 (
 
 echo Checking build inputs...
 set "FAILED=0"
-if not exist "DeepCADRT_Model\E_02_Iter_6416.pth" (
-  echo Missing DeepCAD-RT model: %CD%\DeepCADRT_Model\E_02_Iter_6416.pth
-  set "FAILED=1"
-)
 if not exist "..\NeuSuite2p\segment_model.pt" (
   echo Missing NeuSuite fast ROI model: %CD%\..\NeuSuite2p\segment_model.pt
   set "FAILED=1"

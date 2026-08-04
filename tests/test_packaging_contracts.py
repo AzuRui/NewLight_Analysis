@@ -17,7 +17,7 @@ def _string_literals(path: Path) -> set[str]:
 
 
 def test_pyinstaller_spec_collects_neusuite_timm_compatibility_modules():
-    literals = _string_literals(ROOT / "NewLight_Analysis.spec")
+    literals = _string_literals(ROOT / "NewLight_GPU_Worker.spec")
 
     assert "timm.models.layers" in literals
     assert "timm.models.helpers" in literals
@@ -27,8 +27,8 @@ def test_pyinstaller_spec_collects_neusuite_timm_compatibility_modules():
 def test_backend_check_imports_the_real_neusuite_runtime():
     script = (ROOT / "check_backends.bat").read_text(encoding="utf-8")
 
-    assert "import_neusuite_yolo" in script
-    assert "NeuSuite runtime import OK" in script
+    assert "GPU_WORKER" in script
+    assert "run_neusuite_roi.py" in script
     assert 'set "FAILED=1"' in script
     assert "exit /b %FAILED%" in script
 
@@ -139,3 +139,63 @@ def test_pyinstaller_spec_excludes_unused_desktop_and_notebook_stacks():
     assert "slim_excludes" in spec
     for package in ("jupyterlab", "notebook", "panel", "bokeh", "PySide6", "openvino", "hdmf", "pynwb"):
         assert f"'{package}'" in spec
+
+
+def test_slim2_inno_script_targets_experimental_package_with_high_ratio_compression():
+    script = (ROOT / "NewLight_Analysis_slim2_setup.iss").read_text(encoding="utf-8")
+    builder = (ROOT / "build_slim2_installer.bat").read_text(encoding="utf-8")
+
+    assert "dist_slim2_20260804\\NewLight_Analysis" in script
+    assert "Compression=lzma2/ultra64" in script
+    assert "SolidCompression=yes" in script
+    assert "LZMAUseSeparateProcess=yes" in script
+    assert "build_slim2_installer.bat" not in builder
+    assert "NewLight_Analysis_slim2_setup.iss" in builder
+
+
+def test_core_spec_keeps_deepcad_out_of_the_core_datas_bundle():
+    spec = (ROOT / "NewLight_Analysis.spec").read_text(encoding="utf-8")
+
+    assert "gpu_addon_manifest.json" in spec
+    assert "DeepCADRT_Model" not in spec.split("datas =", 1)[1].split("ipyparallel_spec", 1)[0]
+    assert "DeepCAD_RT_pytorch" not in spec.split("datas =", 1)[1].split("ipyparallel_spec", 1)[0]
+    assert "optional runtime addon" in spec
+
+
+def test_deepcad_addon_builder_does_not_duplicate_shared_cuda_runtime():
+    script = (ROOT / "build_deepcad_addon.bat").read_text(encoding="utf-8")
+
+    gpu_script = (ROOT / "build_gpu_addon.bat").read_text(encoding="utf-8")
+
+    assert "build_gpu_addon.bat" in script
+    assert "NewLight_GPU_Worker.spec" in gpu_script
+    assert "GPU_Addon_CUDA.zip.part" in gpu_script
+
+
+def test_deepcad_manifest_has_pinned_release_hash():
+    manifest = (ROOT / "gpu_addon_manifest.json").read_text(encoding="utf-8")
+
+    assert "REPLACE_WITH_RELEASE_ASSET_SHA256" not in manifest
+    assert "GPU_Addon_CUDA.zip.part01" in manifest
+    assert "NeuSuite" in manifest
+    assert "archive_sha256" in manifest
+
+
+def test_core_build_excludes_torch_and_does_not_collect_cuda_binaries():
+    build = (ROOT / "build_exe.bat").read_text(encoding="utf-8")
+    spec = (ROOT / "NewLight_Analysis.spec").read_text(encoding="utf-8")
+
+    assert "caiman_latest" in build
+    assert "NEWLIGHT_BUILD_MODE=cpu" in build
+    assert "if build_mode == 'gpu'" in spec
+    for package in ("torch", "torchvision", "timm"):
+        assert f"'{package}'" in spec
+
+
+def test_gpu_worker_has_a_separate_pyinstaller_spec():
+    spec = (ROOT / "NewLight_GPU_Worker.spec").read_text(encoding="utf-8")
+    builder = (ROOT / "build_gpu_addon.bat").read_text(encoding="utf-8")
+
+    assert "NewLight_GPU_Worker" in spec
+    assert "torch_cuda.dll" in spec
+    assert "NewLight_GPU_Worker.spec" in builder

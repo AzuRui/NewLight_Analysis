@@ -21,6 +21,15 @@ build_slim*/
 build_release/
 dist/
 dist_slim*/
+dist_core*/
+build_core*/
+build_deepcad_addon/
+DeepCADRT_CUDA_Addon.zip
+GPU_Addon_CUDA.zip
+GPU_Addon_CUDA.zip.part*
+dist_gpu_worker/
+build_gpu_worker/
+build_gpu_addon/
 Output/
 *.spec.log
 

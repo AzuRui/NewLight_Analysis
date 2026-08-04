@@ -139,6 +139,9 @@ setup_neusuite_runtime.bat
 > **重要：DeepCAD-RT 必须依赖 CUDA。** DeepCAD-RT 没有 CPU fallback，
 > 只能在具备兼容 NVIDIA GPU 和驱动的电脑上运行。安装包中的模型和 CUDA
 > 运行库不会让它在纯 CPU、AMD 或 Intel 显卡电脑上可用。
+> CUDA 不是 NewLight_Analysis 主程序的启动条件。驱动安装被取消、失败，
+> 或 GTX 960 等旧显卡无法使用当前 CUDA 扩展时，软件仍会进入 CPU 模式；
+> 每次启动都会重新检查可选 GPU 扩展是否已完整配置。
 
 - 快速 ROI 分割可以通过 PyTorch 使用 CUDA。
 - 投影、dF/F、平滑和 ROI 曲线提取在安装 CuPy 时可以使用 GPU。

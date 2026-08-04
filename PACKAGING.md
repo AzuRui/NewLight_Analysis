@@ -68,20 +68,67 @@ bundled backend resources:
 
 - NeuroSeg3 local `ultralytics` source and weights.
 - NeuroAlign source from `2cafe_analysis\NeuroAlign`.
-- DeepCAD-RT local `deepcad` source and the project DeepCAD-RT model.
+- The optional unified GPU addon manifest; CUDA Torch, NeuSuite Fast ROI,
+  DeepCAD-RT source, and both model payloads are downloaded as one package.
 - A small `csbdeep.utils.normalize` compatibility module used by DeepCAD-RT display helpers.
 
 Backend tasks launched from the installed app use `_internal\NewLight_Worker.exe`,
 so target machines should not need the original workspace folders or separate
 conda environments for normal bundled workflows.
 
-The default DeepCAD-RT model is bundled from:
+GPU-only backends are intentionally separated from the core package. The one
+addon archive contains CUDA Torch, NeuSuite Fast ROI and `segment_model.pt`,
+`DeepCAD-RT\DeepCAD_RT_pytorch\deepcad`, and `DeepCADRT_Model\*.pth`; none of
+these payloads are included in the core PyInstaller `datas` list.
+The first frozen launch detects an NVIDIA/CUDA-capable runtime and downloads
+the archive from `gpu_addon_manifest.json` into
+`_internal\GPU_Addon`. The archive is verified with SHA-256 before
+installation and extracted with a path-traversal check. On AMD/Intel or CPU
+machines, DeepCAD-RT is skipped and the remaining CPU-compatible features stay
+available.
 
-```text
-E:\WorkSpace\NewLight_Analysis\DeepCADRT_Model\E_02_Iter_6416.pth
+Build the addon separately with:
+
+```bat
+build_gpu_addon.bat
 ```
 
-Both build scripts check this file before running PyInstaller, and `NewLight_Analysis.spec` includes the `DeepCADRT_Model` folder in the onedir bundle.
+Upload `GPU_Addon_CUDA.zip.part01` and `.part02` to the Release referenced by
+the manifest. The manifest pins each part and the reconstructed archive by
+SHA-256. The core contains no Torch/CUDA; the GPU addon contains CUDA Torch,
+NeuSuite, DeepCAD source/model, and `NewLight_GPU_Worker.exe`.
+
+The manifest URL is pinned to a GitHub Release asset rather than a mutable
+branch archive. Do not replace the ZIP without updating its SHA-256. When the
+addon contents change, publish a new release tag and update the URL and hash
+together.
+
+GitHub private-repository assets require authentication and therefore cannot be
+downloaded by an installed application without embedding user credentials. The
+current repository's Release is prepared for project collaborators; external
+distribution requires a public asset host or an application-level authenticated
+download flow.
+
+## CPU core and GPU addon
+
+The core package is built without Torch:
+
+```bat
+build_exe.bat
+```
+
+The optional GPU package is built separately with the CUDA-enabled
+`caiman_latest` environment:
+
+```bat
+build_gpu_addon.bat
+```
+
+It produces `GPU_Addon_CUDA.zip.part01` and `.part02`. The first-run setup
+downloads both parts, verifies each part and the reconstructed archive, then
+extracts the CUDA worker, CUDA runtime, DeepCAD source, and model into
+`_internal\GPU_Addon`. This is the only package that contains CUDA Torch and
+CUDA DLLs; the core package retains CaImAn/OpenCV CPU functionality.
 
 The build also patches frozen OpenCV loader config files after PyInstaller
 collection. This removes conda build-machine paths from `_internal\cv2` and
@@ -89,10 +136,20 @@ keeps `cv2` import self-contained on other computers.
 
 The PyInstaller spec excludes unused notebook/desktop stacks such as Jupyter,
 Panel, Bokeh, PySide6, OpenVINO, PyAV, imagecodecs, and optional NWB schemas.
-An isolated build comparison reduced the portable directory from about
-`4.08 GB` to `3.75 GB`; the bundled CUDA/PyTorch libraries remain intact and
-all frozen backend checks passed. The final compressed installer size still
-needs to be measured on a machine with Inno Setup installed.
+After Torch, CUDA, and NeuSuite moved to the GPU addon, the verified core
+portable directory is `1,102,414,238` bytes (about `1.027 GiB`). The frozen CPU
+backend checks passed. The final compressed installer size still needs to be
+measured on a machine with Inno Setup installed.
+
+To package the isolated slim2 build directly, install Inno Setup 6 and run:
+
+```bat
+build_slim2_installer.bat
+```
+
+This uses `NewLight_Analysis_slim2_setup.iss` and writes
+`Output\NewLight_Analysis_slim2_setup.exe` with explicit solid LZMA2 ultra64
+compression settings.
 
 PyTorch/DeepCAD-RT CUDA builds also need the full conda CUDA/cuDNN runtime from
 `Library\bin`. The spec explicitly collects cuDNN split DLLs, NVRTC, cuFFT
@@ -105,9 +162,10 @@ On target machines, run this from inside the release folder:
 build_release\NewLight_Analysis\check_backends.bat
 ```
 
-Expected result: bundled Python imports succeed, and NeuroSeg3, CaImAn, and
-DeepCAD-RT backend `--help` checks report OK. The bundled Python section should
-also print a non-empty `cuDNN` version.
+Expected result: bundled Python imports succeed, and NeuroSeg3 and CaImAn
+backend checks report OK. DeepCAD-RT reports `optional GPU addon is not
+installed` until the first CUDA-capable launch downloads the addon. The bundled
+Python section should also print a non-empty `cuDNN` version.
 
 DeepCAD-RT denoising still requires a CUDA-capable NVIDIA GPU and compatible
 driver at runtime. The model and Python code are bundled, but the target machine

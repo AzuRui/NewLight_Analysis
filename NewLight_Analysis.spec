@@ -1,6 +1,7 @@
 # -*- mode: python ; coding: utf-8 -*-
 
 import importlib.util
+import os
 import runpy
 import sys
 from pathlib import Path
@@ -28,6 +29,12 @@ CUDA_RUNTIME_DLL_PATTERNS = [
     'nvrtc*.dll',
     'nvrtc-builtins*.dll',
 ]
+DEEPCAD_ADDON_DLL_PATTERNS = {
+    'magma.dll',
+    'cudss*.dll',
+    'cusolver*.dll',
+    'cusparse*.dll',
+}
 
 
 def patch_frozen_cv2_config(app_root):
@@ -35,13 +42,15 @@ def patch_frozen_cv2_config(app_root):
     namespace['patch_frozen_cv2_config'](app_root)
 
 
-def collect_conda_cuda_runtime_dlls():
+def collect_conda_cuda_runtime_dlls(include_deepcad_addon=False):
     library_bin = Path(sys.prefix) / 'Library' / 'bin'
     if not library_bin.exists():
         return []
     seen = set()
     binaries = []
     for pattern in CUDA_RUNTIME_DLL_PATTERNS:
+        if not include_deepcad_addon and pattern in DEEPCAD_ADDON_DLL_PATTERNS:
+            continue
         for dll in sorted(library_bin.glob(pattern)):
             key = dll.name.lower()
             if key in seen:
@@ -61,12 +70,6 @@ hiddenimports = [
     'scipy',
     'skimage',
     'tifffile',
-    'torch',
-    'torchvision',
-    'timm',
-    'timm.models.layers',
-    'timm.models.helpers',
-    'timm.models.registry',
     'seaborn',
     'yaml',
     'gdown',
@@ -74,7 +77,12 @@ hiddenimports = [
     'igraph',
     'leidenalg',
 ]
-cuda_binaries = collect_conda_cuda_runtime_dlls()
+build_mode = os.environ.get('NEWLIGHT_BUILD_MODE', 'cpu').strip().lower()
+cuda_binaries = (
+    collect_conda_cuda_runtime_dlls(include_deepcad_addon=True)
+    if build_mode == 'gpu'
+    else []
+)
 slim_excludes = [
     # These optional GUI/notebook stacks are not used by the Tkinter app or
     # its bundled workers.
@@ -100,6 +108,9 @@ slim_excludes = [
     'hf_xet',
     'av',
     'imagecodecs',
+    'torch',
+    'torchvision',
+    'timm',
     # The application accepts TIFF/AVI/video inputs, not NWB files. CaImAn's
     # optional NWB schema stack is therefore outside the packaged workflow.
     'hdmf',
@@ -116,15 +127,11 @@ datas = [
     ('NeuroAlign_atlas_registration_summary.json', '.'),
     ('neuroalign_step_worker.py', '.'),
     ('machine_setup.py', '.'),
+    ('gpu_addon_manifest.json', '.'),
     ('tools/install_nvidia_driver.ps1', 'tools'),
     ('workers', 'workers'),
     ('csbdeep', 'csbdeep'),
-    ('DeepCADRT_Model', 'DeepCADRT_Model'),
-    (str(WORKSPACE / 'NeuSuite2p' / 'segment_model.pt'), 'NeuSuite2p'),
-    (str(WORKSPACE / 'NeuSuite2p' / 'method'), 'NeuSuite2p/method'),
-    ('NeuSuite_RuntimeDeps', 'NeuSuite_RuntimeDeps'),
     ('CaImAn_Resources', 'CaImAn_Resources'),
-    (str(WORKSPACE / 'DeepCAD-RT' / 'DeepCAD_RT_pytorch' / 'deepcad'), 'DeepCAD-RT/DeepCAD_RT_pytorch/deepcad'),
     (str(WORKSPACE / '2cafe_analysis' / 'NeuroAlign'), 'NeuroAlign'),
 ]
 ipyparallel_spec = importlib.util.find_spec('ipyparallel')
@@ -137,7 +144,9 @@ if ipyparallel_spec and ipyparallel_spec.origin:
 
 a = Analysis(
     ['launch.py'],
-    pathex=[str(ROOT), str(WORKSPACE / 'NeuSuite2p'), str(WORKSPACE / 'DeepCAD-RT' / 'DeepCAD_RT_pytorch')],
+    # DeepCAD-RT is an optional runtime addon. Keep its source and model out
+    # of the core package; machine_setup downloads it after CUDA validation.
+    pathex=[str(ROOT), str(WORKSPACE / 'NeuSuite2p')],
     binaries=cuda_binaries,
     datas=datas,
     hiddenimports=hiddenimports,

@@ -56,39 +56,22 @@ if exist "%RESOURCE_DIR%\NewLight_Worker.exe" set "WORKER_PY=%RESOURCE_DIR%\NewL
 if exist "%CD%\NewLight_Worker.exe" set "WORKER_PY=%CD%\NewLight_Worker.exe"
 
 echo Bundled Python:
-"%WORKER_PY%" -c "import sys, numpy, scipy, cv2, tifffile, pandas, matplotlib, torch; print(sys.executable); print('bundled imports OK'); print('torch CUDA:', torch.version.cuda); print('cuDNN:', torch.backends.cudnn.version())"
+"%WORKER_PY%" -c "import sys, numpy, scipy, cv2, tifffile, pandas, matplotlib; print(sys.executable); print('CPU core imports OK')"
 if errorlevel 1 (
   echo Bundled Python check failed.
   set "FAILED=1"
 )
 echo.
 echo Authorized NeuSuite fast ROI backend:
-"%WORKER_PY%" "%RESOURCE_DIR%\workers\run_neusuite_roi.py" --help >nul
-if errorlevel 1 (
-  echo Fast ROI backend check failed.
-  set "FAILED=1"
+set "GPU_WORKER=%RESOURCE_DIR%\GPU_Addon\NewLight_GPU_Worker.exe"
+if not exist "%GPU_WORKER%" (
+  echo Optional GPU ROI addon is not installed; skipping NeuSuite fast ROI check.
 ) else (
-  set "FAST_WEIGHTS=%RESOURCE_DIR%\NeuSuite2p\segment_model.pt"
-  set "FAST_METHOD=%RESOURCE_DIR%\NeuSuite2p\method"
-  if not exist "!FAST_WEIGHTS!" if exist "%CD%\..\NeuSuite2p\segment_model.pt" set "FAST_WEIGHTS=%CD%\..\NeuSuite2p\segment_model.pt"
-  if not exist "!FAST_METHOD!\ultralytics" if exist "%CD%\..\NeuSuite2p\method\ultralytics" set "FAST_METHOD=%CD%\..\NeuSuite2p\method"
-  if not exist "!FAST_WEIGHTS!" (
-    echo NeuSuite weights missing: !FAST_WEIGHTS!
-    echo Fast ROI backend check failed.
+  "%GPU_WORKER%" "workers\run_neusuite_roi.py" --help >nul
+  if errorlevel 1 (
+    echo Fast ROI GPU worker check failed.
     set "FAILED=1"
-  ) else if not exist "!FAST_METHOD!\ultralytics" (
-    echo NeuSuite custom runtime missing: !FAST_METHOD!\ultralytics
-    echo Fast ROI backend check failed.
-    set "FAILED=1"
-  ) else (
-    "%WORKER_PY%" -c "from pathlib import Path; from workers.run_neusuite_roi import import_neusuite_yolo; YOLO = import_neusuite_yolo(Path(r'!FAST_METHOD!')); print('NeuSuite runtime import OK:', YOLO.__module__)"
-    if errorlevel 1 (
-      echo Fast ROI runtime import failed.
-      set "FAILED=1"
-    ) else (
-      echo Fast ROI model and custom runtime OK.
-    )
-  )
+  ) else echo NeuSuite fast ROI GPU worker OK.
 )
 echo.
 echo CaImAn backend:
@@ -110,16 +93,16 @@ if errorlevel 1 (
 )
 echo.
 echo DeepCAD-RT backend:
-if not exist "%RESOURCE_DIR%\DeepCADRT_Model\E_02_Iter_6416.pth" (
-  echo DeepCAD-RT model missing: %RESOURCE_DIR%\DeepCADRT_Model\E_02_Iter_6416.pth
-  set "FAILED=1"
+set "GPU_WORKER=%RESOURCE_DIR%\GPU_Addon\NewLight_GPU_Worker.exe"
+if not exist "%GPU_WORKER%" (
+  echo DeepCAD-RT optional GPU addon is not installed; skipping DeepCAD-RT check.
 ) else (
-  "%WORKER_PY%" "%RESOURCE_DIR%\workers\run_deepcadrt.py" --help
+  "%GPU_WORKER%" -c "import torch; assert torch.cuda.is_available(); print(torch.cuda.get_device_name(0))"
   if errorlevel 1 (
-    echo DeepCAD-RT backend check failed.
+    echo DeepCAD-RT CUDA worker check failed.
     set "FAILED=1"
   ) else (
-    echo DeepCAD-RT backend OK.
+    echo DeepCAD-RT CUDA worker OK.
   )
 )
 endlocal & exit /b %FAILED%

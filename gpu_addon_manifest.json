@@ -1,0 +1,15 @@
+{
+  "version": "2.0.0",
+  "archive_sha256": "2b2aec07e6066295f29cb0672de98199331eeed654cc7b019f8bbb30d5823cb2",
+  "parts": [
+    {
+      "url": "https://github.com/AzuRui/NewLight_Analysis/releases/download/gpu-addon-v1/GPU_Addon_CUDA.zip.part01",
+      "sha256": "e8e361ff8daa64cc2e00e502b43c0a1427fffc8882ce5532a197af8a8efcf75c"
+    },
+    {
+      "url": "https://github.com/AzuRui/NewLight_Analysis/releases/download/gpu-addon-v1/GPU_Addon_CUDA.zip.part02",
+      "sha256": "27d811e6d0458066ea664f4a8ac6916998b04b0eaf400750e185317214693ad8"
+    }
+  ],
+  "description": "Unified optional CUDA addon with Torch, DeepCAD-RT, NeuSuite Fast ROI, models, and NewLight_GPU_Worker."
+}

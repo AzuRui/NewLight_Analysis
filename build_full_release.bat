@@ -17,26 +17,19 @@ if not errorlevel 1 (
   call conda run -n caiman_latest python -c "import sys" >nul 2>nul
   if not errorlevel 1 (
     set "BUILD_PY=call conda run -n caiman_latest python"
-    set "BUILD_PY_LABEL=conda env caiman_latest"
+    set "BUILD_PY_LABEL=conda env caiman_latest (CPU core, no Torch/CUDA)"
   )
 )
 
 echo Build Python: %BUILD_PY_LABEL%
 %BUILD_PY% -c "import sys; print(sys.executable); print(sys.version)"
 if errorlevel 1 (
-  echo Failed to start the selected build Python.
+  echo caiman_latest was not found. Run setup_build_environment.bat first.
   if "%PAUSE_ON_EXIT%"=="1" pause
   exit /b 1
 )
 
-set "MODEL=DeepCADRT_Model\E_02_Iter_6416.pth"
-if not exist "%MODEL%" (
-  echo Missing DeepCAD-RT model:
-  echo   %CD%\%MODEL%
-  echo Put the trained .pth file there before building.
-  if "%PAUSE_ON_EXIT%"=="1" pause
-  exit /b 1
-)
+set "NEWLIGHT_BUILD_MODE=cpu"
 
 %BUILD_PY% -c "import pkg_resources" >nul 2>nul
 if errorlevel 1 (
@@ -61,10 +54,10 @@ if errorlevel 1 (
   )
 )
 
-%BUILD_PY% -c "import numpy, cv2, scipy, skimage, pandas, tifffile, matplotlib, torch" >nul 2>nul
+%BUILD_PY% -c "import numpy, cv2, scipy, skimage, pandas, tifffile, matplotlib, caiman" >nul 2>nul
 if errorlevel 1 (
   echo The selected Python is missing NewLight_Analysis build dependencies.
-  echo Please build from the caiman_latest environment or repair that environment.
+  echo Please build from the newlight_cpu environment or run setup_cpu_build_environment.bat.
   if "%PAUSE_ON_EXIT%"=="1" pause
   exit /b 1
 )
@@ -129,9 +122,10 @@ echo.
 echo Notes:
 echo - Start the packaged application with NewLight_Analysis.exe.
 echo - No legacy setup or batch launcher is published in the release folder.
-echo - DeepCAD-RT model is bundled from %MODEL%.
+echo - DeepCAD-RT is an optional CUDA addon downloaded after first-run CUDA detection.
 echo - NewLight_Worker.exe is bundled under _internal for backend worker tasks.
-echo - NeuroSeg3 source/weights, NeuroAlign source, and DeepCAD-RT source are bundled.
+echo - NeuroSeg3 source/weights and NeuroAlign source are bundled.
+echo - DeepCAD-RT and CUDA Torch are supplied by the optional GPU addon.
 echo - Run check_backends.bat in the release folder on target machines.
 echo.
 if "%PAUSE_ON_EXIT%"=="1" pause

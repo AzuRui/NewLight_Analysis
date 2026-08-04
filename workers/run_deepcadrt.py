@@ -15,6 +15,20 @@ import tifffile
 warnings.filterwarnings("ignore", message="pkg_resources is deprecated as an API.*", category=UserWarning)
 
 DEEPCAD_DOWNLOAD_FOLDER = Path("ModelForPytorch") / "DownloadedModel"
+_DLL_DIRECTORY_HANDLES = []
+
+
+def configure_addon_cuda_dlls(deepcad_dir: Path) -> None:
+    addon_dir = deepcad_dir.parent.parent
+    cuda_dir = addon_dir / "cuda"
+    if not cuda_dir.is_dir():
+        return
+    if hasattr(os, "add_dll_directory"):
+        try:
+            _DLL_DIRECTORY_HANDLES.append(os.add_dll_directory(str(cuda_dir)))
+        except OSError:
+            pass
+    os.environ["PATH"] = str(cuda_dir) + os.pathsep + os.environ.get("PATH", "")
 
 
 def model_download_hint(deepcad_dir: Path) -> str:
@@ -138,6 +152,7 @@ def main() -> int:
     deepcad_dir = Path(args.deepcad_dir).resolve()
     if not deepcad_dir.exists():
         raise FileNotFoundError(f"DeepCAD-RT pytorch folder not found: {deepcad_dir}")
+    configure_addon_cuda_dlls(deepcad_dir)
     sys.path.insert(0, str(deepcad_dir))
     if "gdown" not in sys.modules:
         gdown_stub = types.ModuleType("gdown")

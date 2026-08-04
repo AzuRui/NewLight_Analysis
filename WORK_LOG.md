@@ -1,5 +1,36 @@
 # Work Log
 
+## 2026-08-04 - GPU setup is optional and rechecked on every launch
+
+- Removed CUDA, NVIDIA driver installation, adapter detection, and pending
+  restart as GUI startup gates. A user who declines installation, encounters a
+  Windows Update failure, has an unsupported GPU such as GTX 960, or receives
+  no WMI adapter result now enters the application in CPU mode.
+- Kept the first frozen administrator launch and bundled CPU backend check as
+  hard requirements. A broken core backend still blocks startup because the
+  ordinary analysis application cannot run reliably in that state.
+- Added `inspect_gpu_addon()` and invoke it for every completed frozen startup.
+  It verifies the complete addon layout and, when installed, runs the GPU
+  worker CUDA check. A missing addon is retried for `complete_cuda` machines;
+  all GPU failures remain nonfatal.
+- `pending_restart` is now a launchable state. The application reminds the user
+  that GPU capability awaits restart, then continues in CPU mode.
+- Added regression coverage for installation cancellation/failure, unknown
+  adapters, pending restart, and GTX 960-style CPU-mode addon inspection.
+
+## 2026-08-04 - Unified GPU addon naming and completeness contract
+
+- Confirmed that `GPU_Addon_CUDA.zip` is one package containing CUDA Torch,
+  DeepCAD-RT source/model, NeuSuite Fast ROI runtime/model, and
+  `NewLight_GPU_Worker.exe`; DeepCAD is not a separate downloadable package.
+- Renamed the active manifest to `gpu_addon_manifest.json` and the active
+  installer entry point to `ensure_gpu_addon()`. Older names remain read-only
+  compatibility aliases so an upgraded executable can still recognize an old
+  release layout.
+- Strengthened addon readiness checks to require both DeepCAD and NeuSuite
+  payloads. A partial DeepCAD-only directory can no longer be reported as a
+  complete GPU extension.
+
 ## 2026-08-03
 
 ### Release Folder Legacy BAT Removal
@@ -1592,3 +1623,52 @@
 - Inno Setup is unavailable on this machine, so the compressed installer size
   was not measured in this experiment. Measure it with
   `build_full_release.bat` on a machine with `ISCC.exe`.
+
+## 2026-08-04 - Added slim2 Inno Setup packaging script
+
+- Added `NewLight_Analysis_slim2_setup.iss` targeting the isolated
+  `dist_slim2_20260804\NewLight_Analysis` package.
+- Added `build_slim2_installer.bat` to validate the slim package, locate Inno
+  Setup 6, and produce `Output\NewLight_Analysis_slim2_setup.exe`.
+- Configured solid `lzma2/ultra64`, a separate compression process, maximum
+  fast bytes, and two LZMA2 block threads. The installer was not built here
+  because `ISCC.exe` is unavailable.
+
+## 2026-08-04 - Split DeepCAD-RT into an optional CUDA addon
+
+> Historical intermediate design. This was superseded later the same day by
+> the complete GPU worker split below; the active install path is now
+> `_internal\GPU_Addon` and the core contains no Torch/CUDA runtime.
+
+- Removed DeepCAD-RT source and `DeepCADRT_Model\*.pth` from the core
+  PyInstaller bundle. Shared Torch/CUDA DLLs remain because NeuSuite and other
+  GPU backends load the same runtime libraries.
+- Added a pinned GitHub Release URL and SHA-256 manifest. After NVIDIA/CUDA
+  validation, first-run setup downloads, verifies, and safely extracts the
+  addon into `_internal\DeepCADRT_Addon`.
+- AMD/Intel and CPU-only systems skip the addon while retaining non-DeepCAD
+  features. Download failure is reported without blocking the rest of the app.
+- Simplified `build_deepcad_addon.bat` to package only DeepCAD source and model
+  files, without requiring Conda or duplicating shared CUDA DLLs.
+- Focused packaging and machine-setup verification passed: `36 passed`. No EXE
+  or Inno Setup installer was built in this change.
+
+## 2026-08-04 - Split the complete CUDA runtime into a GPU addon
+
+- Changed the core PyInstaller spec to exclude Torch, TorchVision, timm,
+  NeuSuite, and CUDA DLLs when `NEWLIGHT_BUILD_MODE=cpu`. The core keeps
+  CaImAn/OpenCV CPU workflows and contains no Torch runtime.
+- Added `NewLight_GPU_Worker.spec` and `build_gpu_addon.bat`. The GPU addon
+  contains CUDA Torch/runtime DLLs, `NewLight_GPU_Worker.exe`, DeepCAD-RT source,
+  and the trained model.
+- Added multipart GPU addon downloads. The final 2,580,860,592-byte archive is split
+  into two GitHub-compatible assets, reassembled and hash-verified during first
+  startup before extraction to `_internal\GPU_Addon`.
+- GPU worker build verification passed with Torch 2.10.0, CUDA available, and
+  NVIDIA GeForce RTX 4080. The two Release assets were uploaded to the private
+  `gpu-addon-v1` release. External users require a public asset host or an
+  authenticated download mechanism.
+- The final rebuilt core portable directory is 1,102,414,238 bytes (about
+  1.027 GiB) and contains zero
+  Torch/CUDA files. Focused packaging/backend verification passed: `60 passed`.
+  No Inno installer was built in this change.

@@ -17,39 +17,19 @@ if not errorlevel 1 (
   call conda run -n caiman_latest python -c "import sys" >nul 2>nul
   if not errorlevel 1 (
     set "BUILD_PY=call conda run -n caiman_latest python"
-    set "BUILD_PY_LABEL=conda env caiman_latest"
+    set "BUILD_PY_LABEL=conda env caiman_latest (CPU core, no Torch/CUDA)"
   )
 )
 
 echo Build Python: %BUILD_PY_LABEL%
 %BUILD_PY% -c "import sys; print(sys.executable); print(sys.version)"
 if errorlevel 1 (
-  echo Failed to start the selected build Python.
+  echo caiman_latest was not found. Run setup_build_environment.bat first.
   if "%PAUSE_ON_EXIT%"=="1" pause
   exit /b 1
 )
 
-if not exist "DeepCADRT_Model\E_02_Iter_6416.pth" (
-  echo Missing DeepCAD-RT model:
-  echo   %CD%\DeepCADRT_Model\E_02_Iter_6416.pth
-  echo Put the trained .pth file there before building.
-  if "%PAUSE_ON_EXIT%"=="1" pause
-  exit /b 1
-)
-
-if not exist "..\NeuSuite2p\segment_model.pt" (
-  echo Missing NeuSuite fast ROI model:
-  echo   %CD%\..\NeuSuite2p\segment_model.pt
-  if "%PAUSE_ON_EXIT%"=="1" pause
-  exit /b 1
-)
-
-if not exist "NeuSuite_RuntimeDeps" (
-  echo Missing bundled NeuSuite runtime dependencies:
-  echo   %CD%\NeuSuite_RuntimeDeps
-  if "%PAUSE_ON_EXIT%"=="1" pause
-  exit /b 1
-)
+set "NEWLIGHT_BUILD_MODE=cpu"
 
 if not exist "CaImAn_Resources" (
   echo Missing bundled CaImAn resources:
@@ -81,10 +61,10 @@ if errorlevel 1 (
   )
 )
 
-%BUILD_PY% -c "import numpy, cv2, scipy, skimage, pandas, tifffile, matplotlib, torch, torchvision, timm, caiman, igraph, leidenalg, hdmf, pynwb" >nul 2>nul
+%BUILD_PY% -c "import numpy, cv2, scipy, skimage, pandas, tifffile, matplotlib, caiman, igraph, leidenalg" >nul 2>nul
 if errorlevel 1 (
   echo The selected Python is missing NewLight_Analysis build dependencies.
-  echo Please build from the caiman_latest environment or repair that environment.
+  echo Please build from the caiman_latest environment or run setup_build_environment.bat.
   if "%PAUSE_ON_EXIT%"=="1" pause
   exit /b 1
 )
@@ -137,7 +117,7 @@ echo Notes:
 echo - Start the packaged application with NewLight_Analysis.exe.
 echo - No legacy setup or batch launcher is published in the release folder.
 echo - NewLight_Worker.exe is bundled under _internal for backend worker tasks.
-echo - NeuSuite fast ROI model/runtime, CaImAn resources, NeuroAlign source, DeepCAD-RT source, and its model are bundled.
+echo - DeepCAD-RT is an optional CUDA addon downloaded after first-run CUDA detection.
 echo - Run check_backends.bat inside dist\NewLight_Analysis on target machines.
 echo.
 if "%PAUSE_ON_EXIT%"=="1" pause

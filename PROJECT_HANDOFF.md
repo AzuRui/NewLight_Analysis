@@ -98,32 +98,35 @@ At the end of every substantial task, perform a context-safety self-check:
   Frozen Worker dispatch must occur before the setup gate so backend child
   processes never open setup dialogs.
 - The version-1 machine file is
-  `%ProgramData%\NewLight_Analysis\machine_setup_v1.json`. Only
-  `complete_cuda` and `complete_cpu_only` bypass elevation. `pending_restart`
-  remains incomplete. Do not store future remote credentials, authorization,
-  identity, or expiry data in this file without a separate security design.
+  `%ProgramData%\NewLight_Analysis\machine_setup_v1.json`. `complete_cuda`,
+  `complete_cpu_only`, and `pending_restart` all permit the GUI to open.
+  `pending_restart` means only that GPU capability has not been revalidated;
+  it is not a startup gate. Do not store future remote credentials,
+  authorization, identity, or expiry data in this file without a separate
+  security design.
 - First initialization must be explicitly administrator-launched. The program
   intentionally does not self-elevate. After a complete record exists, daily
   launches use ordinary permissions. Future administrator-based remote
   permission management is a separate goal and is not implemented here.
 - NVIDIA detection uses adapter names and PNP `VEN_10DE`; any NVIDIA device in
-  a mixed-GPU system selects the NVIDIA path. An empty WMI/CIM result is an
-  error. Explicit AMD/Intel-only detection records CPU mode and warns that
-  DeepCAD-RT and other CUDA-only functions cannot run.
-- The portable package already includes PyTorch CUDA/cuDNN runtime DLLs. The
-  installer only asks Windows Update Agent for applicable, signed NVIDIA
-  display-driver updates; it does not install CUDA Toolkit. Installation needs
-  networking, enabled Windows Update services, administrator rights, and an
-  update available for that hardware/OS.
+  a mixed-GPU system selects the NVIDIA path. Empty WMI/CIM results, unsupported
+  GPUs, declined installation, and driver-install failures all record CPU mode
+  and permit startup. They disable only CUDA-specific features.
+- The CPU core does not include PyTorch CUDA/cuDNN. Those files are in the
+  optional `_internal\GPU_Addon`. The installer may ask Windows Update Agent
+  for an applicable signed NVIDIA display driver, but it does not install CUDA
+  Toolkit. GTX 960 and other old hardware may remain CPU-only when the bundled
+  Torch/CUDA worker no longer supports the device.
 - `check_backends.bat` modes are security boundaries: no argument runs first
   setup, `/verify-only` may only inspect the release, and
   `/install-gpu-driver` is the only mutating path. `build_exe.bat` and
   `build_full_release.bat` must always call `/verify-only`.
-- A successful installation writes `pending_restart` with the current Windows
-  boot marker and asks whether to restart immediately, with no countdown.
-  During the same boot it only reminds the user. After boot marker changes, an
-  elevated launch rechecks CUDA and completes only when bundled PyTorch can use
-  it.
+- A successful driver installation writes `pending_restart` with the current
+  Windows boot marker and asks whether to restart immediately, with no
+  countdown. Declining restart still opens the GUI in CPU mode. Every frozen
+  launch inspects `_internal\GPU_Addon`; when present it validates the GPU
+  worker, and when a `complete_cuda` machine lacks it the downloader retries.
+  No GPU inspection, download, driver, or CUDA failure may block the GUI.
 - Tests must mock services and never call live Windows Update or `shutdown`.
   Retained video smoke tests now use only read-only
   `example\twophone.avi`. Never clean, overwrite, move, or delete files under
@@ -1386,3 +1389,49 @@ For future updates:
 - Added current first-run administrator/CUDA behavior, release-directory distinction between source `run_NewLight_Analysis.bat` and the portable EXE, current-stream NeuroAlign input, session AVI snapshots, bilateral contour troubleshooting, stale Atlas Builder ROI preview isolation, and three new NeuroAlign FAQ entries.
 - Preserved the existing 38 tables and 8 embedded visuals. Structural verification found 301 paragraphs, 22 FAQ rows, and all newly added topics in the final document.
 - LibreOffice/`soffice` is not installed on this machine, so the required DOCX-to-PNG visual render could not be completed. The existing document's image alt-text findings were not changed during this content-only revision.
+
+## DeepCAD-RT Optional GPU Addon (2026-08-04, Superseded)
+
+> This section records the intermediate DeepCAD-only split. Do not implement
+> against it. The active design is the complete GPU addon described in the
+> following section, installed under `_internal\GPU_Addon`.
+
+- Read this section before changing packaging, first-run CUDA setup, or
+  DeepCAD paths. The core PyInstaller package intentionally excludes DeepCAD
+  source and `DeepCADRT_Model\*.pth`.
+- `build_deepcad_addon.bat` creates `DeepCADRT_CUDA_Addon.zip` containing a
+  top-level `DeepCADRT_Addon` directory. Publish that exact ZIP to the GitHub
+  Release URL in `deepcad_addon_manifest.json` and keep its SHA-256 synchronized
+  with the manifest.
+- On a frozen CUDA-capable launch, `machine_setup.ensure_deepcad_addon()`
+  downloads and verifies the archive, rejects unsafe ZIP paths, and installs it
+  under `_internal\DeepCADRT_Addon`. A download failure does not block ordinary
+  analysis. AMD/Intel and CPU-only machines skip the addon.
+- Do not remove `magma`, `cusolver`, `cusparse`, or related Torch/CUDA DLLs from
+  the core package solely because DeepCAD uses them. A packaging experiment
+  proved that NeuSuite/Torch imports also depend on this shared runtime.
+- Focused packaging and machine-setup tests passed: `36 passed`. No EXE or Inno
+  Setup installer was built for this change.
+
+## Complete GPU Runtime Addon (2026-08-04)
+
+- The core package is built from `caiman_latest`, but the core spec explicitly
+  excludes Torch, TorchVision, timm, NeuSuite, and CUDA DLLs. It retains
+  CaImAn/OpenCV CPU workflows and contains no Torch runtime.
+- `NewLight_GPU_Worker.spec` builds a separate CUDA worker from
+  `caiman_latest`. `build_gpu_addon.bat` stages its CUDA runtime, worker,
+  DeepCAD source/model, NeuSuite runtime/model, and Torch under `GPU_Addon`.
+- The GPU archive is larger than GitHub's single-asset limit, so the builder
+  creates `.part01` and `.part02`. `machine_setup.ensure_gpu_addon()`
+  downloads and verifies parts and the reconstructed archive before installing
+  `_internal\GPU_Addon`.
+- `gpu_addon_manifest.json` is the active manifest. The old
+  `deepcad_addon_manifest.json` filename and `ensure_deepcad_addon` symbol are
+  accepted only as backward-compatible fallbacks for older builds.
+- `analysis_core.run_deepcadrt_denoise()` routes frozen DeepCAD execution to
+  `GPU_Addon\NewLight_GPU_Worker.exe`; the CPU worker is not used for CUDA
+  inference. Existing source-mode Conda behavior remains available.
+- GPU worker verification passed for CUDA, DeepCAD, and NeuSuite. The final
+  rebuilt core is 1,102,414,238 bytes (about 1.027 GiB) with zero Torch/CUDA
+  files. Focused packaging and
+  backend tests passed: `60 passed`; the Inno installer still needs to be built.
