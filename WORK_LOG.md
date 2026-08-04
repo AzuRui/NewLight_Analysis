@@ -1571,3 +1571,11 @@
   backend verification, troubleshooting, and GitHub large-file limitation.
 - Linked the build guide from `README.md` and added a packaging documentation
   contract test.
+
+## 2026-08-04 - Chinese README and Git LFS guidance
+
+- Rewrote the user-facing `README.md` in Chinese while preserving commands,
+  paths, model names, algorithm names, and the user's recent build guidance.
+- Added Git LFS guidance explaining pointers, storage/bandwidth quotas,
+  collaborator requirements, Release separation, and why the current
+  `2,396,163,952` byte installer still exceeds the common 2 GiB per-file limit.
