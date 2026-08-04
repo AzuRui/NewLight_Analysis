@@ -19,8 +19,7 @@ NewLight_Analysis is a Tkinter desktop GUI for two-photon / neurosurgical imagin
 - `analysis_core.py`: movie I/O, preprocessing, ROI masks, dF/F, statistics, plotting, exports, CaImAn/NeuroSeg3 helpers.
 - `launch.py`: startup gate.
 - `run_NewLight_Analysis.bat`: launcher.
-- `build_exe.bat`, `build_full_release.bat`, `NewLight_Analysis.spec`, `NewLight_Analysis_setup.iss`: packaging.
-- `README.md`, `DESIGN_NOTES.md`, `PACKAGING.md`: user/developer notes.
+- `README.md`, `DESIGN_NOTES.md`: user and project notes.
 
 ## New Chat Startup Checklist
 
@@ -33,7 +32,7 @@ When a new chat takes over this project, read this file first. Then inspect thes
 - `git log --oneline --decorate -5`: recent checkpoints and rollback targets.
 - `NewLight_Analysis.py`: especially GUI state, display canvas, ROI controls, heatmap AVI dialog, and workflow callbacks.
 - `analysis_core.py`: especially movie I/O, dF/F, ROI processing, heatmap rendering, and export functions.
-- `NewLight_Analysis.spec`, `build_exe.bat`, `build_full_release.bat`, `NewLight_Analysis_setup.iss`: packaging path if the task involves compiling or installer generation.
+- Release compilation is intentionally kept outside the user-facing repository; use the GitHub Release assets for distribution.
 
 Recommended new-chat instruction:
 

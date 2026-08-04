@@ -1,7 +1,7 @@
 # NewLight_Analysis
 
-NewLight_Analysis 是面向实验人员的荧光成像分析软件。它整合了
-双光子分析流程常用分析流程、宽场荧光 ROI 与热图分析方式、
+NewLight_Analysis 是面向实验人员的双光子成像分析软件。它整合了
+LabVIEW 双光子分析流程、`2cafe_analysis` 的 ROI 与热图分析方式、
 CaImAn 源提取算法，以及已授权的 NeuSuite 实例分割模型。
 
 软件采用低眩光的深色神经成像工作站风格，同时保持灰度图像区域的高
@@ -41,37 +41,17 @@ python NewLight_Analysis.py
 源码运行用于开发和调试。正式用户应运行打包后的
 `NewLight_Analysis.exe`，不需要打开源码环境。
 
-## 编译 EXE
-
-在安装了 Conda 的 Windows 编译机上，推荐执行：
-
-```bat
-build_portable_exe.bat
-```
-
-该脚本会先检查或准备 `caiman_latest` 编译环境，再调用
-`build_exe.bat` 生成便携版程序。已有的 CUDA、cuDNN 和 PyTorch 包会被
-保留，不会因为编译而自动替换。
-
-只准备环境而不编译：
-
-```bat
-setup_build_environment.bat
-```
-
-完整的中文环境配置、编译、验证和发布说明见：
-
-```text
-BUILD_README.md
-```
-
 ## 用户手册
 
 详细中文用户手册位于：
 
 ```text
-NewLight_Analysis_User_Manual.pdf
+docs\NewLight_Analysis_User_Manual.md
+docs\NewLight_Analysis_User_Manual.docx
+docs\NewLight_Analysis_User_Manual.pdf
 ```
+
+用户手册独立发布，不会放入核心安装包或 `dist` 目录。
 
 ## 主要功能
 
@@ -120,15 +100,6 @@ gSig = max(1, round(细胞直径 / 4))
 
 组件还可以根据时间信噪比、空间相关性和可选 CaImAn CNN 分数筛选。
 
-## 后端环境
-
-```bat
-setup_newlight_caiman.bat
-setup_neusuite_runtime.bat
-```
-
-前者准备 CaImAn 环境和 CNN 资源，后者准备 NeuSuite 纯 Python 运行时依赖。
-
 ## CUDA 限制
 
 > **重要：DeepCAD-RT 必须依赖 CUDA。** DeepCAD-RT 没有 CPU fallback，
@@ -142,7 +113,3 @@ setup_neusuite_runtime.bat
 - 投影、dF/F、平滑和 ROI 曲线提取在安装 CuPy 时可以使用 GPU。
 - 没有 CuPy 时，这些基础运算回退到 CPU/NumPy。
 - CaImAn 运动矫正速度取决于版本、CPU、磁盘和参数。
-
-
-使用前请确认模型大小、LFS 存储配额和团队成员的下载方式。不要对当前
-2.4 GB 安装包直接执行 `git lfs track`，因为它仍超过单文件限制。
