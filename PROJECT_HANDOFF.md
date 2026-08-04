@@ -1449,3 +1449,7 @@ For future updates:
   `Output\NewLight_Analysis_Core_Setup_v1.0.1.exe`, `335,482,844` bytes,
   SHA-256 `b1d727e161e10a9c922ea0401ed6f311548d4c7d0ec80ada41f4973252de5538`.
   Its source directory has zero manuals and zero Torch/CUDA/model artifacts.
+- Packaging source was subsequently removed from the user-facing Git branch.
+  Do not expect `.spec`, `.iss`, `build_exe.bat`, or installer build files in
+  the current tree. Published binaries remain under GitHub Releases; restoring
+  a build toolchain must be a deliberate developer-only task from Git history.

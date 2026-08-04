@@ -8,6 +8,13 @@ CaImAn 源提取算法，以及已授权的 NeuSuite 实例分割模型。
 对比度，便于检查成像数据。主界面使用 Python/Tkinter 实现，后台模型和
 耗时任务通过独立 worker 运行。
 
+## 下载
+
+- [NewLight Analysis Core v1.0.1](https://github.com/AzuRui/NewLight_Analysis/releases/tag/v1.0.1)：普通用户核心安装包。
+- [GPU Addon v1](https://github.com/AzuRui/NewLight_Analysis/releases/tag/gpu-addon-v1)：CUDA/Torch、DeepCAD-RT 与 NeuSuite 快速 ROI 可选扩展。
+
+没有兼容 NVIDIA/CUDA 环境时只安装核心版本即可，软件会以 CPU 模式运行。
+
 ## 软件架构
 
 - 主程序使用 Python/Tkinter，源码调试可运行 `run_NewLight_Analysis.bat`。

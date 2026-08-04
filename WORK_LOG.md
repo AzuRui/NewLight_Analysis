@@ -1,5 +1,20 @@
 # Work Log
 
+## 2026-08-04 - Removed packaging toolchain from the user repository
+
+- Removed PyInstaller specs, Inno Setup scripts, portable/installer/GPU addon
+  build batches, build-only Conda environment files, packaging documentation,
+  frozen OpenCV patch tooling, and the packaging-only contract test from the
+  GitHub default branch.
+- Kept application source, runtime workers, `gpu_addon_manifest.json`,
+  `check_backends.bat`, source-environment setup, retained functional tests,
+  and the NVIDIA driver helper. These are needed to run, maintain, or diagnose
+  the application rather than to manufacture release artifacts.
+- Simplified `README.md` to user operation and direct Release download links.
+  The already published core installer and GPU addon Release assets are not
+  affected by deleting build files from the source tree.
+- Full remaining source regression passed: `301 passed, 15 subtests passed`.
+
 ## 2026-08-04 - User-facing core installer release cleanup
 
 - Promoted `codex/unified-gpu-addon` to the GitHub default branch and deleted
