@@ -41,7 +41,7 @@ run_NewLight_Analysis.bat
 或者：
 
 ```powershell
-cd E:\WorkSpace\NewLight_Analysis
+cd E:\NewLight_Analysis
 python NewLight_Analysis.py
 ```
 
