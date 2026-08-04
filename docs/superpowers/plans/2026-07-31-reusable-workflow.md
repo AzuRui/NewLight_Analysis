@@ -2,7 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox syntax for tracking.
 
-**Goal:** Save supported parameterized preprocessing tasks from the current-data FIFO history as a versioned JSON workflow and replay them in order on any currently loaded dataset.
+**Goal:** Save supported parameterized preprocessing tasks and ROI-file loading
+tasks from the current-data FIFO history as a versioned JSON workflow and replay
+them in order on any currently loaded dataset.
 
 **Architecture:** Add a Tk-independent workflow_core.py for schema validation and JSON I/O. Extend AppTask with workflow metadata, then let NewLightApp collect descriptors, replay validated steps through run_preprocess_action, and use a workflow-run ID to cancel remaining queued steps after failure or cancellation.
 
@@ -16,7 +18,10 @@
 - Create tests/test_workflow_core.py: schema, round-trip, ordering, and invalid-document tests.
 - Modify task_queue.py: optional workflow descriptor and run ID on AppTask and enqueue_task.
 - Modify tests/test_task_queue.py: metadata preservation and workflow-run identity tests.
-- Modify NewLight_Analysis.py: UI buttons, history collection, dialogs, replay, failure propagation, and descriptor capture for nine preprocessing actions.
+- Modify NewLight_Analysis.py: UI buttons, history collection, dialogs, replay, failure propagation, and descriptor capture for the supported preprocessing actions plus `load_roi`.
+- Extension: `load_roi` records the selected ROI/atlas file path plus atlas
+  `min_area` when applicable, then reuses the existing ROI loader during replay
+  without opening another parameter dialog.
 - Create tests/test_workflow_gui.py: history filtering, replay ordering, parameter capture, and failure-stop behavior.
 - Modify tests/test_gui_static.py: larger task panel and exact button placement.
 - Modify WORK_LOG.md and PROJECT_HANDOFF.md: implementation, usage contract, verification, and manual requirements.

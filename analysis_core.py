@@ -18,6 +18,8 @@ import matplotlib
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+from matplotlib.backends.backend_agg import FigureCanvasAgg
+from matplotlib.figure import Figure
 import numpy as np
 import pandas as pd
 import tifffile
@@ -26,7 +28,7 @@ from scipy.ndimage import gaussian_filter
 from skimage import exposure, filters, measure, morphology, restoration
 from PIL import Image
 
-from roi_engines import ROIArtifactError, load_roi_artifact
+from roi_engines import ROIArtifactError, load_roi_artifact, save_roi_artifact
 
 
 IS_FROZEN = bool(getattr(sys, "frozen", False))
@@ -1044,6 +1046,44 @@ def save_movie_avi(
         writer.release()
 
 
+def save_neuroalign_input_avi(movie: np.ndarray, path: str, fs: float = 10.0) -> None:
+    """Stream the current analysis movie to a session-scoped NeuroAlign AVI."""
+    arr = np.asarray(movie)
+    if arr.ndim == 2:
+        arr = arr[None, :, :]
+    if arr.ndim != 3 or arr.shape[0] == 0:
+        raise ValueError(f"NeuroAlign 需要非空三维视频堆栈，实际 shape 为 {arr.shape}")
+
+    output_path = Path(path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    fps = float(fs) if fs and fs > 0 else 10.0
+    height, width = arr.shape[1:3]
+    writer = None
+    for codec in ("FFV1", "MJPG"):
+        candidate = cv2.VideoWriter(
+            str(output_path),
+            cv2.VideoWriter_fourcc(*codec),
+            fps,
+            (width, height),
+            isColor=False,
+        )
+        if candidate.isOpened():
+            writer = candidate
+            break
+        candidate.release()
+    if writer is None:
+        raise IOError(f"无法创建 NeuroAlign 临时 AVI：{output_path}")
+
+    limits = movie_display_limits(arr)
+    try:
+        for frame in arr:
+            writer.write(render_grayscale_display(frame, limits))
+    finally:
+        writer.release()
+    if not output_path.exists() or output_path.stat().st_size == 0:
+        raise IOError(f"NeuroAlign 临时 AVI 写入失败：{output_path}")
+
+
 def save_channel_pseudocolor_avi(
     channel_movies: tuple[np.ndarray, ...] | list[np.ndarray],
     colors: tuple[str, ...] | list[str] | None,
@@ -1054,6 +1094,8 @@ def save_channel_pseudocolor_avi(
     highlights: float = 99.0,
     brightness: float = 0.0,
     contrast: float = 100.0,
+    overlay_movies: tuple[np.ndarray, ...] | list[np.ndarray] | None = None,
+    overlay_weight: float = 0.0,
     progress=None,
 ) -> None:
     movies = [np.asarray(movie) for movie in channel_movies if movie is not None]
@@ -1066,6 +1108,9 @@ def save_channel_pseudocolor_avi(
         shapes = ", ".join(str(movie.shape) for movie in movies)
         raise ValueError(f"各通道视频必须具有相同 shape，实际为：{shapes}")
     color_names = channel_colors_for_count(colors, len(movies))
+    overlays = [np.asarray(movie) for movie in (overlay_movies or ()) if movie is not None]
+    if overlays and (len(overlays) != len(movies) or any(overlay.shape != first_shape for overlay in overlays)):
+        raise ValueError("DeepCAD-RT 伪彩叠加通道必须与原始通道数量和 shape 一致")
     frame_count, h, w = first_shape
     fps = float(fs) if fs and fs > 0 else 10.0
     Path(path).parent.mkdir(parents=True, exist_ok=True)
@@ -1074,7 +1119,13 @@ def save_channel_pseudocolor_avi(
         raise IOError(f"无法创建 AVI 视频：{path}")
     try:
         for frame_idx in range(frame_count):
-            rgb = compose_channel_pseudocolor_rgb([movie[frame_idx] for movie in movies], color_names, limits=limits)
+            images = [movie[frame_idx] for movie in movies]
+            if overlays:
+                images = [
+                    blend_images(raw, overlay[frame_idx], overlay_weight)
+                    for raw, overlay in zip(images, overlays)
+                ]
+            rgb = compose_channel_pseudocolor_rgb(images, color_names, limits=limits)
             rgb = render_rgb_display(rgb, shadows, highlights, brightness, contrast)
             writer.write(cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR))
             if progress is not None:
@@ -1092,6 +1143,8 @@ def save_channel_pseudocolor_tiff(
     highlights: float = 99.0,
     brightness: float = 0.0,
     contrast: float = 100.0,
+    overlay_movies: tuple[np.ndarray, ...] | list[np.ndarray] | None = None,
+    overlay_weight: float = 0.0,
     progress=None,
 ) -> None:
     """Write an RGB TIFF stack that matches the pseudo-colour preview."""
@@ -1102,10 +1155,19 @@ def save_channel_pseudocolor_tiff(
     if len(first_shape) != 3 or any(movie.shape != first_shape for movie in movies):
         raise ValueError("各通道视频必须是 shape 相同的三维堆栈")
     color_names = channel_colors_for_count(colors, len(movies))
+    overlays = [np.asarray(movie) for movie in (overlay_movies or ()) if movie is not None]
+    if overlays and (len(overlays) != len(movies) or any(overlay.shape != first_shape for overlay in overlays)):
+        raise ValueError("DeepCAD-RT 伪彩叠加通道必须与原始通道数量和 shape 一致")
     Path(path).parent.mkdir(parents=True, exist_ok=True)
     with tifffile.TiffWriter(path, bigtiff=True) as writer:
         for frame_idx in range(first_shape[0]):
-            rgb = compose_channel_pseudocolor_rgb([movie[frame_idx] for movie in movies], color_names, limits=limits)
+            images = [movie[frame_idx] for movie in movies]
+            if overlays:
+                images = [
+                    blend_images(raw, overlay[frame_idx], overlay_weight)
+                    for raw, overlay in zip(images, overlays)
+                ]
+            rgb = compose_channel_pseudocolor_rgb(images, color_names, limits=limits)
             rgb = render_rgb_display(rgb, shadows, highlights, brightness, contrast)
             writer.write(rgb, photometric="rgb", metadata=None)
             if progress is not None:
@@ -1155,6 +1217,23 @@ def blend_movies(raw_movie: np.ndarray, denoised_movie: np.ndarray, weight: floa
     if raw.shape != denoised.shape:
         raise ValueError(f"无法混合 shape 不同的视频：{raw.shape} 与 {denoised.shape}")
     return ((1.0 - weight) * raw + weight * denoised).astype(np.float32, copy=False)
+
+
+def blend_channel_movies(
+    raw_movies: tuple[np.ndarray, ...] | list[np.ndarray],
+    denoised_movies: tuple[np.ndarray, ...] | list[np.ndarray],
+    weight: float,
+) -> tuple[np.ndarray, ...]:
+    raw_channels = tuple(raw_movies)
+    denoised_channels = tuple(denoised_movies)
+    if len(raw_channels) != len(denoised_channels):
+        raise ValueError(
+            f"DeepCAD-RT 原始与降噪通道数量不一致：{len(raw_channels)} 与 {len(denoised_channels)}"
+        )
+    return tuple(
+        blend_movies(raw_movie, denoised_movie, weight)
+        for raw_movie, denoised_movie in zip(raw_channels, denoised_channels)
+    )
 
 
 def blend_images(raw_image: np.ndarray, denoised_image: np.ndarray, weight: float) -> np.ndarray:
@@ -2182,12 +2261,29 @@ def process_traces(traces: np.ndarray, baseline_correct: bool = True, baseline_w
     return out.astype(np.float32)
 
 
-def detect_trace_peaks(trace: np.ndarray, fs: float, prominence_scale: float = 1.0) -> np.ndarray:
-    if trace.size < 3:
+def detect_trace_peaks(
+    trace: np.ndarray,
+    fs: float,
+    prominence_scale: float = 1.0,
+    min_percentile: float | None = None,
+) -> np.ndarray:
+    data = np.asarray(trace, dtype=np.float32).reshape(-1)
+    if data.size < 3:
         return np.array([], dtype=int)
-    prominence = max(np.std(trace) * prominence_scale, 1e-6)
+    finite = np.isfinite(data)
+    if np.count_nonzero(finite) < 3:
+        return np.array([], dtype=int)
+    height = None
+    if min_percentile is not None:
+        min_percentile = float(min_percentile)
+        if not np.isfinite(min_percentile) or not 0.0 <= min_percentile <= 100.0:
+            raise ValueError("最低峰值分位数必须位于 0 到 100 之间。")
+        height = float(np.percentile(data[finite], min_percentile))
+    prominence = max(float(np.std(data[finite])) * float(prominence_scale), 1e-6)
     distance = max(1, int(fs * 0.5))
-    peaks, _ = signal.find_peaks(trace, prominence=prominence, distance=distance)
+    working = data.copy()
+    working[~finite] = -np.inf
+    peaks, _ = signal.find_peaks(working, height=height, prominence=prominence, distance=distance)
     return peaks
 
 
@@ -2291,13 +2387,25 @@ def trial_average(traces: np.ndarray, trigger_frames: np.ndarray, fs: float, pre
     return blocks, trial_t
 
 
-def roi_statistics(traces: np.ndarray, roi_names: list[str], fs: float, trigger_frames: np.ndarray | None = None) -> pd.DataFrame:
+def roi_statistics(
+    traces: np.ndarray,
+    roi_names: list[str],
+    fs: float,
+    trigger_frames: np.ndarray | None = None,
+    min_peak_percentile: float | None = None,
+    peak_prominence_scale: float = 1.0,
+) -> pd.DataFrame:
     rows = []
     for i, name in enumerate(roi_names):
         if traces is None or i >= traces.shape[1]:
             continue
         trace = traces[:, i]
-        peaks = detect_trace_peaks(trace, fs)
+        peaks = detect_trace_peaks(
+            trace,
+            fs,
+            prominence_scale=peak_prominence_scale,
+            min_percentile=min_peak_percentile,
+        )
         mean = float(np.nanmean(trace))
         std = float(np.nanstd(trace))
         rows.append({
@@ -2404,6 +2512,7 @@ def export_results(
     trigger_frames: np.ndarray | None = None,
     pre_trigger_s: float = 0.0,
     post_trigger_s: float = 0.0,
+    min_peak_percentile: float | None = None,
 ) -> dict[str, str]:
     out_dir = Path(output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -2433,7 +2542,13 @@ def export_results(
     paths["trace_plot_png"] = str(out_dir / f"{name}_traces.png")
     plot_traces(paths["trace_plot_png"], t, traces, roi_names, trigger_frames, fs)
 
-    stats = roi_statistics(traces, roi_names, fs, trigger_frames)
+    stats = roi_statistics(
+        traces,
+        roi_names,
+        fs,
+        trigger_frames,
+        min_peak_percentile=min_peak_percentile,
+    )
     paths["roi_statistics_csv"] = str(out_dir / f"{name}_ROI_statistics.csv")
     stats.to_csv(paths["roi_statistics_csv"], index=False)
     paths["roi_statistics_xlsx"] = str(out_dir / f"{name}_ROI_statistics.xlsx")
@@ -2546,8 +2661,14 @@ def draw_roi_overlay(
     return rgb
 
 
+def _export_figure(figsize: tuple[float, float]):
+    fig = Figure(figsize=figsize)
+    FigureCanvasAgg(fig)
+    return fig, fig.add_subplot(111)
+
+
 def plot_traces(path: str, t: np.ndarray, traces: np.ndarray, roi_names: list[str], trigger_frames: np.ndarray | None = None, fs: float = 10.0) -> None:
-    fig, ax = plt.subplots(figsize=(11, 5))
+    fig, ax = _export_figure((11, 5))
     if traces is not None and traces.size:
         offsets = np.arange(traces.shape[1]) * (np.nanstd(traces) * 4 + 0.1)
         for i in range(traces.shape[1]):
@@ -2570,11 +2691,10 @@ def plot_traces(path: str, t: np.ndarray, traces: np.ndarray, roi_names: list[st
     ax.grid(True, alpha=0.25)
     fig.tight_layout()
     fig.savefig(path, dpi=160)
-    plt.close(fig)
 
 
 def plot_trial_average(path: str, t: np.ndarray, mean_trial: np.ndarray, roi_names: list[str]) -> None:
-    fig, ax = plt.subplots(figsize=(10, 5))
+    fig, ax = _export_figure((10, 5))
     if mean_trial.size:
         offsets = np.arange(mean_trial.shape[1]) * (np.nanstd(mean_trial) * 4 + 0.1)
         for i in range(mean_trial.shape[1]):
@@ -2588,7 +2708,6 @@ def plot_trial_average(path: str, t: np.ndarray, mean_trial: np.ndarray, roi_nam
     ax.grid(True, alpha=0.25)
     fig.tight_layout()
     fig.savefig(path, dpi=160)
-    plt.close(fig)
 
 
 def safe_filename(text: object, fallback: str = "item") -> str:
@@ -2598,7 +2717,7 @@ def safe_filename(text: object, fallback: str = "item") -> str:
 
 def plot_event_aligned_roi(path: str, trial_t: np.ndarray, roi_trials: np.ndarray, roi_name: str, trigger_count: int) -> None:
     arr = np.asarray(roi_trials, dtype=np.float32)
-    fig, ax = plt.subplots(figsize=(7.2, 4.4))
+    fig, ax = _export_figure((7.2, 4.4))
     if arr.size:
         for trial in arr:
             ax.plot(trial_t, trial, color="0.70", linewidth=0.8, alpha=0.55)
@@ -2612,11 +2731,10 @@ def plot_event_aligned_roi(path: str, trial_t: np.ndarray, roi_trials: np.ndarra
     ax.legend(loc="best", frameon=False)
     fig.tight_layout()
     fig.savefig(path, dpi=180)
-    plt.close(fig)
 
 
 def plot_correlation(path: str, corr: np.ndarray, roi_names: list[str]) -> None:
-    fig, ax = plt.subplots(figsize=(6, 5))
+    fig, ax = _export_figure((6, 5))
     im = ax.imshow(corr, cmap="hot", vmin=-1, vmax=1)
     ax.set_xticks(np.arange(len(roi_names)))
     ax.set_yticks(np.arange(len(roi_names)))
@@ -2626,21 +2744,19 @@ def plot_correlation(path: str, corr: np.ndarray, roi_names: list[str]) -> None:
     ax.set_title("ROI 相关性")
     fig.tight_layout()
     fig.savefig(path, dpi=160)
-    plt.close(fig)
 
 
 def save_heatmap(path: str, heat: np.ndarray, mask: np.ndarray) -> None:
     data = gaussian_filter(heat.astype(np.float32), sigma=2)
     data = data.copy()
     data[~mask] = np.nan
-    fig, ax = plt.subplots(figsize=(7, 6))
+    fig, ax = _export_figure((7, 6))
     im = ax.imshow(data, cmap="jet")
     ax.set_title("均值 dF/F 热图")
     ax.axis("off")
     fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
     fig.tight_layout()
     fig.savefig(path, dpi=200)
-    plt.close(fig)
 
 
 def save_event_heatmap(path: str, heat: np.ndarray, title: str = "刺激对齐均值 dF/F", top_percent: float | None = None) -> None:
@@ -2652,14 +2768,13 @@ def save_event_heatmap(path: str, heat: np.ndarray, title: str = "刺激对齐�
         if finite.size:
             threshold = float(np.percentile(finite, 100.0 - top_percent))
             data[data < threshold] = np.nan
-    fig, ax = plt.subplots(figsize=(7, 6))
+    fig, ax = _export_figure((7, 6))
     im = ax.imshow(data, cmap="jet")
     ax.set_title(title)
     ax.axis("off")
     fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
     fig.tight_layout()
     fig.savefig(path, dpi=200)
-    plt.close(fig)
 
 
 def traces_dataframe(traces: np.ndarray, roi_names: list[str], fs: float) -> pd.DataFrame:
@@ -3302,6 +3417,67 @@ def run_caiman_roi_segmentation(
             pass
         if not succeeded:
             shutil.rmtree(job_dir, ignore_errors=True)
+
+
+def merge_caiman_multiscale_roi_results(
+    scale_results,
+    *,
+    min_snr=None,
+    rval_threshold=None,
+    require_non_cnn_evidence=False,
+):
+    """Merge independently extracted CaImAn scales into one auditable backend result."""
+    if not scale_results:
+        raise ValueError("CaImAn multiscale merge requires at least one scale result")
+    import roi_adaptation as roi_fit
+
+    candidate_sets = []
+    for diameter, result in scale_results:
+        candidate_sets.append((
+            float(diameter),
+            max(1, int(round(float(diameter) / 4.0))),
+            {
+                "masks": result.masks,
+                "names": result.names,
+                "arrays": result.arrays,
+            },
+        ))
+    merged = roi_fit.merge_caiman_multiscale_candidates(
+        candidate_sets,
+        min_snr=min_snr,
+        rval_threshold=rval_threshold,
+        require_non_cnn_evidence=require_non_cnn_evidence,
+    )
+    first_result = scale_results[0][1]
+    output_dir = first_result.artifact_path.parent / f"caiman_multiscale_{uuid.uuid4().hex[:10]}"
+    output_dir.mkdir(parents=True, exist_ok=False)
+    artifact_path = output_dir / "caiman_multiscale_rois.npz"
+    summary_path = output_dir / "caiman_multiscale_summary.json"
+    metadata = dict(first_result.metadata)
+    metadata.update(merged.metadata)
+    metadata["multiscale"] = True
+    metadata["source_artifacts"] = [str(result.artifact_path) for _diameter, result in scale_results]
+    save_roi_artifact(
+        artifact_path,
+        merged.masks,
+        image_shape=tuple(merged.masks.shape[1:]),
+        names=list(merged.names),
+        metadata=metadata,
+        extra_arrays=merged.arrays,
+    )
+    summary_path.write_text(
+        json.dumps(metadata, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    return ROIBackendResult(
+        masks=merged.masks,
+        names=list(merged.names),
+        metadata=metadata,
+        arrays=merged.arrays,
+        log="\n\n".join(result.log for _diameter, result in scale_results if result.log),
+        artifact_path=artifact_path,
+        summary_path=summary_path,
+    )
 
 
 def run_fast_roi_segmentation(

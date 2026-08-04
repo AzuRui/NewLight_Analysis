@@ -37,6 +37,27 @@ if not exist "DeepCADRT_Model\E_02_Iter_6416.pth" (
   exit /b 1
 )
 
+if not exist "..\NeuSuite2p\segment_model.pt" (
+  echo Missing NeuSuite fast ROI model:
+  echo   %CD%\..\NeuSuite2p\segment_model.pt
+  if "%PAUSE_ON_EXIT%"=="1" pause
+  exit /b 1
+)
+
+if not exist "NeuSuite_RuntimeDeps" (
+  echo Missing bundled NeuSuite runtime dependencies:
+  echo   %CD%\NeuSuite_RuntimeDeps
+  if "%PAUSE_ON_EXIT%"=="1" pause
+  exit /b 1
+)
+
+if not exist "CaImAn_Resources" (
+  echo Missing bundled CaImAn resources:
+  echo   %CD%\CaImAn_Resources
+  if "%PAUSE_ON_EXIT%"=="1" pause
+  exit /b 1
+)
+
 %BUILD_PY% -c "import pkg_resources" >nul 2>nul
 if errorlevel 1 (
   echo Installing setuptools<81 for PyInstaller pkg_resources compatibility...
@@ -60,7 +81,7 @@ if errorlevel 1 (
   )
 )
 
-%BUILD_PY% -c "import numpy, cv2, scipy, skimage, pandas, tifffile, matplotlib, torch" >nul 2>nul
+%BUILD_PY% -c "import numpy, cv2, scipy, skimage, pandas, tifffile, matplotlib, torch, torchvision, timm, caiman, igraph, leidenalg, hdmf, pynwb" >nul 2>nul
 if errorlevel 1 (
   echo The selected Python is missing NewLight_Analysis build dependencies.
   echo Please build from the caiman_latest environment or repair that environment.
@@ -90,32 +111,33 @@ if errorlevel 1 (
 
 echo Preparing dist release files...
 copy /y check_backends.bat dist\NewLight_Analysis\check_backends.bat >nul
-copy /y setup_caiman_latest.bat dist\NewLight_Analysis\setup_caiman_latest.bat >nul
+if exist "docs\NewLight_Analysis_User_Manual.md" (
+  copy /y "docs\NewLight_Analysis_User_Manual.md" "dist\NewLight_Analysis\NewLight_Analysis_User_Manual.md" >nul
+)
+if exist "docs\NewLight_Analysis_User_Manual.docx" (
+  copy /y "docs\NewLight_Analysis_User_Manual.docx" "dist\NewLight_Analysis\NewLight_Analysis_User_Manual.docx" >nul
+)
+if exist "docs\NewLight_Analysis_User_Manual.pdf" (
+  copy /y "docs\NewLight_Analysis_User_Manual.pdf" "dist\NewLight_Analysis\NewLight_Analysis_User_Manual.pdf" >nul
+)
 
-echo Writing dist launcher...
-(
-  echo @echo off
-  echo setlocal
-  echo cd /d "%%~dp0"
-  echo if not exist "NewLight_Analysis.exe" ^(
-  echo   echo NewLight_Analysis.exe was not found in:
-  echo   echo   %%CD%%
-  echo   pause
-  echo   exit /b 1
-  echo ^)
-  echo start "" "%%CD%%\NewLight_Analysis.exe"
-  echo endlocal
-) > dist\NewLight_Analysis\run_NewLight_Analysis.bat
+echo Verifying frozen backend imports...
+call "dist\NewLight_Analysis\check_backends.bat" /verify-only
+if errorlevel 1 (
+  echo Frozen backend verification failed.
+  if "%PAUSE_ON_EXIT%"=="1" pause
+  exit /b 1
+)
 
 echo.
 echo Build complete:
 echo   %CD%\dist\NewLight_Analysis\NewLight_Analysis.exe
 echo.
 echo Notes:
-echo - Source run_NewLight_Analysis.bat always runs launch.py from the project root.
-echo - Packaged launch files are generated only under dist\NewLight_Analysis.
+echo - Start the packaged application with NewLight_Analysis.exe.
+echo - No legacy setup or batch launcher is published in the release folder.
 echo - NewLight_Worker.exe is bundled under _internal for backend worker tasks.
-echo - NeuroSeg3 source/weights, NeuroAlign source, DeepCAD-RT source, and DeepCAD-RT model are bundled.
+echo - NeuSuite fast ROI model/runtime, CaImAn resources, NeuroAlign source, DeepCAD-RT source, and its model are bundled.
 echo - Run check_backends.bat inside dist\NewLight_Analysis on target machines.
 echo.
 if "%PAUSE_ON_EXIT%"=="1" pause

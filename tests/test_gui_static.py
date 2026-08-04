@@ -20,6 +20,13 @@ class GuiStaticTests(unittest.TestCase):
         self.assertIn("side = ui_background.BackgroundPane", source)
         self.assertIn("main = ui_background.BackgroundPane", source)
 
+    def test_main_window_schedules_default_maximization(self):
+        source = Path("NewLight_Analysis.py").read_text(encoding="utf-8")
+
+        self.assertIn('self.root.geometry("1440x920")', source)
+        self.assertIn("self.root.after_idle(self._maximize_main_window)", source)
+        self.assertIn('self.root.state("zoomed")', source)
+
     def test_empty_preview_draws_window_background(self):
         source = Path("NewLight_Analysis.py").read_text(encoding="utf-8")
 
@@ -62,6 +69,22 @@ class GuiStaticTests(unittest.TestCase):
         self.assertIn("def _reset_parameter_scroll_position", source)
         self.assertIn("self._reset_parameter_scroll_position()", source)
 
+    def test_task_flow_panel_has_larger_canvas_and_reusable_workflow_actions(self):
+        source = Path("NewLight_Analysis.py").read_text(encoding="utf-8")
+        start = source.index("    def _build_task_flow_panel(self):")
+        end = source.index("    def _on_task_flow_inner_configure", start)
+        method = source[start:end]
+
+        self.assertIn("height=250", method)
+        self.assertIn("workflow_actions = ttk.Frame(self.task_flow_panel)", method)
+        self.assertIn("workflow_actions.columnconfigure(0, weight=1)", method)
+        self.assertIn("workflow_actions.columnconfigure(1, weight=1)", method)
+        self.assertIn('text="保存当前工作流"', method)
+        self.assertIn("command=self.save_current_workflow", method)
+        self.assertIn('text="执行工作流"', method)
+        self.assertIn("command=self.execute_workflow", method)
+        self.assertIn('style="Accent.TButton"', method)
+
     def test_parameter_panel_supports_embedded_paths_checkboxes_and_actions(self):
         source = Path("NewLight_Analysis.py").read_text(encoding="utf-8")
         start = source.index("    def show_parameter_panel(")
@@ -94,6 +117,13 @@ class GuiStaticTests(unittest.TestCase):
         self.assertNotIn("NeuroSeg3Dialog", method("neuroseg3_roi", "_run_neuroseg3_from_panel"))
         self.assertIn("self._show_heatmap_video_panel", method("generate_heatmap_avi", "_show_heatmap_video_panel"))
         self.assertNotIn("HeatmapVideoDialog", method("generate_heatmap_avi", "_show_heatmap_video_panel"))
+
+    def test_neuroalign_preview_hides_previous_roi_overlay(self):
+        source = Path("NewLight_Analysis.py").read_text(encoding="utf-8")
+        redraw = source[source.index("    def redraw("):source.index("    def draw_auto_crop_overlay", source.index("    def redraw("))]
+
+        self.assertIn('display_source", (None,))[0] != "neuroalign_preview"', redraw)
+        self.assertIn('roi_masks = self.state.roi_masks if show_roi_overlay else []', redraw)
 
     def test_preprocess_buttons_use_embedded_parameter_panel(self):
         source = Path("NewLight_Analysis.py").read_text(encoding="utf-8")
@@ -266,6 +296,22 @@ class GuiStaticTests(unittest.TestCase):
             self.assertIn("不训练或修改模型权重", methods)
         self.assertIn("从当前 ROI 填入面积", fast_methods)
 
+    def test_caiman_roi_exposes_range_adaptive_size_mode_and_multiscale_merge(self):
+        source = Path("NewLight_Analysis.py").read_text(encoding="utf-8")
+        caiman_start = source.index("    def caiman_roi(self):")
+        fast_start = source.index("    def fast_roi(self):", caiman_start)
+        caiman_methods = source[caiman_start:fast_start]
+
+        self.assertIn('"size_mode"', caiman_methods)
+        self.assertIn('("range_adaptive", "范围自适应（推荐）")', caiman_methods)
+        self.assertIn('"cell_diameter_min"', caiman_methods)
+        self.assertIn('"cell_diameter_max"', caiman_methods)
+        self.assertIn("def _caiman_diameter_defaults(saved):", source)
+        self.assertIn('legacy_diameter * 2.0', source)
+        self.assertIn("suggest_cell_diameter_range(", caiman_methods)
+        self.assertIn("caiman_multiscale_diameters(", caiman_methods)
+        self.assertIn("core.merge_caiman_multiscale_roi_results(", caiman_methods)
+
     def test_adaptive_roi_uses_separate_banks_signatures_and_stale_guards(self):
         source = Path("NewLight_Analysis.py").read_text(encoding="utf-8")
 
@@ -330,6 +376,26 @@ class GuiStaticTests(unittest.TestCase):
         self.assertIn('"type": "roi_table"', method)
         self.assertIn("core.roi_color_hex(index)", method)
         self.assertIn("np.count_nonzero(mask)", method)
+
+    def test_roi_list_clear_action_removes_all_rois(self):
+        source = Path("NewLight_Analysis.py").read_text(encoding="utf-8")
+        start = source.index("    def show_roi_list(self):")
+        end = source.index("    def clear_roi_highlight", start)
+        method = source[start:end]
+
+        self.assertIn('"text": "清空全部 ROI"', method)
+        self.assertIn('"command": self.clear_rois', method)
+
+    def test_parameter_panel_does_not_add_a_generic_clear_button(self):
+        source = Path("NewLight_Analysis.py").read_text(encoding="utf-8")
+        start = source.index("    def show_parameter_panel(")
+        end = source.index("    def show_roi_list(self):", start)
+        method = source[start:end]
+
+        self.assertNotIn('else "清空"', method)
+        self.assertNotIn("else self.clear_parameter_panel", method)
+        self.assertIn("if cancel_command is not None:", method)
+        self.assertIn('text="取消"', method)
 
     def test_parameter_panel_supports_roi_color_table(self):
         source = Path("NewLight_Analysis.py").read_text(encoding="utf-8")

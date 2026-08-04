@@ -114,6 +114,14 @@ class AdaptiveROIResult:
     low_quality_count: int
 
 
+@dataclass(frozen=True)
+class MultiScaleCaimanCandidates:
+    masks: np.ndarray
+    names: tuple[str, ...]
+    arrays: dict[str, np.ndarray]
+    metadata: dict
+
+
 def normalized_finite_image(image):
     array = np.asarray(image, dtype=np.float32)
     finite = np.isfinite(array)
@@ -515,6 +523,176 @@ def suggest_cell_diameter(masks, current_value):
     if not diameters:
         return float(current_value)
     return float(np.median(np.asarray(diameters, dtype=np.float32)))
+
+
+def suggest_cell_diameter_range(masks, current_min, current_max):
+    """Estimate an inclusive CaImAn cell-diameter range from hand-drawn ROI masks."""
+    minimum = float(current_min)
+    maximum = max(minimum, float(current_max))
+    diameters = sorted(
+        2.0 * np.sqrt(int(np.count_nonzero(mask)) / np.pi)
+        for mask in masks
+        if np.any(mask)
+    )
+    if not diameters:
+        return minimum, maximum
+    suggested_max = max(1.0, float(round(diameters[-1] * 1.1)))
+    if len(diameters) == 1:
+        return minimum, max(minimum, suggested_max)
+    suggested_min = max(1.0, float(round(diameters[0] * 0.9)))
+    return suggested_min, max(suggested_min, suggested_max)
+
+
+def caiman_multiscale_diameters(minimum, maximum):
+    """Return representative diameters with no redundant CaImAn gSig values."""
+    low = float(minimum)
+    high = float(maximum)
+    if not np.isfinite(low) or not np.isfinite(high) or low <= 0 or high < low:
+        raise ValueError("Cell diameter range must satisfy 0 < minimum <= maximum")
+    candidates = (low, float(np.sqrt(low * high)), high)
+    selected = []
+    seen_gsig = set()
+    for diameter in candidates:
+        gsig = max(1, int(round(diameter / 4.0)))
+        if gsig not in seen_gsig:
+            selected.append(float(round(diameter, 4)))
+            seen_gsig.add(gsig)
+    return tuple(selected)
+
+
+def _trace_correlation(first, second):
+    first_values = np.asarray(first, dtype=np.float32).reshape(-1)
+    second_values = np.asarray(second, dtype=np.float32).reshape(-1)
+    if first_values.size < 3 or first_values.shape != second_values.shape:
+        return 0.0
+    finite = np.isfinite(first_values) & np.isfinite(second_values)
+    if int(np.count_nonzero(finite)) < 3:
+        return 0.0
+    first_values = first_values[finite]
+    second_values = second_values[finite]
+    first_values = first_values - np.mean(first_values)
+    second_values = second_values - np.mean(second_values)
+    denominator = float(np.linalg.norm(first_values) * np.linalg.norm(second_values))
+    if denominator <= 1e-8:
+        return 0.0
+    return float(np.clip(np.dot(first_values, second_values) / denominator, -1.0, 1.0))
+
+
+def _caiman_candidate_quality(arrays, index):
+    accepted = bool(np.asarray(arrays.get("preset_accepted", []), dtype=bool)[index])
+    cnn = float(np.asarray(arrays.get("cnn_scores", []), dtype=np.float32)[index])
+    rval = float(np.asarray(arrays.get("r_values", []), dtype=np.float32)[index])
+    snr = float(np.asarray(arrays.get("snr", []), dtype=np.float32)[index])
+    return (
+        int(accepted),
+        int(np.isfinite(cnn)), np.nan_to_num(cnn, nan=-np.inf),
+        int(np.isfinite(rval)), np.nan_to_num(rval, nan=-np.inf),
+        int(np.isfinite(snr)), np.nan_to_num(snr, nan=-np.inf),
+    )
+
+
+def _caiman_candidates_are_duplicates(first, second):
+    iou = _mask_iou(first["mask"], second["mask"])
+    if iou >= 0.60:
+        return True
+    if iou < 0.35:
+        return False
+    first_trace = first["arrays"].get("traces", np.empty((0,)))[first["index"]]
+    second_trace = second["arrays"].get("traces", np.empty((0,)))[second["index"]]
+    return _trace_correlation(first_trace, second_trace) >= 0.85
+
+
+def merge_caiman_multiscale_candidates(
+    candidate_sets,
+    *,
+    min_snr=None,
+    rval_threshold=None,
+    require_non_cnn_evidence=False,
+):
+    """Fuse independently extracted CaImAn scales while retaining aligned quality data."""
+    candidates = []
+    array_keys = None
+    image_shape = None
+    for diameter, gsig, result in candidate_sets:
+        masks = np.asarray(result["masks"], dtype=bool)
+        names = tuple(str(name) for name in result["names"])
+        arrays = {key: np.asarray(value) for key, value in dict(result["arrays"]).items()}
+        if masks.ndim != 3 or masks.shape[0] != len(names):
+            raise ValueError("CaImAn multiscale candidates require aligned masks and names")
+        if image_shape is None:
+            image_shape = masks.shape[1:]
+            array_keys = tuple(sorted(arrays))
+        elif masks.shape[1:] != image_shape or set(arrays) != set(array_keys):
+            raise ValueError("CaImAn multiscale candidates must share image shape and quality arrays")
+        for key, values in arrays.items():
+            if values.ndim == 0 or values.shape[0] != masks.shape[0]:
+                raise ValueError(f"CaImAn multiscale quality array {key!r} is not aligned")
+        for index, mask in enumerate(masks):
+            candidates.append({
+                "mask": mask.copy(),
+                "name": names[index],
+                "arrays": arrays,
+                "index": index,
+                "diameter": float(diameter),
+                "gsig": int(gsig),
+            })
+    if image_shape is None:
+        return MultiScaleCaimanCandidates(
+            masks=np.zeros((0, 0, 0), dtype=bool), names=(), arrays={},
+            metadata={"multiscale_duplicate_count": 0, "scale_diameters": []},
+        )
+
+    quality_rejected_count = 0
+    if require_non_cnn_evidence:
+        if min_snr is None or rval_threshold is None:
+            raise ValueError("Multiscale quality gating requires SNR and spatial-correlation thresholds")
+        eligible = []
+        for candidate in candidates:
+            index = candidate["index"]
+            arrays = candidate["arrays"]
+            snr = float(np.asarray(arrays["snr"], dtype=np.float32)[index])
+            rval = float(np.asarray(arrays["r_values"], dtype=np.float32)[index])
+            supported = any(
+                other["gsig"] != candidate["gsig"]
+                and _caiman_candidates_are_duplicates(candidate, other)
+                for other in candidates
+            )
+            if snr >= float(min_snr) or rval >= float(rval_threshold) or supported:
+                eligible.append(candidate)
+            else:
+                quality_rejected_count += 1
+        candidates = eligible
+
+    ordered = sorted(
+        candidates,
+        key=lambda item: _caiman_candidate_quality(item["arrays"], item["index"]),
+        reverse=True,
+    )
+    kept = []
+    duplicate_count = 0
+    for candidate in ordered:
+        duplicate = any(_caiman_candidates_are_duplicates(candidate, existing) for existing in kept)
+        if duplicate:
+            duplicate_count += 1
+        else:
+            kept.append(candidate)
+
+    arrays = {
+        key: np.asarray([item["arrays"][key][item["index"]] for item in kept])
+        for key in array_keys
+    }
+    arrays["scale_diameter"] = np.asarray([item["diameter"] for item in kept], dtype=np.float32)
+    arrays["scale_gsig"] = np.asarray([item["gsig"] for item in kept], dtype=np.int32)
+    return MultiScaleCaimanCandidates(
+        masks=np.asarray([item["mask"] for item in kept], dtype=bool).reshape((-1,) + image_shape),
+        names=tuple(item["name"] for item in kept),
+        arrays=arrays,
+        metadata={
+            "multiscale_duplicate_count": duplicate_count,
+            "multiscale_quality_rejected_count": quality_rejected_count,
+            "scale_diameters": sorted({float(item["diameter"]) for item in candidates}),
+        },
+    )
 
 
 def candidate_source_signature(

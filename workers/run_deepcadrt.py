@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import argparse
 import os
-import shutil
 import sys
 import tempfile
 import types
@@ -97,6 +96,31 @@ def infer_required_fmap(model_dir: Path) -> int | None:
         return None
 
 
+def pad_short_movie_for_temporal_stitching(
+    movie: np.ndarray,
+    patch_t: int,
+    overlap: float,
+) -> tuple[np.ndarray, int]:
+    """Pad short inputs so DeepCAD-RT's temporal stitcher covers every frame.
+
+    The upstream stitcher writes only the leading half of a single temporal
+    patch.  A movie no longer than one patch therefore leaves its trailing
+    frames as zeros.  Extending it to one patch plus one stride makes the
+    stitcher emit a leading and a trailing patch; the caller crops the result
+    back to the original frame count.
+    """
+    source = np.asarray(movie)
+    if source.ndim != 3 or source.shape[0] < 1:
+        raise ValueError(f"DeepCAD-RT expects a nonempty 3D movie stack, got shape {source.shape}.")
+    patch_t = max(4, int(patch_t))
+    gap_t = max(1, int(patch_t * (1.0 - float(overlap))))
+    minimum_frames = patch_t + gap_t
+    if source.shape[0] > patch_t:
+        return source, int(source.shape[0])
+    padded = np.pad(source, ((0, minimum_frames - source.shape[0]), (0, 0), (0, 0)), mode="edge")
+    return padded, int(source.shape[0])
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run DeepCAD-RT denoising for NewLight Analysis.")
     parser.add_argument("--input", required=True)
@@ -140,9 +164,10 @@ def main() -> int:
         movie = movie[None, :, :]
     if movie.ndim != 3:
         raise ValueError(f"DeepCAD-RT expects a 3D movie stack, got shape {movie.shape}.")
-    t, h, w = movie.shape
+    original_frames, h, w = movie.shape
     patch_xy = max(8, min(int(args.patch_xy), int(h), int(w)))
-    patch_t = max(4, min(int(args.patch_t), int(t)))
+    patch_t = max(4, int(args.patch_t))
+    work_movie, original_frames = pad_short_movie_for_temporal_stitching(movie, patch_t, args.overlap)
 
     pth_dir, model_name, model_dir = resolve_model_location(deepcad_dir, args.model.strip() or None)
     inferred_fmap = infer_required_fmap(model_dir)
@@ -155,7 +180,7 @@ def main() -> int:
         datasets_dir.mkdir(parents=True, exist_ok=True)
         results_dir.mkdir(parents=True, exist_ok=True)
         work_input = datasets_dir / "input.tif"
-        shutil.copy2(input_path, work_input)
+        tifffile.imwrite(work_input, work_movie, photometric="minisblack")
 
         test_dict = {
             "patch_x": patch_xy,
@@ -163,7 +188,7 @@ def main() -> int:
             "patch_t": patch_t,
             "overlap_factor": float(args.overlap),
             "scale_factor": 1,
-            "test_datasize": int(t),
+            "test_datasize": int(work_movie.shape[0]),
             "datasets_path": "datasets",
             "pth_dir": str(pth_dir),
             "denoise_model": model_name,
@@ -176,6 +201,12 @@ def main() -> int:
         print(f"DeepCAD-RT model: {model_name}")
         print(f"DeepCAD-RT model folder: {model_dir}")
         print(f"DeepCAD-RT input shape: {movie.shape}")
+        if work_movie.shape[0] != original_frames:
+            print(
+                "DeepCAD-RT temporal padding: "
+                f"{original_frames} -> {work_movie.shape[0]} frames (edge replication); "
+                "the result will be cropped to the original length."
+            )
         print(f"DeepCAD-RT patch_xy={patch_xy}, patch_t={patch_t}, overlap={args.overlap}, fmap={fmap}")
         old_cwd = Path.cwd()
         os.chdir(tmp_dir)
@@ -191,8 +222,11 @@ def main() -> int:
         denoised = np.asarray(denoised)
         if denoised.ndim == 2:
             denoised = denoised[None, :, :]
-        if denoised.shape != movie.shape:
-            raise RuntimeError(f"DeepCAD-RT output shape {denoised.shape} does not match input {movie.shape}.")
+        if denoised.ndim != 3 or denoised.shape[1:] != movie.shape[1:] or denoised.shape[0] < original_frames:
+            raise RuntimeError(
+                f"DeepCAD-RT output shape {denoised.shape} does not match padded input {work_movie.shape}."
+            )
+        denoised = denoised[:original_frames]
         tifffile.imwrite(output_path, denoised.astype(movie.dtype, copy=False), photometric="minisblack")
 
     print(f"DeepCAD-RT denoised movie saved: {output_path}")

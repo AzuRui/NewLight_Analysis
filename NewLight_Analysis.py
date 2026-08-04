@@ -10,6 +10,7 @@ import threading
 import time
 import traceback
 import tempfile
+import uuid
 from pathlib import Path
 from tkinter import filedialog, messagebox, simpledialog, ttk
 import tkinter as tk
@@ -17,6 +18,8 @@ import tkinter as tk
 import matplotlib
 
 matplotlib.use("TkAgg")
+matplotlib.rcParams["font.sans-serif"] = ["Microsoft YaHei", "SimHei", "Arial Unicode MS", "DejaVu Sans"]
+matplotlib.rcParams["axes.unicode_minus"] = False
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
 from matplotlib.figure import Figure
 from matplotlib.patches import Rectangle
@@ -26,6 +29,7 @@ from PIL import Image, ImageTk
 import analysis_core as core
 import roi_adaptation as roi_fit
 import ui_background
+import workflow_core
 from task_queue import TaskCancelled, TaskController, TaskState
 from ui_text_zh import MODEL_NAMES, PREPROCESS_PANEL_SPECS, ROI_STAT_COLUMN_LABELS
 
@@ -162,6 +166,42 @@ def neuroalign_recommended_cfg() -> dict:
     return out
 
 
+NEUROALIGN_INTEGER_CFG_KEYS = {
+    "outer_resample_n",
+    "outer_anchor_count",
+    "midline_anchor_count",
+    "min_inner_ctrl_for_tps",
+    "auto_rerun_max_attempts",
+    "min_n_segments",
+    "max_n_segments",
+    "min_cluster_size_superpixels",
+    "inner_max_pairs_per_hemi",
+}
+NEUROALIGN_FLOAT_LIST_CFG_KEYS = {"tps_smooth_candidates"}
+
+
+def parse_neuroalign_cfg_values(values: dict) -> dict:
+    cfg = neuroalign_recommended_cfg()
+    for key, raw_value in values.items():
+        raw = str(raw_value).strip()
+        if raw == "":
+            continue
+        if key in NEUROALIGN_FLOAT_LIST_CFG_KEYS:
+            parts = [part.strip() for part in raw.split(",") if part.strip()]
+            if not parts:
+                raise ValueError(f"{key} 至少需要一个数值。")
+            try:
+                numbers = [float(part) for part in parts]
+            except ValueError as exc:
+                raise ValueError(f"{key} 必须是用英文逗号分隔的数值列表。") from exc
+            cfg[key] = ",".join(f"{number:g}" for number in numbers)
+        elif key in NEUROALIGN_INTEGER_CFG_KEYS:
+            cfg[key] = int(float(raw))
+        else:
+            cfg[key] = float(raw)
+    return cfg
+
+
 def default_neuroalign_outdir(prefix: str) -> str:
     stamp = time.strftime("%Y%m%d_%H%M%S")
     return str(NEUROALIGN_RUNS_DIR / f"{prefix}_{stamp}")
@@ -276,6 +316,59 @@ class ImageToolbar(NavigationToolbar2Tk):
     def set_message(self, s):
         super().set_message(s)
         self._style_message_label()
+
+
+def wrapped_view_index(current, count, delta):
+    count = int(count)
+    if count <= 0:
+        raise ValueError("ROI 数量必须大于 0。")
+    current = int(current)
+    if current < 0 or current >= count:
+        current = 0
+    return (current + int(delta)) % count
+
+
+def peak_scroll_delta(event):
+    button = getattr(event, "button", None)
+    step = getattr(event, "step", 0)
+    if button == "up" or step > 0:
+        return -1
+    if button == "down" or step < 0:
+        return 1
+    return 0
+
+
+class PeakPlotToolbar(ImageToolbar):
+    toolitems = tuple(
+        (
+            item[0],
+            "上一个 ROI" if item[3] == "back" else "下一个 ROI" if item[3] == "forward" else item[1],
+            item[2],
+            item[3],
+        )
+        if item is not None
+        else None
+        for item in ImageToolbar.toolitems
+    )
+
+    def __init__(self, *args, **kwargs):
+        self._view_step_callback = None
+        super().__init__(*args, **kwargs)
+
+    def set_view_step_callback(self, callback):
+        self._view_step_callback = callback
+
+    def back(self, *args):
+        if self._view_step_callback is not None:
+            self._view_step_callback(-1)
+            return
+        super().back(*args)
+
+    def forward(self, *args):
+        if self._view_step_callback is not None:
+            self._view_step_callback(1)
+            return
+        super().forward(*args)
 
 
 def apply_dark_theme(root):
@@ -1571,6 +1664,7 @@ class NewLightApp:
             except tk.TclError:
                 pass
         self.root.geometry("1440x920")
+        self.root.after_idle(self._maximize_main_window)
         self.state = core.AnalysisState()
         self.session_temp_dir = Path(tempfile.mkdtemp(prefix="newlight_session_"))
         self._session_temp_cleaned = False
@@ -1579,6 +1673,7 @@ class NewLightApp:
         self.projection_mode = tk.StringVar(value="mean")
         self.status = tk.StringVar(value="就绪")
         self.task_controller = TaskController()
+        self.workflow_runs = {}
         self.ui_callback_queue = queue.Queue()
         self._task_flow_signature = None
         self.current_polygon = []
@@ -1612,6 +1707,7 @@ class NewLightApp:
         self.display_contrast_var = tk.StringVar(value="100")
         self.movie_import_depth_var = tk.StringVar(value="自动")
         self.deepcad_denoised_movie = None
+        self.deepcad_denoised_channels = ()
         self.deepcad_cache_movie_id = None
         self.deepcad_cache_invalid_start_frames = None
         self.deepcad_projection_cache = {}
@@ -1933,6 +2029,18 @@ class NewLightApp:
         self.canvas.mpl_connect("button_release_event", self.on_release)
         self.canvas.mpl_connect("scroll_event", self.on_scroll)
 
+    def _maximize_main_window(self):
+        """Maximize the visible main window after Tk finishes its first layout."""
+        try:
+            if self.root.state() == "withdrawn":
+                return
+            self.root.state("zoomed")
+        except tk.TclError:
+            try:
+                self.root.attributes("-zoomed", True)
+            except tk.TclError:
+                pass
+
     def _build_task_flow_panel(self):
         self.task_flow_panel = ttk.LabelFrame(self.parameter_panel, text="当前数据任务流", padding=5)
         self.task_flow_panel.grid(row=1, column=0, sticky="ew", pady=(8, 0))
@@ -1951,7 +2059,7 @@ class NewLightApp:
         body.columnconfigure(0, weight=1)
         self.task_flow_canvas = tk.Canvas(
             body,
-            height=185,
+            height=250,
             bg=THEME["panel"],
             highlightthickness=1,
             highlightbackground=THEME["border"],
@@ -1965,6 +2073,22 @@ class NewLightApp:
         self.task_flow_window = self.task_flow_canvas.create_window((0, 0), window=self.task_flow_inner, anchor="nw")
         self.task_flow_inner.bind("<Configure>", self._on_task_flow_inner_configure)
         self.task_flow_canvas.bind("<Configure>", self._on_task_flow_canvas_configure)
+
+        workflow_actions = ttk.Frame(self.task_flow_panel)
+        workflow_actions.grid(row=2, column=0, sticky="ew", pady=(6, 0))
+        workflow_actions.columnconfigure(0, weight=1)
+        workflow_actions.columnconfigure(1, weight=1)
+        ttk.Button(
+            workflow_actions,
+            text="保存当前工作流",
+            command=self.save_current_workflow,
+        ).grid(row=0, column=0, sticky="ew", padx=(0, 3))
+        ttk.Button(
+            workflow_actions,
+            text="执行工作流",
+            command=self.execute_workflow,
+            style="Accent.TButton",
+        ).grid(row=0, column=1, sticky="ew", padx=(3, 0))
         self.render_task_flow(force=True)
 
     def _on_task_flow_inner_configure(self, _event=None):
@@ -2085,6 +2209,108 @@ class NewLightApp:
             self.render_task_flow(force=True)
         else:
             self.log("当前任务不支持立即取消，或没有正在执行的任务。")
+
+    def current_reusable_workflow_steps(self):
+        """Return supported descriptors from the current dataset task history."""
+        reusable_states = {TaskState.COMPLETED, TaskState.RUNNING, TaskState.QUEUED}
+        steps = []
+        skipped = 0
+        for task_index, task in enumerate(self.task_controller.history, 1):
+            if task.state not in reusable_states or task.workflow_step is None:
+                skipped += 1
+                continue
+            try:
+                steps.append(workflow_core.normalize_step(task.workflow_step, task_index))
+            except workflow_core.WorkflowValidationError:
+                skipped += 1
+        return steps, skipped
+
+    def workflow_default_dir(self):
+        source_path = getattr(self.state, "source_path", None)
+        if source_path:
+            source = Path(source_path)
+            if source.is_dir():
+                return source
+            return source.parent
+        return APP_DIR
+
+    def save_current_workflow(self):
+        steps, skipped = self.current_reusable_workflow_steps()
+        if not steps:
+            message = "当前任务流没有可保存的工作流步骤。"
+            self.set_parameter_feedback(message, error=True)
+            self.log(message)
+            return None
+        path = filedialog.asksaveasfilename(
+            title="保存当前工作流",
+            initialdir=str(self.workflow_default_dir()),
+            initialfile="NewLight_workflow.nlworkflow.json",
+            defaultextension=".nlworkflow.json",
+            filetypes=[("NewLight 工作流", "*.nlworkflow.json"), ("JSON 文件", "*.json")],
+            confirmoverwrite=True,
+        )
+        if not path:
+            self.log("已取消保存工作流。")
+            return None
+        try:
+            workflow_core.save_workflow(path, steps)
+        except (OSError, workflow_core.WorkflowValidationError) as exc:
+            message = f"工作流保存失败：{exc}"
+            self.set_parameter_feedback(message, error=True)
+            self.log(message)
+            return None
+        message = f"工作流已保存：{path}（保存 {len(steps)} 项，跳过 {skipped} 项）"
+        self.set_parameter_feedback(message)
+        self.log(message)
+        return Path(path)
+
+    def execute_workflow(self):
+        if getattr(self.state, "movie", None) is None:
+            message = "请先载入视频数据，再执行工作流。"
+            self.set_parameter_feedback(message, error=True)
+            self.log(message)
+            return None
+        path = filedialog.askopenfilename(
+            title="执行工作流",
+            initialdir=str(self.workflow_default_dir()),
+            filetypes=[("NewLight 工作流", "*.nlworkflow.json"), ("JSON 文件", "*.json")],
+        )
+        if not path:
+            self.log("已取消执行工作流。")
+            return None
+        try:
+            document = workflow_core.load_workflow(path)
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            message = f"工作流读取失败：{exc}"
+            self.set_parameter_feedback(message, error=True)
+            self.log(message)
+            return None
+
+        run_id = uuid.uuid4().hex
+        self.workflow_runs[run_id] = "running"
+        steps = document["steps"]
+        for step_index, step in enumerate(steps):
+            try:
+                task = self.run_preprocess_action(
+                    step["function"],
+                    dict(step["parameters"]),
+                    workflow_run_id=run_id,
+                    workflow_is_last=step_index == len(steps) - 1,
+                )
+                if task is None:
+                    raise RuntimeError(f"第 {step_index + 1} 步未能加入任务流")
+            except BaseException as exc:
+                if self.workflow_runs.get(run_id) == "running":
+                    self.workflow_runs[run_id] = "failed"
+                message = f"工作流第 {step_index + 1} 步提交失败：{exc}"
+                self.set_parameter_feedback(message, error=True)
+                self.log(message)
+                break
+        else:
+            self.set_parameter_feedback(f"已提交工作流：{len(steps)} 项")
+            self.log(f"已提交工作流：{Path(path).name}（{len(steps)} 项，运行 ID={run_id[:8]}）")
+        self.render_task_flow(force=True)
+        return run_id
 
     def post_ui_callback(self, callback, *args):
         """Allow a worker to request a small Tk-only progress update."""
@@ -2447,9 +2673,13 @@ class NewLightApp:
             ttk.Button(button_row, text="恢复默认", command=self.reset_parameter_panel).grid(row=0, column=0, sticky="ew", padx=(0, 4))
             ttk.Button(button_row, text=apply_text, style="Accent.TButton", command=self.run_parameter_action).grid(row=0, column=1, sticky="ew", padx=(4, 0))
             row += 1
-        close_text = "取消" if cancel_command is not None else "清空"
-        close_command = cancel_command if cancel_command is not None else self.clear_parameter_panel
-        ttk.Button(self.parameter_content, text=close_text, command=close_command).grid(row=row, column=0, sticky="ew", pady=(8, 0))
+        if cancel_command is not None:
+            ttk.Button(self.parameter_content, text="取消", command=cancel_command).grid(
+                row=row,
+                column=0,
+                sticky="ew",
+                pady=(8, 0),
+            )
         self._reset_parameter_scroll_position()
 
     def show_roi_list(self):
@@ -2473,12 +2703,19 @@ class NewLightApp:
         )
         self.show_parameter_panel(
             "当前 ROI 列表",
-            [{
-                "type": "roi_table",
-                "rows": rows,
-                "on_select": self.select_roi_from_list,
-                "selected_index": self.highlighted_roi_index,
-            }],
+            [
+                {
+                    "type": "roi_table",
+                    "rows": rows,
+                    "on_select": self.select_roi_from_list,
+                    "selected_index": self.highlighted_roi_index,
+                },
+                {
+                    "type": "action",
+                    "text": "清空全部 ROI",
+                    "command": self.clear_rois,
+                },
+            ],
             description=description,
             panel_id="roi_list",
         )
@@ -2520,7 +2757,13 @@ class NewLightApp:
     def run_parameter_action(self):
         if self.parameter_apply_command is None:
             return
-        self.parameter_apply_command(self.panel_parameter_values())
+        try:
+            self.parameter_apply_command(self.panel_parameter_values())
+        except Exception as exc:
+            message = f"参数任务提交失败：{exc}"
+            self.set_parameter_feedback(message, error=True)
+            self.log(message)
+            self.log(traceback.format_exc()[-2000:])
 
     def on_canvas_resize(self, event):
         if self.state.display_image is not None or self.state.baseline_image is not None:
@@ -2667,6 +2910,7 @@ class NewLightApp:
             shutil.rmtree(self.session_temp_dir, ignore_errors=True)
         except Exception:
             pass
+
 
     def on_close(self):
         self.cleanup_session_temp()
@@ -2871,16 +3115,27 @@ class NewLightApp:
         )
 
     def deepcad_cache_is_current(self):
-        return (
+        movie_current = (
             self.deepcad_denoised_movie is not None
             and self.state.movie is not None
             and self.deepcad_cache_movie_id == id(self.state.movie)
             and self.deepcad_cache_invalid_start_frames == self.state.invalid_start_frames
             and self.deepcad_denoised_movie.shape == self.state.movie.shape
         )
+        if not movie_current:
+            return False
+        channels = self.channel_movies()
+        if not channels:
+            return True
+        denoised_channels = tuple(getattr(self, "deepcad_denoised_channels", ()) or ())
+        return (
+            len(denoised_channels) == len(channels)
+            and all(denoised.shape == raw.shape for raw, denoised in zip(channels, denoised_channels))
+        )
 
     def clear_deepcad_cache(self):
         self.deepcad_denoised_movie = None
+        self.deepcad_denoised_channels = ()
         self.deepcad_cache_movie_id = None
         self.deepcad_cache_invalid_start_frames = None
         self.deepcad_projection_cache = {}
@@ -2918,11 +3173,41 @@ class NewLightApp:
     def deepcad_temp_dir(self):
         return self.temp_work_dir("DeepCAD-RT")
 
+    def run_deepcad_sources(
+        self,
+        channel_sources,
+        movie,
+        out_dir,
+        invalid_start_frames,
+        cancel_event,
+    ):
+        sources = tuple(channel_sources) or (movie,)
+        denoised_channels = []
+        logs = []
+        for channel_index, source_movie in enumerate(sources, start=1):
+            if cancel_event.is_set():
+                raise TaskCancelled()
+            denoised, log = core.run_deepcadrt_denoise(
+                source_movie,
+                str(out_dir),
+                invalid_start_frames=invalid_start_frames,
+            )
+            denoised_channels.append(denoised)
+            if log:
+                logs.append(f"Ch{channel_index}:\n{log}")
+        denoised_movie = core.two_photon_analysis_movie(tuple(denoised_channels))
+        return (
+            denoised_movie,
+            tuple(denoised_channels) if channel_sources else (),
+            "\n".join(logs),
+        )
+
     def ensure_deepcad_cache_async(self):
         if not self.deepcad_enabled_var.get() or not self.require_movie():
             return
         if self.deepcad_cache_is_current() or self.deepcad_running or self.deepcad_last_error:
             return
+        channel_sources = tuple(np.asarray(channel, dtype=np.float32).copy() for channel in self.channel_movies())
         movie = np.asarray(self.state.movie, dtype=np.float32).copy()
         movie_id = id(self.state.movie)
         invalid_start_frames = int(self.state.invalid_start_frames)
@@ -2939,16 +3224,23 @@ class NewLightApp:
                 "movie_id": movie_id,
                 "invalid_start_frames": invalid_start_frames,
                 "movie": None,
+                "channels": (),
                 "log": "",
                 "error": "",
             }
             try:
-                denoised, log = core.run_deepcadrt_denoise(
+                denoised_movie, denoised_channels, log = self.run_deepcad_sources(
+                    channel_sources,
                     movie,
-                    str(out_dir),
-                    invalid_start_frames=invalid_start_frames,
+                    out_dir,
+                    invalid_start_frames,
+                    cancel_event,
                 )
-                payload.update({"movie": denoised, "log": log})
+                payload.update({
+                    "movie": denoised_movie,
+                    "channels": denoised_channels,
+                    "log": log,
+                })
             except Exception as exc:
                 payload["error"] = str(exc)
             if cancel_event.is_set():
@@ -2981,6 +3273,7 @@ class NewLightApp:
             self.log(f"DeepCAD-RT 预览失败：{payload['error']}")
             return
         self.deepcad_denoised_movie = payload["movie"]
+        self.deepcad_denoised_channels = tuple(payload.get("channels", ()) or ())
         self.deepcad_cache_movie_id = id(self.state.movie)
         self.deepcad_cache_invalid_start_frames = int(self.state.invalid_start_frames)
         self.deepcad_projection_cache = {}
@@ -3035,13 +3328,28 @@ class NewLightApp:
         channel_movies = self.channel_movies()
         if channel_movies:
             colors = self.channel_colors()
+            use_deepcad = self.deepcad_enabled_var.get() and self.deepcad_cache_is_current()
+            denoised_channels = self.deepcad_denoised_channels if use_deepcad else ()
+            weight = self.deepcad_weight() if use_deepcad else 0.0
             if source[0] == "frame":
                 frame = min(max(0, int(source[1])), channel_movies[0].shape[0] - 1)
                 cached_path, cached_frame, cached_image = self._converted_frame_cache
-                cache_key = ("channels", tuple(id(movie) for movie in channel_movies), colors)
+                cache_key = (
+                    "channels",
+                    tuple(id(movie) for movie in channel_movies),
+                    tuple(id(movie) for movie in denoised_channels),
+                    colors,
+                    weight,
+                )
                 if cached_path == cache_key and cached_frame == frame:
                     return cached_image
-                image = core.compose_channel_pseudocolor_rgb([movie[frame] for movie in channel_movies], colors)
+                images = [movie[frame] for movie in channel_movies]
+                if use_deepcad:
+                    images = [
+                        core.blend_images(raw, denoised[frame], weight)
+                        for raw, denoised in zip(images, denoised_channels)
+                    ]
+                image = core.compose_channel_pseudocolor_rgb(images, colors)
                 self._converted_frame_cache = (cache_key, frame, image)
                 return image
             if source[0] == "projection":
@@ -3050,7 +3358,9 @@ class NewLightApp:
                 mean_duration = int(self.state.baseline_duration_frames)
                 cache_key = (
                     tuple(id(movie) for movie in channel_movies),
+                    tuple(id(movie) for movie in denoised_channels),
                     colors,
+                    weight,
                     mode,
                     mean_start if mode == "mean" else 0,
                     mean_duration if mode == "mean" else 0,
@@ -3058,7 +3368,7 @@ class NewLightApp:
                     self.acceleration(),
                 )
                 if cache_key not in self._converted_projection_cache:
-                    projections = tuple(
+                    raw_projections = tuple(
                         core.compute_projection(
                             movie,
                             mode,
@@ -3069,6 +3379,23 @@ class NewLightApp:
                         )
                         for movie in channel_movies
                     )
+                    projections = raw_projections
+                    if use_deepcad:
+                        denoised_projections = tuple(
+                            core.compute_projection(
+                                movie,
+                                mode,
+                                acceleration=self.acceleration(),
+                                mean_start_frame=mean_start,
+                                mean_duration_frames=mean_duration,
+                                invalid_start_frames=self.state.invalid_start_frames,
+                            )
+                            for movie in denoised_channels
+                        )
+                        projections = tuple(
+                            core.blend_images(raw, denoised, weight)
+                            for raw, denoised in zip(raw_projections, denoised_projections)
+                        )
                     self._converted_projection_cache[cache_key] = core.compose_channel_pseudocolor_rgb(projections, colors)
                 return self._converted_projection_cache[cache_key]
             return None
@@ -3142,6 +3469,27 @@ class NewLightApp:
             if name.startswith("ROI") and name[3:].isdigit():
                 maximum = max(maximum, int(name[3:]))
         return f"ROI{maximum + 1}"
+
+    @staticmethod
+    def roi_sequence_name_parts(name):
+        text = str(name).rstrip("*")
+        for prefix in ("CaImAn_ROI", "Fast_ROI", "NS3_ROI", "AtlasROI", "ROI"):
+            suffix = text[len(prefix):] if text.startswith(prefix) else ""
+            if suffix.isdigit() and int(suffix) > 0:
+                return prefix, int(suffix)
+        return None
+
+    def shift_roi_sequence_after_deletion(self, deleted_index, deleted_name):
+        deleted_parts = self.roi_sequence_name_parts(deleted_name)
+        if deleted_parts is None:
+            return
+        deleted_prefix, _deleted_number = deleted_parts
+        for item in self.state.roi_metadata[int(deleted_index):]:
+            parts = self.roi_sequence_name_parts(item.get("base_name", ""))
+            if parts is None or parts[0] != deleted_prefix:
+                continue
+            prefix, number = parts
+            item["base_name"] = f"{prefix}{max(1, number - 1)}"
 
     def sync_roi_names(self):
         existing = list(self.state.roi_metadata)
@@ -3701,17 +4049,19 @@ class NewLightApp:
             overlay_source = raw_img if raw_img is not None else img
             if np.asarray(overlay_source).ndim == 3:
                 overlay_source = np.mean(np.asarray(overlay_source), axis=2)
+            show_roi_overlay = getattr(self, "display_source", (None,))[0] != "neuroalign_preview"
+            roi_masks = self.state.roi_masks if show_roi_overlay else []
             overlay = core.draw_roi_overlay(
                 overlay_source,
-                self.state.roi_masks,
-                self.state.roi_names,
+                roi_masks,
+                self.state.roi_names if show_roi_overlay else [],
                 highlighted_index=self.highlighted_roi_index,
             )
             self._view_lock = True
             try:
                 self._apply_image_axes(img.shape, view_limits)
                 self.ax.imshow(img, cmap="gray", interpolation="nearest", origin="upper", aspect="auto")
-                if self.state.roi_masks:
+                if roi_masks:
                     self.ax.imshow(overlay, alpha=0.55, interpolation="nearest", origin="upper", aspect="auto")
                 self.ax.set_aspect("auto")
                 self.ax.set_xlim(*view_limits[0])
@@ -3921,9 +4271,15 @@ class NewLightApp:
         if hit is None:
             self.log("点击位置没有 ROI。")
             return
+        deleted_name = (
+            self.state.roi_metadata[hit].get("base_name", "")
+            if hit < len(self.state.roi_metadata)
+            else self.state.roi_names[hit] if hit < len(self.state.roi_names) else ""
+        )
         self.state.roi_masks.pop(hit)
         if hit < len(self.state.roi_metadata):
             self.state.roi_metadata.pop(hit)
+        self.shift_roi_sequence_after_deletion(hit, deleted_name)
         deleted = hit + 1
         self.mark_rois_changed()
         self.redraw()
@@ -3953,51 +4309,100 @@ class NewLightApp:
         )
         if not path:
             return
-        try:
-            ext = Path(path).suffix.lower()
-            if ext == ".npz":
-                def load_npz():
-                    with np.load(path, allow_pickle=True) as data:
-                        masks = [m.astype(bool) for m in data["masks"]]
-                        names = list(data["names"]) if "names" in data else None
-                        metadata_json = data["metadata_json"] if "metadata_json" in data else None
-                    metadata = roi_fit.deserialize_roi_metadata(
-                        metadata_json,
-                        count=len(masks),
-                        names=names,
-                        source="loaded",
-                    )
-                    return masks, names, metadata
+        ext = Path(path).suffix.lower()
+        values = {"path": str(Path(path).expanduser().resolve()), "format": ext.lstrip(".")}
+        if ext == ".npz":
+            self.run_load_roi_from_values(values)
+            return
+        if ext == ".json":
+            vals = self.param_dialog("Atlas JSON 转 ROI", [("min_area", "最小面积", 50)])
+            if not vals:
+                return
+            values.update(vals)
+            self.run_load_roi_from_values(values)
+            return
+        if ext in {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff"}:
+            vals = self.param_dialog("图谱图像转 ROI", [("min_area", "最小面积", 50)])
+            if not vals:
+                return
+            values.update(vals)
+            self.run_load_roi_from_values(values)
+            return
+        messagebox.showerror("载入 ROI 失败", f"不支持的 ROI 文件类型：{ext}")
 
-                self.run_worker(
-                    "载入 ROI 文件",
-                    load_npz,
-                    lambda result: self.set_rois(result[0], "ROI 文件", names=result[1], metadata=result[2]),
-                )
-            elif ext == ".json":
-                vals = self.param_dialog("Atlas JSON 转 ROI", [("min_area", "最小面积", 50)])
-                if not vals:
-                    return
-                shape = self.state.movie.shape[1:]
-                self.run_worker(
-                    "Atlas JSON 转 ROI",
-                    lambda: core.process_atlas_json(path, shape, int(vals["min_area"])),
-                    lambda result: self.set_rois(result[0], "Atlas JSON", names=result[1]),
-                )
-            elif ext in {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff"}:
-                vals = self.param_dialog("图谱图像转 ROI", [("min_area", "最小面积", 50)])
-                if not vals:
-                    return
-                shape = self.state.movie.shape[1:]
-                self.run_worker(
-                    "图谱图像转 ROI",
-                    lambda: core.process_atlas_image(path, shape, int(vals["min_area"])),
-                    lambda result: self.set_rois(result[0], "图谱图像", names=result[1]),
-                )
-            else:
-                raise ValueError(f"不支持的 ROI 文件类型：{ext}")
-        except Exception as exc:
-            messagebox.showerror("载入 ROI 失败", str(exc))
+    def run_load_roi_from_values(
+        self,
+        values,
+        *,
+        workflow_step=None,
+        workflow_run_id=None,
+        workflow_is_last=False,
+    ):
+        values = dict(values or {})
+        path = str(values.get("path", "")).strip()
+        if not path:
+            raise ValueError("ROI 文件路径不能为空。")
+        path_obj = Path(path).expanduser()
+        ext = path_obj.suffix.lower()
+        format_hint = str(values.get("format", "")).strip().lower().lstrip(".")
+        if not ext and format_hint:
+            ext = f".{format_hint}"
+        supported_image_exts = {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff"}
+        if ext not in {".npz", ".json", *supported_image_exts}:
+            raise ValueError(f"不支持的 ROI 文件类型：{ext or format_hint or '未知'}")
+
+        descriptor_values = {
+            "path": str(path_obj.resolve()),
+            "format": ext.lstrip("."),
+        }
+        min_area = None
+        if ext != ".npz":
+            min_area = self._param_int(values, "min_area", 50, min_value=0)
+            descriptor_values["min_area"] = str(values.get("min_area", min_area))
+        if workflow_step is None:
+            workflow_step = {
+                "function": "load_roi",
+                "name": "载入 ROI",
+                "parameters": descriptor_values,
+            }
+
+        def load_npz():
+            with np.load(path_obj, allow_pickle=True) as data:
+                masks = [np.asarray(mask).astype(bool) for mask in data["masks"]]
+                names = list(data["names"]) if "names" in data else None
+                metadata_json = data["metadata_json"] if "metadata_json" in data else None
+            expected_shape = tuple(np.asarray(self.state.movie).shape[1:])
+            if any(tuple(mask.shape) != expected_shape for mask in masks):
+                raise ValueError(f"ROI 尺寸与当前视频不一致：需要 {expected_shape}。")
+            metadata = roi_fit.deserialize_roi_metadata(
+                metadata_json,
+                count=len(masks),
+                names=names,
+                source="loaded",
+            )
+            return masks, names, metadata, "ROI 文件"
+
+        if ext == ".npz":
+            worker = load_npz
+        elif ext == ".json":
+            shape = tuple(np.asarray(self.state.movie).shape[1:])
+            worker = lambda: (*core.process_atlas_json(str(path_obj), shape, min_area), None, "Atlas JSON")
+        else:
+            shape = tuple(np.asarray(self.state.movie).shape[1:])
+            worker = lambda: (*core.process_atlas_image(str(path_obj), shape, min_area), None, "图谱图像")
+
+        def finish(result):
+            masks, names, metadata, source = result
+            self.set_rois(masks, source, names=names, metadata=metadata)
+
+        return self.run_worker(
+            "载入 ROI",
+            worker,
+            finish,
+            workflow_step=workflow_step,
+            workflow_run_id=workflow_run_id,
+            workflow_is_last=workflow_is_last,
+        )
 
     def atlas_roi(self):
         if not self.require_movie():
@@ -4139,7 +4544,6 @@ class NewLightApp:
             )
             self.set_parameter_feedback("无法启动 NeuroAlign。", error=True)
             return
-        default_video = self.state.source_path if self.state.source_path else ""
         default_atlas = self.last_atlas_reference_json
         if not default_atlas:
             candidate = NEUROALIGN_DIR / "atlas_regions_raw.json"
@@ -4151,8 +4555,8 @@ class NewLightApp:
             "stage": "outer",
             "result": None,
             "original_source": self.display_source,
+            "input_snapshot": None,
             "values": {
-                "video": saved.get("video") or default_video,
                 "atlas_json": saved.get("atlas_json") or default_atlas,
                 "outdir": saved.get("outdir") or default_neuroalign_outdir("neuroalign"),
                 "cfg": {key: str(value) for key, value in cfg.items()},
@@ -4204,7 +4608,7 @@ class NewLightApp:
             return
         values = self.panel_parameter_values()
         saved = state["values"]
-        for key in ("video", "atlas_json", "outdir"):
+        for key in ("atlas_json", "outdir"):
             if key in values:
                 saved[key] = str(values[key]).strip()
         for key, _label in self._neuroalign_stage_fields(state["stage"]):
@@ -4224,13 +4628,6 @@ class NewLightApp:
         }[stage]
         fields = [
             {
-                "key": "video",
-                "label": "待配准视频",
-                "default": values["video"],
-                "type": "path",
-                "browse": {"title": "选择待配准视频", "filetypes": [("视频文件", "*.avi *.mp4 *.mov *.mkv *.tif *.tiff"), ("所有文件", "*.*")]},
-            },
-            {
                 "key": "atlas_json",
                 "label": "Atlas JSON",
                 "default": values["atlas_json"],
@@ -4244,6 +4641,7 @@ class NewLightApp:
                 "type": "path",
                 "browse": {"title": "选择输出文件夹", "directory": True},
             },
+            {"type": "note", "text": "配准输入：当前视频流（包含已应用的预处理），无需另选视频。"},
             {"type": "note", "text": stage_title},
         ]
         fields.extend((key, label, values["cfg"].get(key, "")) for key, label in self._neuroalign_stage_fields(stage))
@@ -4283,30 +4681,43 @@ class NewLightApp:
         self._capture_neuroalign_panel_values()
         state = self._neuroalign_panel_state
         saved = state["values"]
-        video_text = str(saved["video"]).strip()
         atlas_text = str(saved["atlas_json"]).strip()
         outdir_text = str(saved["outdir"]).strip()
-        if not video_text or not Path(video_text).exists():
-            raise ValueError("待配准视频不存在。")
         if not atlas_text or not Path(atlas_text).exists():
             raise ValueError("Atlas JSON 不存在。")
         if not outdir_text:
             raise ValueError("必须选择输出文件夹。")
-        integer_keys = {
-            "outer_resample_n", "outer_anchor_count", "midline_anchor_count", "min_inner_ctrl_for_tps",
-            "auto_rerun_max_attempts", "min_n_segments", "max_n_segments", "min_cluster_size_superpixels",
-            "inner_max_pairs_per_hemi",
-        }
-        cfg = neuroalign_recommended_cfg()
-        for key, raw in saved["cfg"].items():
-            raw = str(raw).strip()
-            if raw == "":
-                continue
-            cfg[key] = int(float(raw)) if key in integer_keys else float(raw)
-        vals = {"video": video_text, "atlas_json": atlas_text, "outdir": outdir_text, "cfg": cfg}
-        self.user_settings["neuroalign"] = vals
+        cfg = parse_neuroalign_cfg_values(saved["cfg"])
+        vals = {"atlas_json": atlas_text, "outdir": outdir_text, "cfg": cfg}
+        self.user_settings["neuroalign"] = dict(vals)
         save_user_settings(self.user_settings)
         return vals
+
+    def _neuroalign_current_movie_snapshot(self):
+        state = self._neuroalign_panel_state
+        movie = self.state.movie
+        source_id = id(movie)
+        source_generation = int(self.movie_generation)
+        existing = state.get("input_snapshot")
+        if existing is not None:
+            if (
+                existing["source_id"] != source_id
+                or existing["source_generation"] != source_generation
+            ):
+                raise ValueError("当前视频流已变化。为避免三个阶段混用不同视频，请关闭 NeuroAlign 后重新打开。")
+            return existing
+
+        input_dir = self.session_temp_dir / "neuroalign_inputs"
+        input_dir.mkdir(parents=True, exist_ok=True)
+        snapshot = {
+            "movie": movie,
+            "source_id": source_id,
+            "source_generation": source_generation,
+            "fps": float(self.state.fs),
+            "path": str(input_dir / f"current_stream_{uuid.uuid4().hex[:10]}.avi"),
+        }
+        state["input_snapshot"] = snapshot
+        return snapshot
 
     def _neuroalign_previous_stage(self):
         self._capture_neuroalign_panel_values()
@@ -4332,6 +4743,7 @@ class NewLightApp:
     def _rebuild_neuroalign_from_panel(self):
         try:
             vals = self._collect_neuroalign_panel_values()
+            snapshot = self._neuroalign_current_movie_snapshot()
         except (TypeError, ValueError) as exc:
             self.set_parameter_feedback(str(exc), error=True)
             return
@@ -4339,12 +4751,37 @@ class NewLightApp:
         stage_name = {"outer": "外轮廓", "cluster": "聚类", "final": "最终图谱"}[stage]
         self.set_parameter_feedback(f"已加入任务流，正在运行 NeuroAlign {stage_name}阶段。")
 
-        def finish(result):
+        panel_state = self._neuroalign_panel_state
+
+        def worker(cancel_event):
+            snapshot_path = Path(snapshot["path"])
+            if not snapshot_path.exists():
+                core.save_neuroalign_input_avi(snapshot["movie"], str(snapshot_path), fs=snapshot["fps"])
+            if cancel_event.is_set():
+                raise TaskCancelled()
+            backend_values = dict(vals)
+            backend_values["video"] = str(snapshot_path)
+            result = self.run_neuroalign_backend(backend_values, stage=stage)
+            return {
+                "result": result,
+                "source_id": snapshot["source_id"],
+                "source_generation": snapshot["source_generation"],
+            }
+
+        def finish(payload):
             state = self._neuroalign_panel_state
-            if state is None:
+            if state is not panel_state:
                 return
+            if (
+                payload["source_id"] != id(self.state.movie)
+                or payload["source_generation"] != self.movie_generation
+            ):
+                self.log("当前视频流已变化，已忽略过期的 NeuroAlign 结果。")
+                self.set_parameter_feedback("视频已变化，请关闭 NeuroAlign 后重新打开。", error=True)
+                return
+            result = payload["result"]
             state["result"] = result
-            self._display_neuroalign_preview(result, state["stage"])
+            self._display_neuroalign_preview(result, stage)
             self.set_parameter_feedback(f"{stage_name}阶段完成，可调整参数后重新构建。")
             log = str(result.get("log", "")).strip()
             if log:
@@ -4353,9 +4790,9 @@ class NewLightApp:
         def fail(exc):
             self.set_parameter_feedback(self.worker_error_summary(str(exc)), error=True)
 
-        self.run_worker(
+        self.enqueue_task(
             f"NeuroAlign {stage_name}阶段",
-            lambda: self.run_neuroalign_backend(vals, stage=stage),
+            worker,
             finish,
             on_error=fail,
         )
@@ -4616,7 +5053,27 @@ class NewLightApp:
         shadows, highlights, brightness, contrast = self.display_controls()
 
         if self.channel_pseudocolor_enabled():
+            weight = self.deepcad_weight() if deepcad_enabled else 0.0
+            cached_denoised_channels = (
+                tuple(self.deepcad_denoised_channels)
+                if deepcad_enabled and self.deepcad_cache_is_current()
+                else ()
+            )
+            invalid_start_frames = int(self.state.invalid_start_frames)
+            out_dir = self.deepcad_temp_dir()
+
             def save_pseudocolor(cancel_event):
+                denoised_movie = None
+                denoised_channels = cached_denoised_channels
+                deepcad_log = ""
+                if deepcad_enabled and not denoised_channels:
+                    denoised_movie, denoised_channels, deepcad_log = self.run_deepcad_sources(
+                        channel_movies,
+                        movie,
+                        out_dir,
+                        invalid_start_frames,
+                        cancel_event,
+                    )
                 path.parent.mkdir(parents=True, exist_ok=True)
                 if path.suffix.lower() in {".tif", ".tiff"}:
                     core.save_channel_pseudocolor_tiff(
@@ -4627,6 +5084,8 @@ class NewLightApp:
                         highlights=highlights,
                         brightness=brightness,
                         contrast=contrast,
+                        overlay_movies=denoised_channels,
+                        overlay_weight=weight,
                     )
                 else:
                     core.save_channel_pseudocolor_avi(
@@ -4638,15 +5097,78 @@ class NewLightApp:
                         highlights=highlights,
                         brightness=brightness,
                         contrast=contrast,
+                        overlay_movies=denoised_channels,
+                        overlay_weight=weight,
                     )
                 if cancel_event.is_set():
                     raise TaskCancelled()
-                return path
+                return {
+                    "path": path,
+                    "movie": denoised_movie,
+                    "channels": tuple(denoised_channels),
+                    "invalid_start_frames": invalid_start_frames,
+                    "log": deepcad_log,
+                }
 
-            self.enqueue_task("保存伪彩视频", save_pseudocolor, lambda result: self.log(f"伪彩视频已保存：{result}"))
+            task_label = "DeepCAD-RT 降噪并保存伪彩视频" if deepcad_enabled else "保存伪彩视频"
+            self.enqueue_task(task_label, save_pseudocolor, self._finish_pseudocolor_save)
             return
 
         if len(channel_movies) >= 2:
+            if deepcad_enabled:
+                weight = self.deepcad_weight()
+                cached_denoised_channels = (
+                    tuple(self.deepcad_denoised_channels)
+                    if self.deepcad_cache_is_current()
+                    else ()
+                )
+                out_dir = self.deepcad_temp_dir()
+                invalid_start_frames = int(self.state.invalid_start_frames)
+
+                def save_deepcad_channels(cancel_event):
+                    denoised_movie = None
+                    denoised_channels = cached_denoised_channels
+                    deepcad_log = ""
+                    if not denoised_channels:
+                        denoised_movie, denoised_channels, deepcad_log = self.run_deepcad_sources(
+                            channel_movies,
+                            movie,
+                            out_dir,
+                            invalid_start_frames,
+                            cancel_event,
+                        )
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    saved = []
+                    for idx, (raw_channel, denoised_channel) in enumerate(
+                        zip(channel_movies, denoised_channels),
+                        start=1,
+                    ):
+                        if cancel_event.is_set():
+                            raise TaskCancelled()
+                        channel_path = path.with_name(f"{path.stem}_ch{idx}{path.suffix}")
+                        self.save_movie_to_path(
+                            core.blend_movies(raw_channel, denoised_channel, weight),
+                            channel_path,
+                            fs=fs,
+                            bit_depth=save_bit_depth,
+                            display_settings=(shadows, highlights, brightness, contrast),
+                        )
+                        saved.append(channel_path)
+                    return {
+                        "paths": saved,
+                        "movie": denoised_movie,
+                        "channels": tuple(denoised_channels),
+                        "invalid_start_frames": invalid_start_frames,
+                        "log": deepcad_log,
+                    }
+
+                self.enqueue_task(
+                    "DeepCAD-RT 降噪并保存各通道视频",
+                    save_deepcad_channels,
+                    self._finish_deepcad_channel_save,
+                )
+                return
+
             def save_channels(cancel_event):
                 path.parent.mkdir(parents=True, exist_ok=True)
                 saved = []
@@ -4704,12 +5226,14 @@ class NewLightApp:
         self.log("已加入任务流：保存前运行 DeepCAD-RT 深度学习降噪。")
 
         def save_with_denoise(cancel_event):
-            payload = {"path": str(path), "movie": None, "log": "", "error": ""}
+            payload = {"path": str(path), "movie": None, "channels": (), "log": "", "error": ""}
             try:
-                denoised, log = core.run_deepcadrt_denoise(
+                denoised, denoised_channels, log = self.run_deepcad_sources(
+                    channel_movies,
                     movie,
-                    str(out_dir),
-                    invalid_start_frames=invalid_start_frames,
+                    out_dir,
+                    invalid_start_frames,
+                    cancel_event,
                 )
                 path.parent.mkdir(parents=True, exist_ok=True)
                 self.save_movie_to_path(
@@ -4721,6 +5245,7 @@ class NewLightApp:
                 )
                 payload.update({
                     "movie": denoised,
+                    "channels": denoised_channels,
                     "log": log,
                     "invalid_start_frames": invalid_start_frames,
                 })
@@ -4732,6 +5257,35 @@ class NewLightApp:
 
         self.enqueue_task("DeepCAD-RT 降噪并保存", save_with_denoise, self._finish_deepcad_save)
 
+    def _finish_pseudocolor_save(self, payload):
+        if payload.get("movie") is not None and self.state.movie is not None:
+            self.deepcad_denoised_movie = payload["movie"]
+            self.deepcad_denoised_channels = tuple(payload.get("channels", ()) or ())
+            self.deepcad_cache_movie_id = id(self.state.movie)
+            self.deepcad_cache_invalid_start_frames = payload.get("invalid_start_frames")
+            self.deepcad_projection_cache = {}
+            self.clear_channel_render_cache()
+            self.redraw(preserve_view=True)
+        prefix = "DeepCAD-RT 伪彩视频" if payload.get("channels") else "伪彩视频"
+        self.log(f"{prefix}已保存：{payload['path']}")
+        log = str(payload.get("log", "")).strip()
+        if log:
+            self.log(log[-800:])
+
+    def _finish_deepcad_channel_save(self, payload):
+        if payload.get("movie") is not None and self.state.movie is not None:
+            self.deepcad_denoised_movie = payload["movie"]
+            self.deepcad_denoised_channels = tuple(payload.get("channels", ()) or ())
+            self.deepcad_cache_movie_id = id(self.state.movie)
+            self.deepcad_cache_invalid_start_frames = payload.get("invalid_start_frames")
+            self.deepcad_projection_cache = {}
+            self.clear_channel_render_cache()
+            self.redraw(preserve_view=True)
+        self.log("DeepCAD-RT 各通道视频已保存：" + ", ".join(str(item) for item in payload["paths"]))
+        log = str(payload.get("log", "")).strip()
+        if log:
+            self.log(log[-800:])
+
     def _finish_deepcad_save(self, payload):
         if payload.get("error"):
             self.log(f"DeepCAD-RT 保存失败：{payload['error']}")
@@ -4739,6 +5293,7 @@ class NewLightApp:
             return
         if payload.get("movie") is not None and self.state.movie is not None:
             self.deepcad_denoised_movie = payload["movie"]
+            self.deepcad_denoised_channels = tuple(payload.get("channels", ()) or ())
             self.deepcad_cache_movie_id = id(self.state.movie)
             self.deepcad_cache_invalid_start_frames = payload.get("invalid_start_frames")
             self.deepcad_projection_cache = {}
@@ -4774,7 +5329,16 @@ class NewLightApp:
         dlg = ParameterDialog(self.root, title, fields)
         return dlg.values
 
-    def apply_movie_operation(self, label, func, on_complete=None):
+    def apply_movie_operation(
+        self,
+        label,
+        func,
+        on_complete=None,
+        *,
+        workflow_step=None,
+        workflow_run_id=None,
+        workflow_is_last=False,
+    ):
         if not self.require_movie():
             return
         try:
@@ -4846,7 +5410,14 @@ class NewLightApp:
                 if on_complete is not None:
                     on_complete()
 
-            self.enqueue_task(label, worker, finish)
+            return self.enqueue_task(
+                label,
+                worker,
+                finish,
+                workflow_step=workflow_step,
+                workflow_run_id=workflow_run_id,
+                workflow_is_last=workflow_is_last,
+            )
         except Exception as exc:
             traceback.print_exc()
             messagebox.showerror(label, str(exc))
@@ -5230,8 +5801,20 @@ class NewLightApp:
         value = int(round(self._param_float(values, key, default, min_value, max_value)))
         return value
 
-    def run_preprocess_action(self, action_id, values):
-        label = PREPROCESS_PANEL_SPECS.get(action_id, {}).get("label", action_id)
+    def run_preprocess_action(self, action_id, values, workflow_run_id=None, workflow_is_last=False):
+        label = PREPROCESS_PANEL_SPECS.get(action_id, {}).get("label", {"load_roi": "载入 ROI"}.get(action_id, action_id))
+        workflow_step = None
+        if action_id in workflow_core.SUPPORTED_FUNCTIONS:
+            workflow_step = {
+                "function": action_id,
+                "name": label,
+                "parameters": dict(values),
+            }
+        workflow_options = {
+            "workflow_step": workflow_step,
+            "workflow_run_id": workflow_run_id,
+            "workflow_is_last": workflow_is_last,
+        }
         try:
             if action_id == "display_adjustment":
                 shadows, highlights, brightness, contrast = core.normalized_display_controls(
@@ -5249,8 +5832,9 @@ class NewLightApp:
                 self.set_parameter_feedback("显示调节已应用；仅影响预览和 AVI 导出。")
                 return
             if action_id == "caiman_motion":
-                self.run_caiman_motion_from_values(values)
-                return
+                return self.run_caiman_motion_from_values(values, **workflow_options)
+            if action_id == "load_roi":
+                return self.run_load_roi_from_values(values, **workflow_options)
             if action_id == "builtin_rigid_motion":
                 reference_mode = str(values.get("reference_mode", "auto")).strip().lower()
                 if reference_mode not in {"auto", "manual"}:
@@ -5304,38 +5888,51 @@ class NewLightApp:
                     for line in motion_details.values():
                         self.log(line)
 
-                self.apply_movie_operation(label, run, on_complete=log_motion_details)
-                return
+                return self.apply_movie_operation(
+                    label,
+                    run,
+                    on_complete=log_motion_details,
+                    **workflow_options,
+                )
             if action_id == "image_shift":
-                self.run_image_shift_from_values(values)
-                return
+                return self.run_image_shift_from_values(values, **workflow_options)
             if action_id == "gaussian_smooth":
                 sigma = self._param_float(values, "sigma", 1.0, min_value=0.0)
                 acceleration = self.acceleration()
-                self.apply_movie_operation(label, lambda m: core.gaussian_smooth_movie(m, sigma, acceleration=acceleration))
-                return
+                return self.apply_movie_operation(
+                    label,
+                    lambda m: core.gaussian_smooth_movie(m, sigma, acceleration=acceleration),
+                    **workflow_options,
+                )
             if action_id == "median_filter":
                 size = self._param_int(values, "size", 3, min_value=1)
-                self.apply_movie_operation(label, lambda m: core.median_filter_movie(m, size))
-                return
+                return self.apply_movie_operation(
+                    label,
+                    lambda m: core.median_filter_movie(m, size),
+                    **workflow_options,
+                )
             if action_id == "background_subtract":
                 sigma = self._param_float(values, "sigma", 20.0, min_value=1.0)
-                self.apply_movie_operation(label, lambda m: core.background_subtract(m, sigma))
-                return
+                return self.apply_movie_operation(
+                    label,
+                    lambda m: core.background_subtract(m, sigma),
+                    **workflow_options,
+                )
             if action_id == "bleach_correction":
-                self.apply_movie_operation(label, core.bleach_correct)
-                return
+                return self.apply_movie_operation(label, core.bleach_correct, **workflow_options)
             if action_id == "enhance_contrast":
                 clip_limit = self._param_float(values, "clip_limit", 0.02, min_value=0.001, max_value=1.0)
-                self.apply_movie_operation(label, lambda m: core.enhance_contrast(m, clip_limit=clip_limit))
-                return
+                return self.apply_movie_operation(
+                    label,
+                    lambda m: core.enhance_contrast(m, clip_limit=clip_limit),
+                    **workflow_options,
+                )
             if action_id == "detect_vessels":
                 self.run_detect_vessels_from_values(values)
                 return
             if action_id == "remove_vessel_artifact":
                 threshold = self._param_float(values, "threshold", 90.0, min_value=0.0, max_value=100.0)
-                self.run_remove_vessels_from_values(label, threshold)
-                return
+                return self.run_remove_vessels_from_values(label, threshold, **workflow_options)
         except Exception as exc:
             traceback.print_exc()
             messagebox.showerror(label, str(exc))
@@ -5358,7 +5955,14 @@ class NewLightApp:
     def image_shift(self):
         self.show_preprocess_parameters("image_shift")
 
-    def run_image_shift_from_values(self, values):
+    def run_image_shift_from_values(
+        self,
+        values,
+        *,
+        workflow_step=None,
+        workflow_run_id=None,
+        workflow_is_last=False,
+    ):
         search_range = self._param_int(values, "range", 10, min_value=0)
         row_parity = str(values.get("row_parity", "odd")).strip().lower()
         if row_parity not in {"odd", "even"}:
@@ -5444,7 +6048,14 @@ class NewLightApp:
                 channel_note = "，已应用于全部通道" if result["channels"] else ""
                 self.log(f"图像行偏移校正：估计偏移={result['shift']} px，移动{row_name}{channel_note}。")
 
-            self.enqueue_task("图像行偏移校正", worker, finish)
+            return self.enqueue_task(
+                "图像行偏移校正",
+                worker,
+                finish,
+                workflow_step=workflow_step,
+                workflow_run_id=workflow_run_id,
+                workflow_is_last=workflow_is_last,
+            )
         except Exception as exc:
             traceback.print_exc()
             messagebox.showerror("图像行偏移校正", str(exc))
@@ -5483,7 +6094,15 @@ class NewLightApp:
 
         self.enqueue_task("血管/伪影检测", worker, finish)
 
-    def run_remove_vessels_from_values(self, label, threshold):
+    def run_remove_vessels_from_values(
+        self,
+        label,
+        threshold,
+        *,
+        workflow_step=None,
+        workflow_run_id=None,
+        workflow_is_last=False,
+    ):
         if not self.require_movie():
             return
         self.apply_protocol(update_baseline=False)
@@ -5552,7 +6171,14 @@ class NewLightApp:
             self.redraw(preserve_view=False)
             self.log(f"处理完成：{label}")
 
-        self.enqueue_task(label, worker, finish)
+        return self.enqueue_task(
+            label,
+            worker,
+            finish,
+            workflow_step=workflow_step,
+            workflow_run_id=workflow_run_id,
+            workflow_is_last=workflow_is_last,
+        )
 
     def remove_vessels(self):
         self.show_preprocess_parameters("remove_vessel_artifact")
@@ -5560,10 +6186,11 @@ class NewLightApp:
     def show_dff_heatmap(self):
         if not self.require_movie():
             return
-        acceleration = self.acceleration()
-
-        def operation(movie, baseline, _traces, _masks, _names, _fs, _frames, _cancel_event):
-            return np.mean(core.compute_dff(movie, baseline, acceleration=acceleration), axis=0)
+        def operation(movie, baseline, _traces, _masks, _names, _fs, _frames, context, _cancel_event):
+            return np.mean(
+                core.compute_dff(movie, baseline, acceleration=context["acceleration"]),
+                axis=0,
+            )
 
         def finish(heatmap):
             self.state.display_image = heatmap
@@ -5581,10 +6208,8 @@ class NewLightApp:
     def generate_heatmap_avi(self):
         if not self.require_movie():
             return
-        acceleration = self.acceleration()
-
-        def operation(movie, baseline, _traces, _masks, _names, _fs, _frames, _cancel_event):
-            return core.compute_dff(movie, baseline, acceleration=acceleration)
+        def operation(movie, baseline, _traces, _masks, _names, _fs, _frames, context, _cancel_event):
+            return core.compute_dff(movie, baseline, acceleration=context["acceleration"])
 
         self.queue_analysis_operation("准备热图 AVI", operation, self._show_heatmap_video_panel)
 
@@ -5760,6 +6385,13 @@ class NewLightApp:
                 return stem
         return "NewLight"
 
+    def configured_peak_percentile(self):
+        try:
+            value = float(self.user_settings.get("peak_detection", {}).get("min_percentile", 25.0))
+        except (TypeError, ValueError):
+            return 25.0
+        return value if np.isfinite(value) and 0.0 <= value <= 100.0 else 25.0
+
     def ask_analysis_save_path(self, title, initialfile, defaultextension, filetypes):
         path = filedialog.asksaveasfilename(
             title=title,
@@ -5781,30 +6413,96 @@ class NewLightApp:
             self.extract_traces(show_window=show_window)
         return self.state.traces
 
-    def queue_analysis_operation(self, label, operation, on_complete, *, need_traces=False, need_baseline=True):
+    def queue_analysis_operation(
+        self,
+        label,
+        operation,
+        on_complete,
+        *,
+        need_traces=False,
+        need_baseline=True,
+        depends_on_rois=False,
+        depends_on_peak_settings=False,
+    ):
         """Run an analysis/export from a coherent movie snapshot in the FIFO queue."""
         if not self.require_movie():
             return None
         self.apply_protocol(update_baseline=False)
-        if need_traces and not self.state.roi_masks:
-            self.ensure_global_roi()
-        if len(self.state.roi_names) != len(self.state.roi_masks):
-            self.sync_roi_names()
-        baseline_start = int(self.state.baseline_start_frame)
-        baseline_duration = int(self.state.baseline_duration_frames)
-        invalid_start_frames = int(self.state.invalid_start_frames)
-        roi_masks = [np.asarray(mask, dtype=bool).copy() for mask in self.state.roi_masks]
-        roi_names = list(self.state.roi_names)
-        fs = float(self.state.fs)
-        trigger_frames = np.asarray(self.state.trigger_frames, dtype=int).copy()
-        acceleration = self.acceleration()
-        baseline_correct = bool(self.trace_baseline_correct_var.get())
-        baseline_window = int(float(self.trace_baseline_window_var.get()))
-        smooth_window = int(float(self.trace_smooth_window_var.get()))
+        roi_dependent = bool(need_traces or depends_on_rois)
+        snapshot = {}
+
+        def current_analysis_signature():
+            trace_signature = None
+            if need_traces:
+                trace_signature = (
+                    bool(self.trace_baseline_correct_var.get()),
+                    int(float(self.trace_baseline_window_var.get())),
+                    int(float(self.trace_smooth_window_var.get())),
+                )
+            return (
+                int(self.state.baseline_start_frame),
+                int(self.state.baseline_duration_frames),
+                int(self.state.invalid_start_frames),
+                float(self.state.fs),
+                tuple(np.asarray(self.state.trigger_frames, dtype=int).tolist()),
+                float(self.state.pre_trigger_s),
+                float(self.state.post_trigger_s),
+                self.acceleration(),
+                self.configured_peak_percentile() if depends_on_peak_settings else None,
+                trace_signature,
+            )
+
+        def prepare():
+            source = self.state.movie
+            if source is None:
+                raise ValueError("当前没有可分析的视频。")
+            if need_traces and not self.state.roi_masks:
+                self.ensure_global_roi()
+            if len(self.state.roi_names) != len(self.state.roi_masks):
+                self.sync_roi_names()
+            snapshot.clear()
+            snapshot.update(
+                source=source,
+                source_id=id(source),
+                roi_revision=int(self.state.roi_revision),
+                roi_masks=tuple(self.state.roi_masks),
+                roi_names=tuple(self.state.roi_names),
+                baseline_start=int(self.state.baseline_start_frame),
+                baseline_duration=int(self.state.baseline_duration_frames),
+                invalid_start_frames=int(self.state.invalid_start_frames),
+                fs=float(self.state.fs),
+                trigger_frames=np.asarray(self.state.trigger_frames, dtype=int).copy(),
+                pre_trigger_s=float(self.state.pre_trigger_s),
+                post_trigger_s=float(self.state.post_trigger_s),
+                acceleration=self.acceleration(),
+                peak_min_percentile=self.configured_peak_percentile(),
+                baseline_correct=bool(self.trace_baseline_correct_var.get()),
+                baseline_window=int(float(self.trace_baseline_window_var.get())),
+                smooth_window=int(float(self.trace_smooth_window_var.get())),
+            )
+            snapshot["analysis_signature"] = current_analysis_signature()
 
         def worker(cancel_event):
-            source_id = id(self.state.movie)
-            movie = np.asarray(self.state.movie, dtype=np.float32).copy()
+            current = dict(snapshot)
+            source = current["source"]
+            source_id = current["source_id"]
+            roi_revision = current["roi_revision"]
+            movie = np.asarray(source, dtype=np.float32).copy()
+            roi_masks = [np.asarray(mask, dtype=bool).copy() for mask in current["roi_masks"]]
+            roi_names = list(current["roi_names"])
+            if roi_dependent and int(self.state.roi_revision) != roi_revision:
+                raise RuntimeError("ROI 在分析快照创建期间发生变化，请重新运行。")
+            if need_traces and not roi_masks:
+                raise RuntimeError("未能为曲线提取建立有效 ROI，请重新运行。")
+            if need_traces and any(mask.shape != movie.shape[1:] for mask in roi_masks):
+                raise ValueError("ROI 尺寸与当前视频不一致，请重新载入或绘制 ROI。")
+            if len(roi_names) != len(roi_masks):
+                roi_names = [roi_names[index] if index < len(roi_names) else f"ROI{index + 1}" for index in range(len(roi_masks))]
+            baseline_start = current["baseline_start"]
+            baseline_duration = current["baseline_duration"]
+            invalid_start_frames = current["invalid_start_frames"]
+            fs = current["fs"]
+            trigger_frames = current["trigger_frames"]
             baseline = None
             if need_baseline or need_traces:
                 baseline = core.baseline_from_frames(
@@ -5817,33 +6515,77 @@ class NewLightApp:
                 raise TaskCancelled()
             traces = None
             if need_traces:
-                traces = core.extract_traces(movie, roi_masks, "dff", baseline, acceleration=acceleration)
+                traces = core.extract_traces(
+                    movie,
+                    roi_masks,
+                    "dff",
+                    baseline,
+                    acceleration=current["acceleration"],
+                )
                 traces = core.process_traces(
                     traces,
-                    baseline_correct=baseline_correct,
-                    baseline_window=baseline_window,
-                    smooth_window=smooth_window,
+                    baseline_correct=current["baseline_correct"],
+                    baseline_window=current["baseline_window"],
+                    smooth_window=current["smooth_window"],
                 )
             if cancel_event.is_set():
                 raise TaskCancelled()
-            output = operation(movie, baseline, traces, roi_masks, roi_names, fs, trigger_frames, cancel_event)
+            context = {
+                "acceleration": current["acceleration"],
+                "pre_trigger_s": current["pre_trigger_s"],
+                "post_trigger_s": current["post_trigger_s"],
+                "peak_min_percentile": current["peak_min_percentile"],
+            }
+            output = operation(
+                movie,
+                baseline,
+                traces,
+                roi_masks,
+                roi_names,
+                fs,
+                trigger_frames,
+                context,
+                cancel_event,
+            )
             if cancel_event.is_set():
                 raise TaskCancelled()
-            return source_id, baseline, traces, output
+            return {
+                "source_id": source_id,
+                "roi_revision": roi_revision if roi_dependent else None,
+                "analysis_signature": current["analysis_signature"],
+                "peak_min_percentile": current["peak_min_percentile"],
+                "baseline": baseline,
+                "traces": traces,
+                "output": output,
+            }
 
         def finish(result):
-            source_id, baseline, traces, output = result
-            if source_id != id(self.state.movie):
+            if result["source_id"] != id(self.state.movie):
                 self.log(f"已忽略过期的分析结果：{label}")
                 return
+            if result["roi_revision"] is not None and result["roi_revision"] != self.state.roi_revision:
+                self.log(f"ROI 已变化，已忽略过期的分析结果：{label}")
+                return
+            try:
+                signature_matches = result["analysis_signature"] == current_analysis_signature()
+            except (TypeError, ValueError):
+                signature_matches = False
+            if not signature_matches:
+                if depends_on_peak_settings:
+                    self.log(f"峰值分位参数或实验协议已变化，已忽略过期的分析结果：{label}")
+                else:
+                    self.log(f"实验协议或曲线参数已变化，已忽略过期的分析结果：{label}")
+                return
+            baseline = result["baseline"]
+            traces = result["traces"]
             if baseline is not None:
                 self.state.baseline_image = baseline
                 self.state.dff_movie = None
             if traces is not None:
                 self.state.traces = traces
-            on_complete(output)
+            on_complete(result["output"])
 
-        return self.enqueue_task(label, worker, finish)
+        return self.enqueue_task(label, worker, finish, on_start=prepare)
 
     def event_trigger_frames(self, pre_s, post_s):
         if not self.require_movie():
@@ -6024,7 +6766,7 @@ class NewLightApp:
         if path is None:
             return
 
-        def operation(_movie, _baseline, traces, _masks, names, fs, _frames, _cancel_event):
+        def operation(_movie, _baseline, traces, _masks, names, fs, _frames, _context, _cancel_event):
             core.save_traces_csv(str(path), traces, names, fs)
             return path
 
@@ -6042,7 +6784,7 @@ class NewLightApp:
         if path is None:
             return
 
-        def operation(_movie, _baseline, traces, _masks, names, fs, frames, _cancel_event):
+        def operation(_movie, _baseline, traces, _masks, names, fs, frames, _context, _cancel_event):
             t = np.arange(traces.shape[0]) / fs
             core.plot_traces(str(path), t, traces, names, frames, fs)
             return path
@@ -6060,11 +6802,14 @@ class NewLightApp:
         )
         if path is None:
             return
-        pre_trigger_s = float(self.state.pre_trigger_s)
-        post_trigger_s = float(self.state.post_trigger_s)
-
-        def operation(movie, _baseline, traces, masks, names, fs, frames, _cancel_event):
-            stats = core.roi_statistics(traces, names, fs, frames)
+        def operation(movie, _baseline, traces, masks, names, fs, frames, context, _cancel_event):
+            stats = core.roi_statistics(
+                traces,
+                names,
+                fs,
+                frames,
+                min_peak_percentile=context["peak_min_percentile"],
+            )
             core.save_roi_statistics_table(
                 str(path),
                 stats,
@@ -6072,12 +6817,18 @@ class NewLightApp:
                 fs=fs,
                 roi_count=len(masks),
                 trigger_count=len(frames),
-                pre_trigger_s=pre_trigger_s,
-                post_trigger_s=post_trigger_s,
+                pre_trigger_s=context["pre_trigger_s"],
+                post_trigger_s=context["post_trigger_s"],
             )
             return path
 
-        self.queue_analysis_operation("导出 ROI 统计", operation, lambda result: self.log(f"ROI 统计已导出：{result}"), need_traces=True)
+        self.queue_analysis_operation(
+            "导出 ROI 统计",
+            operation,
+            lambda result: self.log(f"ROI 统计已导出：{result}"),
+            need_traces=True,
+            depends_on_peak_settings=True,
+        )
 
     def export_correlation_outputs(self):
         if not self.require_movie():
@@ -6087,7 +6838,7 @@ class NewLightApp:
             return
         name = self.analysis_name()
 
-        def operation(_movie, _baseline, traces, _masks, names, _fs, _frames, _cancel_event):
+        def operation(_movie, _baseline, traces, _masks, names, _fs, _frames, _context, _cancel_event):
             if traces.shape[1] < 2:
                 raise ValueError("导出相关性至少需要两条 ROI 曲线。")
             return core.save_correlation_outputs(out_dir, name, traces, names)
@@ -6110,15 +6861,18 @@ class NewLightApp:
         )
         if path is None:
             return
-        acceleration = self.acceleration()
-
-        def operation(movie, baseline, _traces, masks, _names, _fs, _frames, _cancel_event):
+        def operation(movie, baseline, _traces, masks, _names, _fs, _frames, context, _cancel_event):
             combined = np.any(np.stack(masks).astype(bool), axis=0) if masks else np.ones_like(baseline, dtype=bool)
-            dff = core.compute_dff(movie, baseline, acceleration=acceleration)
+            dff = core.compute_dff(movie, baseline, acceleration=context["acceleration"])
             core.save_heatmap(str(path), np.mean(dff, axis=0), combined)
             return path
 
-        self.queue_analysis_operation("导出 dF/F 热图", operation, lambda result: self.log(f"dF/F 热图 PNG 已导出：{result}"))
+        self.queue_analysis_operation(
+            "导出 dF/F 热图",
+            operation,
+            lambda result: self.log(f"dF/F 热图 PNG 已导出：{result}"),
+            depends_on_rois=True,
+        )
 
     def export_roi_snapshot(self):
         if not self.require_movie():
@@ -6130,13 +6884,14 @@ class NewLightApp:
             return
         name = self.analysis_name()
 
-        def operation(_movie, baseline, _traces, masks, names, _fs, _frames, _cancel_event):
+        def operation(_movie, baseline, _traces, masks, names, _fs, _frames, _context, _cancel_event):
             return core.save_roi_snapshot_outputs(out_dir, name, baseline, masks, names)
 
         self.queue_analysis_operation(
             "导出 ROI 快照",
             operation,
             lambda paths: self.log(f"ROI 快照已导出：{len(paths)} 个文件，位置为 {out_dir}"),
+            depends_on_rois=True,
         )
 
     def export_summary_json(self):
@@ -6152,10 +6907,16 @@ class NewLightApp:
             return
         name = self.analysis_name()
 
-        def operation(movie, _baseline, _traces, masks, _names, fs, frames, _cancel_event):
+        def operation(movie, _baseline, _traces, masks, _names, fs, frames, _context, _cancel_event):
             return core.save_summary_json(str(path), name, movie, fs, masks, frames)
 
-        self.queue_analysis_operation("导出摘要 JSON", operation, lambda result: self.log(f"摘要 JSON 已导出：{result}"), need_baseline=False)
+        self.queue_analysis_operation(
+            "导出摘要 JSON",
+            operation,
+            lambda result: self.log(f"摘要 JSON 已导出：{result}"),
+            need_baseline=False,
+            depends_on_rois=True,
+        )
 
     @staticmethod
     def _roi_preset_updates(engine, preset_name):
@@ -6208,6 +6969,29 @@ class NewLightApp:
         else:
             self.set_parameter_feedback(f"已按当前 ROI 填入面积范围 {suggested_min}-{suggested_max} px^2。")
 
+    def _fill_caiman_diameter_range_from_current_rois(self):
+        try:
+            values = self.panel_parameter_values()
+            current_min = self._param_float(values, "cell_diameter_min", 12, min_value=1)
+            current_max = self._param_float(values, "cell_diameter_max", 24, min_value=1)
+        except (TypeError, ValueError) as exc:
+            self.set_parameter_feedback(f"细胞直径参数无效：{exc}", error=True)
+            return
+        suggested_min, suggested_max = roi_fit.suggest_cell_diameter_range(
+            self.state.roi_masks,
+            current_min,
+            current_max,
+        )
+        if not self.state.roi_masks:
+            self.set_parameter_feedback("当前没有 ROI，细胞直径范围保持不变。")
+            return
+        self.parameter_vars["cell_diameter_min"].set(f"{suggested_min:.4g}")
+        self.parameter_vars["cell_diameter_max"].set(f"{suggested_max:.4g}")
+        if len(self.state.roi_masks) == 1:
+            self.set_parameter_feedback(f"已按 1 个 ROI 填入最大细胞直径 {suggested_max:.4g} px；最小直径保持不变。")
+        else:
+            self.set_parameter_feedback(f"已按当前 ROI 填入细胞直径范围 {suggested_min:.4g}-{suggested_max:.4g} px。")
+
     def _run_adaptive_roi_from_panel(self, engine):
         values = self.panel_parameter_values()
         if engine == "fast":
@@ -6215,10 +6999,24 @@ class NewLightApp:
         else:
             self._run_caiman_roi_from_panel(values, adaptive=True)
 
+    @staticmethod
+    def _caiman_diameter_defaults(saved):
+        values = dict(saved or {})
+        legacy_diameter = float(values.get("cell_diameter", 12))
+        old_default_min = max(1, round(legacy_diameter * 0.67))
+        old_default_max = max(old_default_min, round(legacy_diameter * 1.5))
+        default_min = values.get("cell_diameter_min", max(1, round(legacy_diameter)))
+        default_max = values.get("cell_diameter_max", max(default_min, round(legacy_diameter * 2.0)))
+        if default_min == old_default_min and default_max == old_default_max:
+            default_min = max(1, round(legacy_diameter))
+            default_max = max(default_min, round(legacy_diameter * 2.0))
+        return legacy_diameter, float(default_min), float(default_max)
+
     def caiman_roi(self):
         if not self.require_movie():
             return
         saved = self.user_settings.get("caiman_roi", {})
+        legacy_diameter, default_min, default_max = self._caiman_diameter_defaults(saved)
         self.show_parameter_panel(
             MODEL_NAMES["caiman_roi"],
             [
@@ -6230,7 +7028,10 @@ class NewLightApp:
                     "on_change": lambda: self._apply_roi_quality_preset("caiman"),
                 },
                 ("mode", "成像模式", saved.get("mode", "two_photon"), (("two_photon", "双光子 CNMF"), ("one_photon", "一光子 CNMF-E"))),
-                ("cell_diameter", "细胞直径 (px)", saved.get("cell_diameter", 12)),
+                ("size_mode", "细胞大小模式", saved.get("size_mode", "range_adaptive"), (("range_adaptive", "范围自适应（推荐）"), ("single", "快速单尺度"))),
+                ("cell_diameter_min", "最小细胞直径 (px)", default_min),
+                ("cell_diameter_max", "最大细胞直径 (px)", default_max),
+                ("cell_diameter", "单尺度细胞直径 (px)", legacy_diameter),
                 ("components_per_patch", "每 Patch 初始成分数", saved.get("components_per_patch", 4)),
                 ("background_components", "背景成分数", saved.get("background_components", 2)),
                 ("spatial_subsample", "空间降采样", saved.get("spatial_subsample", 2)),
@@ -6247,14 +7048,19 @@ class NewLightApp:
                 {
                     "type": "buttons",
                     "columns": 1,
-                    "actions": (("根据当前 ROI 自适应拟合并运行", lambda: self._run_adaptive_roi_from_panel("caiman"), "Accent.TButton"),),
+                    "actions": (
+                        ("从当前 ROI 填入直径范围", self._fill_caiman_diameter_range_from_current_rois),
+                        ("根据当前 ROI 自适应拟合并运行", lambda: self._run_adaptive_roi_from_panel("caiman"), "Accent.TButton"),
+                    ),
                 },
             ],
             self._run_caiman_roi_from_panel,
             description="在当前已预处理视频上进行钙源分解，输出相互独立的任意形状 ROI。运行时间通常长于快速分割。",
             apply_text="运行 CaImAn 分割",
             help_text=(
-                "细胞直径用于估计 gSig，换算为 gSig = max(1, round(直径/4))。"
+                "范围自适应会以最小值、几何中间值、最大值分别运行 CaImAn；换算为 gSig = max(1, round(直径/4))。"
+                "有效 gSig 相同的尺度会自动跳过，跨尺度的重复候选会按空间 IoU 和轨迹相关去重，保留质量较高的成分。"
+                "快速单尺度保留旧行为，只使用单尺度细胞直径。范围模式通常会运行 2-3 次，耗时相应增加。"
                 "每 Patch 成分数控制局部初始化密度；SNR、空间相关和 CNN 分数越高，筛选越严格。"
                 "空间轮廓阈值是每个 footprint 相对峰值阈值，降低可扩大轮廓，提高会收紧轮廓。"
                 "一光子 CNMF-E 使用环形背景模型；双光子数据通常保持默认 CNMF。"
@@ -6265,24 +7071,36 @@ class NewLightApp:
     def _run_caiman_roi_from_panel(self, values, adaptive=False):
         try:
             values = dict(values)
+            _legacy_diameter, default_min, default_max = self._caiman_diameter_defaults(
+                self.user_settings.get("caiman_roi", {})
+            )
             quality_preset = str(values.get("quality_preset", "balanced"))
             if quality_preset not in {"recall", "balanced", "precision", "custom"}:
                 raise ValueError("质量预设无效")
             values.update(self._roi_preset_updates("caiman", quality_preset))
-            if adaptive and self.state.roi_masks:
-                fitted_diameter = roi_fit.suggest_cell_diameter(
+            size_mode = str(values.get("size_mode", "range_adaptive"))
+            if size_mode not in {"range_adaptive", "single"}:
+                raise ValueError("细胞大小模式无效")
+            if adaptive and self.state.roi_masks and size_mode == "range_adaptive":
+                fitted_min, fitted_max = roi_fit.suggest_cell_diameter_range(
                     self.state.roi_masks,
-                    values.get("cell_diameter", 12),
+                    values.get("cell_diameter_min", default_min),
+                    values.get("cell_diameter_max", default_max),
                 )
-                values["cell_diameter"] = fitted_diameter
-                self.parameter_vars["cell_diameter"].set(f"{fitted_diameter:.4g}")
-                self.set_parameter_feedback(f"当前 ROI 建议细胞直径 {fitted_diameter:.3g} px；已加入自适应任务。")
+                values["cell_diameter_min"] = fitted_min
+                values["cell_diameter_max"] = fitted_max
+                self.parameter_vars["cell_diameter_min"].set(f"{fitted_min:.4g}")
+                self.parameter_vars["cell_diameter_max"].set(f"{fitted_max:.4g}")
+                self.set_parameter_feedback(f"当前 ROI 建议细胞直径范围 {fitted_min:.3g}-{fitted_max:.3g} px；已加入自适应任务。")
             mode = str(values.get("mode", "two_photon"))
             if mode not in {"two_photon", "one_photon"}:
                 raise ValueError("成像模式无效")
             settings = {
                 "quality_preset": quality_preset,
                 "mode": mode,
+                "size_mode": size_mode,
+                "cell_diameter_min": self._param_float(values, "cell_diameter_min", default_min, min_value=1),
+                "cell_diameter_max": self._param_float(values, "cell_diameter_max", default_max, min_value=1),
                 "cell_diameter": self._param_float(values, "cell_diameter", 12, min_value=1),
                 "components_per_patch": self._param_int(values, "components_per_patch", 4, min_value=1),
                 "background_components": self._param_int(values, "background_components", 2, min_value=0),
@@ -6298,6 +7116,8 @@ class NewLightApp:
                 "footprint_threshold": self._param_float(values, "footprint_threshold", 0.20, min_value=0.01, max_value=1),
                 "similarity_limit": self._param_float(values, "similarity_limit", 2.3, min_value=0.1, max_value=10),
             }
+            if settings["cell_diameter_max"] < settings["cell_diameter_min"]:
+                raise ValueError("最大细胞直径必须大于或等于最小细胞直径")
         except (TypeError, ValueError) as exc:
             self.set_parameter_feedback(f"CaImAn 参数无效：{exc}", error=True)
             return
@@ -6316,19 +7136,44 @@ class NewLightApp:
         backend_settings = {
             key: value
             for key, value in settings.items()
-            if key not in {"quality_preset", "similarity_limit"}
+            if key not in {"quality_preset", "similarity_limit", "size_mode", "cell_diameter_min", "cell_diameter_max"}
         }
+        scale_diameters = (
+            (settings["cell_diameter"],)
+            if settings["size_mode"] == "single"
+            else roi_fit.caiman_multiscale_diameters(
+                settings["cell_diameter_min"],
+                settings["cell_diameter_max"],
+            )
+        )
 
         def worker(cancel_event):
             movie_snapshot = np.array(movie_source, copy=True)
             if cancel_event.is_set():
                 raise TaskCancelled()
-            result = core.run_caiman_roi_segmentation(
-                movie_snapshot,
-                session_dir=str(self.session_temp_dir),
-                frame_rate=frame_rate,
-                invalid_start_frames=invalid_start_frames,
-                **backend_settings,
+            scale_results = []
+            for diameter in scale_diameters:
+                scale_settings = dict(backend_settings)
+                scale_settings["cell_diameter"] = diameter
+                result = core.run_caiman_roi_segmentation(
+                    movie_snapshot,
+                    session_dir=str(self.session_temp_dir),
+                    frame_rate=frame_rate,
+                    invalid_start_frames=invalid_start_frames,
+                    **scale_settings,
+                )
+                scale_results.append((diameter, result))
+                if cancel_event.is_set():
+                    raise TaskCancelled()
+            result = (
+                scale_results[0][1]
+                if len(scale_results) == 1
+                else core.merge_caiman_multiscale_roi_results(
+                    scale_results,
+                    min_snr=settings["min_snr"],
+                    rval_threshold=settings["rval_threshold"],
+                    require_non_cnn_evidence=True,
+                )
             )
             if cancel_event.is_set():
                 raise TaskCancelled()
@@ -6342,7 +7187,10 @@ class NewLightApp:
             self._finish_caiman_roi(result)
 
         self.enqueue_task(MODEL_NAMES["caiman_roi"], worker, finish)
-        self.set_parameter_feedback("已加入任务流；CaImAn 将在后台执行，界面可继续操作。")
+        scale_text = "、".join(f"{diameter:.4g}" for diameter in scale_diameters)
+        self.set_parameter_feedback(
+            f"已加入任务流；CaImAn 将在后台按 {len(scale_diameters)} 个尺度 ({scale_text} px) 执行，界面可继续操作。"
+        )
 
     def _finish_caiman_roi(self, result):
         if result.masks.shape[0] == 0:
@@ -6359,6 +7207,14 @@ class NewLightApp:
                 quality.append(f"{label}均值={float(np.mean(finite)):.3g}")
         if quality:
             self.log("CaImAn 成分质量：" + "，".join(quality))
+        if result.metadata.get("multiscale"):
+            scales = "、".join(f"{value:.4g}" for value in result.metadata.get("scale_diameters", []))
+            duplicates = int(result.metadata.get("multiscale_duplicate_count", 0))
+            quality_rejected = int(result.metadata.get("multiscale_quality_rejected_count", 0))
+            self.log(
+                f"CaImAn 范围自适应：尺度 {scales} px；"
+                f"排除仅 CNN 支持的低质量候选 {quality_rejected} 个；跨尺度去重 {duplicates} 个。"
+            )
         if result.log:
             self.log(clean_backend_log(result.log)[-1200:])
         self.log(f"CaImAn ROI 摘要：{result.summary_path}")
@@ -6500,7 +7356,13 @@ class NewLightApp:
 
     @staticmethod
     def _roi_backend_settings(engine, settings):
-        excluded = {"quality_preset", "similarity_limit"}
+        excluded = {
+            "quality_preset",
+            "similarity_limit",
+            "size_mode",
+            "cell_diameter_min",
+            "cell_diameter_max",
+        }
         values = {key: value for key, value in settings.items() if key not in excluded}
         if engine == "fast":
             return values
@@ -6516,6 +7378,9 @@ class NewLightApp:
             return values
         keys = (
             "mode",
+            "size_mode",
+            "cell_diameter_min",
+            "cell_diameter_max",
             "cell_diameter",
             "components_per_patch",
             "background_components",
@@ -6663,13 +7528,33 @@ class NewLightApp:
                         **backend_settings,
                     )
                 else:
-                    backend_result = core.run_caiman_roi_segmentation(
-                        movie_snapshot,
-                        session_dir=str(self.session_temp_dir),
-                        frame_rate=frame_rate,
-                        invalid_start_frames=invalid_start_frames,
-                        candidate_mode=True,
-                        **backend_settings,
+                    scale_diameters = (
+                        (settings["cell_diameter"],)
+                        if settings.get("size_mode", "range_adaptive") == "single"
+                        else roi_fit.caiman_multiscale_diameters(
+                            settings["cell_diameter_min"],
+                            settings["cell_diameter_max"],
+                        )
+                    )
+                    scale_results = []
+                    for diameter in scale_diameters:
+                        scale_settings = dict(backend_settings)
+                        scale_settings["cell_diameter"] = diameter
+                        backend_result = core.run_caiman_roi_segmentation(
+                            movie_snapshot,
+                            session_dir=str(self.session_temp_dir),
+                            frame_rate=frame_rate,
+                            invalid_start_frames=invalid_start_frames,
+                            candidate_mode=True,
+                            **scale_settings,
+                        )
+                        scale_results.append((diameter, backend_result))
+                        if cancel_event.is_set():
+                            raise TaskCancelled()
+                    backend_result = (
+                        scale_results[0][1]
+                        if len(scale_results) == 1
+                        else core.merge_caiman_multiscale_roi_results(scale_results)
                     )
                 bank = self._candidate_bank_from_result(
                     engine,
@@ -6894,7 +7779,14 @@ class NewLightApp:
     def caiman_motion(self):
         self.show_preprocess_parameters("caiman_motion")
 
-    def run_caiman_motion_from_values(self, values):
+    def run_caiman_motion_from_values(
+        self,
+        values,
+        *,
+        workflow_step=None,
+        workflow_run_id=None,
+        workflow_is_last=False,
+    ):
         if not self.require_movie():
             return
         mode = str(values.get("mode", "piecewise")).strip().lower()
@@ -6930,10 +7822,13 @@ class NewLightApp:
             self.push_history(MODEL_NAMES["caiman"])
             self._finish_caiman_motion(result, previous_source=previous_source)
 
-        self.enqueue_task(
+        return self.enqueue_task(
             MODEL_NAMES["caiman"],
             worker,
             finish,
+            workflow_step=workflow_step,
+            workflow_run_id=workflow_run_id,
+            workflow_is_last=workflow_is_last,
         )
 
     def _finish_caiman_motion(self, result, previous_source=("projection", "mean")):
@@ -6962,9 +7857,51 @@ class NewLightApp:
         if log:
             self.log(log[-800:])
 
-    def enqueue_task(self, label, worker, callback, on_error=None, on_cancel=None, cancellable=True):
+    def enqueue_task(
+        self,
+        label,
+        worker,
+        callback,
+        on_error=None,
+        on_cancel=None,
+        cancellable=True,
+        on_start=None,
+        workflow_step=None,
+        workflow_run_id=None,
+        workflow_is_last=False,
+    ):
         """Queue a cancellable worker that never accesses Tk directly."""
+        guarded_worker = worker
+        guarded_callback = callback
+        if workflow_run_id is not None:
+            def guarded_worker(cancel_event):
+                if self.workflow_runs.get(workflow_run_id) != "running":
+                    raise TaskCancelled()
+                try:
+                    return worker(cancel_event)
+                except TaskCancelled:
+                    if self.workflow_runs.get(workflow_run_id) == "running":
+                        self.workflow_runs[workflow_run_id] = "cancelled"
+                    raise
+                except BaseException:
+                    if self.workflow_runs.get(workflow_run_id) == "running":
+                        self.workflow_runs[workflow_run_id] = "failed"
+                    raise
+
+            def guarded_callback(result):
+                try:
+                    callback(result)
+                except BaseException:
+                    if self.workflow_runs.get(workflow_run_id) == "running":
+                        self.workflow_runs[workflow_run_id] = "failed"
+                    raise
+                if workflow_is_last and self.workflow_runs.get(workflow_run_id) == "running":
+                    self.workflow_runs[workflow_run_id] = "completed"
+                    self.log("工作流执行完成。")
+
         def handle_error(exc):
+            if workflow_run_id is not None and self.workflow_runs.get(workflow_run_id) == "running":
+                self.workflow_runs[workflow_run_id] = "failed"
             if on_error is not None:
                 on_error(exc)
                 return
@@ -6972,24 +7909,47 @@ class NewLightApp:
             messagebox.showerror("后台处理失败", self.worker_error_summary(str(exc)))
 
         def handle_cancel():
+            run_state = None
+            if workflow_run_id is not None:
+                run_state = self.workflow_runs.get(workflow_run_id)
+                if run_state == "running":
+                    self.workflow_runs[workflow_run_id] = "cancelled"
             if on_cancel is not None:
                 on_cancel()
+            elif run_state in {"failed", "cancelled"}:
+                self.log(f"已跳过工作流步骤：{label}")
             else:
                 self.log(f"已取消：{label}")
 
         task = self.task_controller.enqueue_task(
             label,
-            worker,
-            callback,
+            guarded_worker,
+            guarded_callback,
             handle_error,
             handle_cancel,
             cancellable=cancellable,
+            on_start=on_start,
+            workflow_step=workflow_step,
+            workflow_run_id=workflow_run_id,
+            workflow_is_last=workflow_is_last,
         )
         self.log(f"已加入任务流：{label}")
         self.render_task_flow(force=True)
         return task
 
-    def run_worker(self, label, func, callback, on_error=None, on_cancel=None, cancellable=True):
+    def run_worker(
+        self,
+        label,
+        func,
+        callback,
+        on_error=None,
+        on_cancel=None,
+        cancellable=True,
+        *,
+        workflow_step=None,
+        workflow_run_id=None,
+        workflow_is_last=False,
+    ):
         """Queue a legacy zero-argument worker through the global FIFO controller."""
         def worker(cancel_event):
             if cancel_event.is_set():
@@ -6999,7 +7959,17 @@ class NewLightApp:
                 raise TaskCancelled()
             return result
 
-        return self.enqueue_task(label, worker, callback, on_error, on_cancel, cancellable)
+        return self.enqueue_task(
+            label,
+            worker,
+            callback,
+            on_error,
+            on_cancel,
+            cancellable,
+            workflow_step=workflow_step,
+            workflow_run_id=workflow_run_id,
+            workflow_is_last=workflow_is_last,
+        )
 
     def _poll_worker(self):
         try:
@@ -7102,12 +8072,21 @@ class NewLightApp:
         canvas.get_tk_widget().pack(fill="both", expand=True)
 
     def show_roi_statistics(self):
-        def operation(_movie, _baseline, traces, _masks, names, fs, frames, _cancel_event):
-            return core.roi_statistics(traces, names, fs, frames)
+        def operation(_movie, _baseline, traces, _masks, names, fs, frames, _context, _cancel_event):
+            min_peak_percentile = _context["peak_min_percentile"]
+            stats = core.roi_statistics(
+                traces,
+                names,
+                fs,
+                frames,
+                min_peak_percentile=min_peak_percentile,
+            )
+            return stats, min_peak_percentile
 
-        def finish(stats):
+        def finish(result):
+            stats, min_peak_percentile = result
             win = tk.Toplevel(self.root)
-            win.title("ROI 统计")
+            win.title(f"ROI 统计 - 峰值最低分位 {min_peak_percentile:g}%")
             win.configure(bg=THEME["bg"])
             table = ttk.Treeview(win, columns=list(stats.columns), show="headings", height=min(18, max(4, len(stats))))
             for col in stats.columns:
@@ -7118,7 +8097,13 @@ class NewLightApp:
                 table.insert("", "end", values=values)
             table.pack(fill="both", expand=True)
 
-        self.queue_analysis_operation("计算 ROI 统计", operation, finish, need_traces=True)
+        self.queue_analysis_operation(
+            "计算 ROI 统计",
+            operation,
+            finish,
+            need_traces=True,
+            depends_on_peak_settings=True,
+        )
 
     def show_trial_average(self):
         if not self.require_movie():
@@ -7251,18 +8236,185 @@ class NewLightApp:
         canvas.draw()
         canvas.get_tk_widget().pack(fill="both", expand=True)
 
-    def peak_detection(self):
-        def operation(_movie, _baseline, traces, _masks, names, fs, _frames, _cancel_event):
-            return [(names[i], len(core.detect_trace_peaks(traces[:, i], fs))) for i in range(traces.shape[1])]
+    @staticmethod
+    def draw_peak_trace_axis(ax, trace, peaks, fs, roi_index, roi_name):
+        fs = float(fs)
+        if not np.isfinite(fs) or fs <= 0:
+            raise ValueError("视频帧率必须大于 0，才能绘制峰值时间。")
+        trace = np.asarray(trace, dtype=np.float32)
+        if trace.ndim != 1:
+            raise ValueError(f"峰值图需要一维 ROI 曲线，实际 shape 为 {trace.shape}")
+        peaks = np.asarray(peaks, dtype=int)
+        peaks = peaks[(peaks >= 0) & (peaks < trace.size)]
+        if peaks.size:
+            peaks = peaks[np.isfinite(trace[peaks])]
+        t = np.arange(trace.size, dtype=np.float32) / fs
+        ax.clear()
+        ax.set_facecolor("#06101f")
+        ax.plot(t, trace, color=core.roi_color_hex(roi_index), linewidth=1.1)
+        if peaks.size:
+            ax.scatter(
+                t[peaks],
+                trace[peaks],
+                s=34,
+                marker="o",
+                facecolor="#fb7185",
+                edgecolor="#ffffff",
+                linewidth=0.8,
+                zorder=4,
+                label="检测峰值",
+            )
+            legend = ax.legend(loc="upper right", frameon=False)
+            for text in legend.get_texts():
+                text.set_color(THEME["text"])
+        ax.set_xlabel("时间 (s)")
+        ax.set_ylabel("dF/F")
+        ax.set_title(f"{roi_name} dF/F 峰值 (n={len(peaks)})")
+        ax.tick_params(colors=THEME["muted"])
+        ax.xaxis.label.set_color(THEME["text"])
+        ax.yaxis.label.set_color(THEME["text"])
+        ax.title.set_color(THEME["text"])
+        for spine in ax.spines.values():
+            spine.set_color(THEME["border"])
+        ax.grid(True, alpha=0.22, color="#5b789b")
+        return peaks
 
-        def finish(counts):
-            messagebox.showinfo("峰值检测", "\n".join(f"{name}：{count} 个峰值" for name, count in counts))
-            self.log("峰值检测完成。")
+    def show_peak_detection_window(self, traces, names, peaks_by_roi, fs, min_percentile=25.0):
+        traces = np.asarray(traces, dtype=np.float32)
+        if traces.ndim != 2 or traces.shape[1] <= 0:
+            raise ValueError(f"峰值图需要二维 ROI 曲线，实际 shape 为 {traces.shape}")
+        fs = float(fs)
+        if not np.isfinite(fs) or fs <= 0:
+            raise ValueError("视频帧率必须大于 0，才能绘制峰值时间。")
+        roi_names = [names[index] if index < len(names) else f"ROI{index + 1}" for index in range(traces.shape[1])]
+        roi_peaks = [
+            np.asarray(peaks_by_roi[index] if index < len(peaks_by_roi) else (), dtype=int)
+            for index in range(traces.shape[1])
+        ]
+        win = tk.Toplevel(self.root)
+        win.title(f"dF/F 峰值检测 - 最低分位 {float(min_percentile):g}%")
+        win.configure(bg=THEME["bg"])
+        selector_row = ttk.Frame(win, padding=(8, 8, 8, 4))
+        selector_row.pack(fill="x")
+        ttk.Label(selector_row, text="ROI").pack(side="left", padx=(0, 8))
+        selector_values = tuple(
+            f"{index + 1}. {roi_names[index]}（{len(roi_peaks[index])} 个峰值）"
+            for index in range(traces.shape[1])
+        )
+        selector = ttk.Combobox(selector_row, values=selector_values, state="readonly")
+        selector.pack(side="left", fill="x", expand=True)
+        selector.current(0)
+        fig = Figure(figsize=(10, 5.5), dpi=100)
+        fig.patch.set_facecolor(THEME["bg"])
+        ax = fig.add_subplot(111)
+        canvas = FigureCanvasTkAgg(fig, master=win)
+        toolbar = PeakPlotToolbar(canvas, win, pack_toolbar=False)
+        toolbar.update()
+        toolbar.pack(fill="x")
+        canvas.get_tk_widget().pack(fill="both", expand=True)
+
+        def render_selected_roi(_event=None):
+            index = selector.current()
+            if index < 0:
+                index = 0
+            self.draw_peak_trace_axis(ax, traces[:, index], roi_peaks[index], fs, index, roi_names[index])
+            fig.tight_layout()
+            canvas.draw_idle()
+
+        def step_selected_roi(delta):
+            index = wrapped_view_index(selector.current(), traces.shape[1], delta)
+            selector.current(index)
+            render_selected_roi()
+
+        def on_peak_scroll(event):
+            delta = peak_scroll_delta(event)
+            if delta:
+                step_selected_roi(delta)
+
+        selector.bind("<<ComboboxSelected>>", render_selected_roi)
+        toolbar.set_view_step_callback(step_selected_roi)
+        canvas.mpl_connect("scroll_event", on_peak_scroll)
+        render_selected_roi()
+        return win
+
+    def peak_detection(self):
+        self.show_parameter_panel(
+            "峰值检测参数",
+            [
+                {
+                    "key": "min_percentile",
+                    "label": "最低峰值分位数 (%)",
+                    "default": self.configured_peak_percentile(),
+                    "type": "entry",
+                },
+            ],
+            apply_command=self.run_peak_detection,
+            description="候选峰值必须高于该 ROI 曲线的指定分位值。",
+            help_text=(
+                "最低阈值按每条 ROI 曲线独立计算：Qp = percentile(dF/F, p)。"
+                "峰值需同时满足 dF/F >= Qp 和原有突出度条件。"
+                "提高 p 会减少低峰，降低 p 会保留更多小峰；允许范围为 0-100。"
+            ),
+            apply_text="运行峰值检测",
+            panel_id="peak_detection",
+        )
+
+    def run_peak_detection(self, values=None):
+        values = dict(values or {})
+        try:
+            min_percentile = float(values.get("min_percentile", 25.0))
+        except (TypeError, ValueError):
+            self.set_parameter_feedback("最低峰值分位数必须是数字。", error=True)
+            return
+        if not np.isfinite(min_percentile) or not 0.0 <= min_percentile <= 100.0:
+            self.set_parameter_feedback("最低峰值分位数必须位于 0 到 100 之间。", error=True)
+            return
+        self.user_settings["peak_detection"] = {"min_percentile": round(min_percentile, 6)}
+        save_user_settings(self.user_settings)
+        self.set_parameter_feedback(f"峰值检测已加入任务流；最低分位 {min_percentile:g}%。")
+
+        def operation(_movie, _baseline, traces, _masks, names, fs, _frames, _context, _cancel_event):
+            fs = float(fs)
+            if not np.isfinite(fs) or fs <= 0:
+                raise ValueError("视频帧率必须大于 0，才能进行峰值检测。")
+            peaks = tuple(
+                core.detect_trace_peaks(
+                    traces[:, index],
+                    fs,
+                    min_percentile=min_percentile,
+                )
+                for index in range(traces.shape[1])
+            )
+            return {
+                "traces": np.asarray(traces, dtype=np.float32).copy(),
+                "names": list(names),
+                "peaks": peaks,
+                "fs": float(fs),
+                "min_percentile": min_percentile,
+            }
+
+        def finish(result):
+            self.show_peak_detection_window(
+                result["traces"],
+                result["names"],
+                result["peaks"],
+                result["fs"],
+                result["min_percentile"],
+            )
+            summary = "，".join(
+                f"{result['names'][index]}={len(peaks)}"
+                for index, peaks in enumerate(result["peaks"])
+                if index < len(result["names"])
+            )
+            if summary:
+                self.log(f"峰值检测完成（最低分位 {min_percentile:g}%）：{summary}")
+            else:
+                self.log(f"峰值检测完成（最低分位 {min_percentile:g}%）：未发现峰值。")
 
         self.queue_analysis_operation("峰值检测", operation, finish, need_traces=True)
 
     def roi_correlation(self):
-        def operation(_movie, _baseline, traces, _masks, names, _fs, _frames, _cancel_event):
+        def operation(_movie, _baseline, traces, _masks, names, _fs, _frames, _context, _cancel_event):
             if traces.shape[1] < 2:
                 raise ValueError("ROI 相关性至少需要两条 ROI 曲线。")
             return np.corrcoef(traces.T), names
@@ -7299,10 +8451,7 @@ class NewLightApp:
         if not out_dir:
             return
         name = Path(self.state.source_path).stem or "NewLight"
-        pre_trigger_s = float(self.state.pre_trigger_s)
-        post_trigger_s = float(self.state.post_trigger_s)
-
-        def operation(movie, baseline, traces, masks, names, fs, frames, _cancel_event):
+        def operation(movie, baseline, traces, masks, names, fs, frames, context, _cancel_event):
             return core.export_results(
                 out_dir,
                 name,
@@ -7313,15 +8462,22 @@ class NewLightApp:
                 traces,
                 fs,
                 frames,
-                pre_trigger_s,
-                post_trigger_s,
+                context["pre_trigger_s"],
+                context["post_trigger_s"],
+                min_peak_percentile=context["peak_min_percentile"],
             )
 
         def finish(paths):
             self.log(f"已导出 {len(paths)} 个文件到 {out_dir}")
             messagebox.showinfo("导出完成", f"结果已导出到：\n{out_dir}")
 
-        self.queue_analysis_operation("导出完整分析", operation, finish, need_traces=True)
+        self.queue_analysis_operation(
+            "导出完整分析",
+            operation,
+            finish,
+            need_traces=True,
+            depends_on_peak_settings=True,
+        )
 
 
 def main():

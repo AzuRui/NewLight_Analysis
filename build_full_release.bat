@@ -94,35 +94,14 @@ echo Preparing portable release folder...
 mkdir build_release
 xcopy /e /i /y dist\NewLight_Analysis build_release\NewLight_Analysis >nul
 copy /y check_backends.bat build_release\NewLight_Analysis\check_backends.bat >nul
-copy /y setup_caiman_latest.bat build_release\NewLight_Analysis\setup_caiman_latest.bat >nul
 
-echo Writing portable release launchers...
-(
-  echo @echo off
-  echo setlocal
-  echo set "APP_DIR=%%~dp0NewLight_Analysis"
-  echo if not exist "%%APP_DIR%%\NewLight_Analysis.exe" set "APP_DIR=%%~dp0"
-  echo if not exist "%%APP_DIR%%\NewLight_Analysis.exe" ^(
-  echo   echo NewLight_Analysis.exe was not found.
-  echo   pause
-  echo   exit /b 1
-  echo ^)
-  echo start "" "%%APP_DIR%%\NewLight_Analysis.exe"
-  echo endlocal
-) > build_release\run_NewLight_Analysis.bat
-(
-  echo @echo off
-  echo setlocal
-  echo cd /d "%%~dp0"
-  echo if not exist "NewLight_Analysis.exe" ^(
-  echo   echo NewLight_Analysis.exe was not found in:
-  echo   echo   %%CD%%
-  echo   pause
-  echo   exit /b 1
-  echo ^)
-  echo start "" "%%CD%%\NewLight_Analysis.exe"
-  echo endlocal
-) > build_release\NewLight_Analysis\run_NewLight_Analysis.bat
+echo Verifying frozen backend imports...
+call "build_release\NewLight_Analysis\check_backends.bat" /verify-only
+if errorlevel 1 (
+  echo Frozen backend verification failed.
+  if "%PAUSE_ON_EXIT%"=="1" pause
+  exit /b 1
+)
 
 set "ISCC="
 where ISCC.exe >nul 2>nul
@@ -148,6 +127,8 @@ echo Portable EXE:
 echo   %CD%\build_release\NewLight_Analysis\NewLight_Analysis.exe
 echo.
 echo Notes:
+echo - Start the packaged application with NewLight_Analysis.exe.
+echo - No legacy setup or batch launcher is published in the release folder.
 echo - DeepCAD-RT model is bundled from %MODEL%.
 echo - NewLight_Worker.exe is bundled under _internal for backend worker tasks.
 echo - NeuroSeg3 source/weights, NeuroAlign source, and DeepCAD-RT source are bundled.

@@ -66,8 +66,9 @@ When flexible strength is positive:
    stable stride from the selected block size so neighboring estimates overlap.
 3. Estimate translation for every patch with phase cross-correlation.
 4. Clip every local shift to `最大局部形变`.
-5. Remove the robust median local translation from the patch grid so the local
-   stage does not repeat the global rigid correction.
+5. Preserve residual global translation in the patch grid. Local deformation
+   can bias the first-stage whole-frame estimate, so the second stage must be
+   allowed to correct any remaining template offset.
 6. Suppress isolated vector outliers with neighborhood median filtering.
 7. Interpolate and spatially smooth the sparse patch shifts into a dense,
    continuous displacement field.

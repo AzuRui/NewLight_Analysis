@@ -97,6 +97,50 @@ def test_caiman_wrapper_preserves_movie_dtype_and_forwards_all_controls(tmp_path
     assert result.summary_path.is_file()
 
 
+def test_caiman_multiscale_wrapper_merges_results_into_a_traceable_backend_result(tmp_path):
+    def result_for(mask, name, snr, diameter):
+        artifact = tmp_path / f"{name}.npz"
+        summary = tmp_path / f"{name}.json"
+        save_roi_artifact(
+            artifact,
+            np.asarray([mask], dtype=bool),
+            image_shape=mask.shape,
+            names=[name],
+            extra_arrays={
+                "traces": np.asarray([[0, 1, 2, 1]], dtype=np.float32),
+                "snr": np.asarray([snr], dtype=np.float32),
+                "r_values": np.asarray([0.9], dtype=np.float32),
+                "cnn_scores": np.asarray([0.95], dtype=np.float32),
+                "component_indices": np.asarray([0], dtype=np.int32),
+                "preset_accepted": np.asarray([True], dtype=bool),
+            },
+        )
+        summary.write_text("{}", encoding="utf-8")
+        return core.ROIBackendResult(
+            masks=np.asarray([mask], dtype=bool), names=[name], metadata={},
+            arrays={
+                "traces": np.asarray([[0, 1, 2, 1]], dtype=np.float32),
+                "snr": np.asarray([snr], dtype=np.float32),
+                "r_values": np.asarray([0.9], dtype=np.float32),
+                "cnn_scores": np.asarray([0.95], dtype=np.float32),
+                "component_indices": np.asarray([0], dtype=np.int32),
+                "preset_accepted": np.asarray([True], dtype=bool),
+            },
+            log=name, artifact_path=artifact, summary_path=summary,
+        )
+
+    mask = np.zeros((8, 9), dtype=bool)
+    mask[2:6, 2:6] = True
+    merged = core.merge_caiman_multiscale_roi_results(
+        [(8.0, result_for(mask, "small", 2.0, 8.0)), (18.0, result_for(mask, "large", 3.0, 18.0))]
+    )
+    assert merged.masks.shape == (1, 8, 9)
+    assert merged.names == ["large"]
+    assert merged.metadata["multiscale_duplicate_count"] == 1
+    assert merged.arrays["scale_diameter"].tolist() == [18.0]
+    assert merged.summary_path.is_file()
+
+
 def test_fast_wrapper_preserves_scientific_projection_and_authorized_paths(tmp_path, monkeypatch):
     projection = np.linspace(0, 65535, 5 * 8, dtype=np.uint16).reshape(5, 8)
     weights = tmp_path / "segment_model.pt"

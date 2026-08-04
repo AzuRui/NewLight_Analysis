@@ -7,6 +7,7 @@ import warnings
 from argparse import Namespace
 from pathlib import Path
 
+import cv2
 import numpy as np
 
 warnings.filterwarnings("ignore", category=FutureWarning)
@@ -54,6 +55,62 @@ def load_neuroalign_module():
 
     install_midline_locked_outer_affine(na)
     return na
+
+
+def bilateral_outer_contour(mask: np.ndarray) -> np.ndarray:
+    """Return one bilateral contour while preserving the superior/inferior fissure."""
+    mask_u8 = (np.asarray(mask) > 0).astype(np.uint8)
+    contours, _ = cv2.findContours(mask_u8, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+    if not contours:
+        raise ValueError("No contour found in subject mask.")
+    if len(contours) == 1:
+        return contours[0][:, 0, :].astype(np.float32)
+
+    n_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(mask_u8, connectivity=8)
+    if n_labels <= 2:
+        return max(contours, key=cv2.contourArea)[:, 0, :].astype(np.float32)
+    ys, xs = np.where(mask_u8 > 0)
+    x_center = 0.5 * (float(xs.min()) + float(xs.max()))
+    candidates = [i for i in range(1, n_labels) if int(stats[i, 4]) > 0]
+    left = [i for i in candidates if float(centroids[i, 0]) < x_center]
+    right = [i for i in candidates if float(centroids[i, 0]) >= x_center]
+    if not left or not right:
+        return max(contours, key=cv2.contourArea)[:, 0, :].astype(np.float32)
+    left_id = max(left, key=lambda i: int(stats[i, 4]))
+    right_id = max(right, key=lambda i: int(stats[i, 4]))
+
+    def row_extent(component_id: int, y: int):
+        x_values = np.where(labels[y] == component_id)[0]
+        if len(x_values) == 0:
+            return None
+        return int(x_values.min()), int(x_values.max())
+
+    def bridge_at_edge(top: bool):
+        left_y, _ = np.where(labels == left_id)
+        right_y, _ = np.where(labels == right_id)
+        common_start = max(int(left_y.min()), int(right_y.min()))
+        common_end = min(int(left_y.max()), int(right_y.max()))
+        if common_end < common_start:
+            return
+        rows = range(common_start, common_end + 1) if top else range(common_end, common_start - 1, -1)
+        for y in rows:
+            left_extent = row_extent(left_id, y)
+            right_extent = row_extent(right_id, y)
+            if left_extent is None or right_extent is None:
+                continue
+            left_x = left_extent[1]
+            right_x = right_extent[0]
+            if right_x > left_x + 1:
+                cv2.line(mask_u8, (left_x, y), (right_x, y), 1, thickness=1)
+            return
+
+    # The two sides are joined only where they naturally begin/end. This
+    # produces one bilateral outer contour without filling the longitudinal
+    # fissure used by the separate midline detector.
+    bridge_at_edge(top=True)
+    bridge_at_edge(top=False)
+    joined, _ = cv2.findContours(mask_u8, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+    return max(joined or contours, key=cv2.contourArea)[:, 0, :].astype(np.float32)
 
 
 def install_midline_locked_outer_affine(na) -> None:
@@ -534,7 +591,7 @@ def run_outer(na, bundle: dict, cfg: dict, video_path: Path, atlas_json: Path, o
     na._CURRENT_SUBJECT_REF_IMG = mean_img
     na._CURRENT_SUBJECT_MIDLINE_PROFILE = na.estimate_subject_midline_profile(subject_mask, mean_img, cfg)
 
-    subject_outer = na.largest_contour_from_mask(subject_mask)
+    subject_outer = bilateral_outer_contour(subject_mask)
     atlas_outer = np.asarray(atlas["brain_outer_polygon"], dtype=np.float32)
     subject_midline_x = na.estimate_subject_midline_x(subject_mask)
     outer_affine = na.estimate_outer_affine(

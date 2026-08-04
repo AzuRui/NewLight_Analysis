@@ -20,6 +20,32 @@ class BaselineFrameSelectionTests(unittest.TestCase):
 
         np.testing.assert_allclose(baseline, np.mean(movie[1:4], axis=0))
 
+    def test_invalid_start_frames_are_excluded_from_percentile_baseline(self):
+        movie = np.array([1000, 1000, 10, 20, 30, 40], dtype=np.float32).reshape(6, 1, 1)
+
+        baseline = core.baseline_from_frames(movie, duration_frames=0, invalid_start_frames=2)
+
+        np.testing.assert_allclose(baseline, np.percentile(movie[2:], 25, axis=0))
+
+    def test_explicit_baseline_window_starts_after_invalid_prefix(self):
+        movie = np.arange(1, 7, dtype=np.float32).reshape(6, 1, 1)
+
+        baseline = core.baseline_from_frames(
+            movie,
+            start_frame=0,
+            duration_frames=2,
+            invalid_start_frames=2,
+        )
+
+        np.testing.assert_allclose(baseline, np.mean(movie[2:4], axis=0))
+
+    def test_projection_excludes_invalid_start_frames(self):
+        movie = np.array([1000, 1000, 10, 20, 30, 40], dtype=np.float32).reshape(6, 1, 1)
+
+        projection = core.compute_projection(movie, "p25", acceleration="cpu", invalid_start_frames=2)
+
+        np.testing.assert_allclose(projection, np.percentile(movie[2:], 25, axis=0))
+
 
 if __name__ == "__main__":
     unittest.main()

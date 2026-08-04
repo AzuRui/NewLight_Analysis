@@ -15,7 +15,10 @@ from roi_adaptation import (
     refine_protected_mask,
     serialize_roi_metadata,
     candidate_source_signature,
+    caiman_multiscale_diameters,
+    merge_caiman_multiscale_candidates,
     suggest_cell_diameter,
+    suggest_cell_diameter_range,
     suggest_area_range,
 )
 
@@ -55,6 +58,116 @@ def test_caiman_cell_diameter_uses_median_equivalent_diameter():
 
 def test_caiman_cell_diameter_keeps_current_value_without_valid_rois():
     assert suggest_cell_diameter([], current_value=15.0) == 15.0
+
+
+def test_caiman_cell_diameter_range_preserves_small_and_large_hand_drawn_examples():
+    minimum, maximum = suggest_cell_diameter_range(
+        [square(4), square(10)],
+        current_min=8.0,
+        current_max=18.0,
+    )
+    assert minimum < 2.0 * np.sqrt(16 / np.pi)
+    assert maximum > 2.0 * np.sqrt(100 / np.pi)
+    assert minimum < maximum
+
+
+def test_caiman_cell_diameter_range_with_one_example_only_updates_maximum():
+    assert suggest_cell_diameter_range([square(10)], 4.0, 18.0) == (4.0, 12.0)
+
+
+def test_caiman_multiscale_diameters_use_minimum_middle_maximum_and_skip_equal_gsig():
+    assert caiman_multiscale_diameters(8.0, 18.0) == (8.0, 12.0, 18.0)
+    assert caiman_multiscale_diameters(8.0, 9.0) == (8.0,)
+
+
+def _caiman_candidate(mask, *, name, trace, snr, rval, cnn, accepted=True):
+    return {
+        "masks": np.asarray([mask], dtype=bool),
+        "names": [name],
+        "arrays": {
+            "traces": np.asarray([trace], dtype=np.float32),
+            "snr": np.asarray([snr], dtype=np.float32),
+            "r_values": np.asarray([rval], dtype=np.float32),
+            "cnn_scores": np.asarray([cnn], dtype=np.float32),
+            "component_indices": np.asarray([0], dtype=np.int32),
+            "preset_accepted": np.asarray([accepted], dtype=bool),
+        },
+    }
+
+
+def test_caiman_multiscale_merge_keeps_higher_quality_duplicate_and_provenance():
+    mask = square(5)
+    lower_quality = _caiman_candidate(
+        mask, name="small", trace=[0, 1, 2, 1], snr=2.0, rval=0.8, cnn=0.9
+    )
+    higher_quality = _caiman_candidate(
+        mask, name="large", trace=[0, 1, 2, 1], snr=3.0, rval=0.9, cnn=0.95
+    )
+    merged = merge_caiman_multiscale_candidates(
+        [(8.0, 2, lower_quality), (18.0, 4, higher_quality)]
+    )
+    assert merged.masks.shape == (1, 40, 40)
+    assert merged.names == ("large",)
+    assert merged.arrays["scale_diameter"].tolist() == [18.0]
+    assert merged.arrays["scale_gsig"].tolist() == [4]
+    assert merged.metadata["multiscale_duplicate_count"] == 1
+    assert float(merged.arrays["snr"][0]) == 3.0
+
+
+def test_caiman_multiscale_merge_does_not_merge_adjacent_cells_only_for_trace_similarity():
+    first = square(5, top=2, left=2)
+    second = square(5, top=2, left=8)
+    trace = [0, 1, 2, 1]
+    merged = merge_caiman_multiscale_candidates(
+        [
+            (8.0, 2, _caiman_candidate(first, name="first", trace=trace, snr=2.0, rval=0.8, cnn=0.9)),
+            (18.0, 4, _caiman_candidate(second, name="second", trace=trace, snr=2.0, rval=0.8, cnn=0.9)),
+        ]
+    )
+    assert merged.masks.shape[0] == 2
+    assert merged.metadata["multiscale_duplicate_count"] == 0
+
+
+def test_caiman_multiscale_quality_gate_rejects_unique_cnn_only_candidate():
+    candidate = _caiman_candidate(
+        square(5), name="cnn-only", trace=[0, 1, 2, 1], snr=0.8, rval=0.1, cnn=0.99
+    )
+    merged = merge_caiman_multiscale_candidates(
+        [(8.0, 2, candidate)],
+        min_snr=2.0,
+        rval_threshold=0.8,
+        require_non_cnn_evidence=True,
+    )
+    assert merged.masks.shape == (0, 40, 40)
+    assert merged.metadata["multiscale_quality_rejected_count"] == 1
+
+
+def test_caiman_multiscale_quality_gate_keeps_cross_scale_supported_candidate():
+    mask = square(5)
+    merged = merge_caiman_multiscale_candidates(
+        [
+            (8.0, 2, _caiman_candidate(mask, name="small", trace=[0, 1, 2, 1], snr=0.8, rval=0.1, cnn=0.99)),
+            (12.0, 3, _caiman_candidate(mask, name="middle", trace=[0, 1, 2, 1], snr=0.9, rval=0.2, cnn=0.98)),
+        ],
+        min_snr=2.0,
+        rval_threshold=0.8,
+        require_non_cnn_evidence=True,
+    )
+    assert merged.masks.shape[0] == 1
+    assert merged.metadata["multiscale_quality_rejected_count"] == 0
+
+
+def test_caiman_multiscale_quality_gate_keeps_unique_temporally_strong_candidate():
+    candidate = _caiman_candidate(
+        square(5), name="temporal", trace=[0, 1, 2, 1], snr=2.5, rval=0.1, cnn=0.2
+    )
+    merged = merge_caiman_multiscale_candidates(
+        [(12.0, 3, candidate)],
+        min_snr=2.0,
+        rval_threshold=0.8,
+        require_non_cnn_evidence=True,
+    )
+    assert merged.names == ("temporal",)
 
 
 def test_same_source_signature_reuses_candidate_bank():

@@ -8,9 +8,9 @@ Show immediate, continuous visual feedback while the frozen application performs
 
 - Use `neural_starlight_startup.gif` as a 720 x 480 animated background. It is a startup-optimized derivative of the original 3072 x 2048 GIF and keeps the five-second loop while reducing the packaged asset from about 95.8 MB to about 3.67 MB.
 - Center the product identity: the existing software logo, `NewLight Analysis`, and the subtitle `神经影像分析平台`.
-- Place a thin white dashed rotating ring in the open area on the right so it does not obscure the neural imagery or product identity.
-- Show the current initialization status below the ring, for example `正在检测运行环境...`.
-- Show only the application version at the bottom. Do not show a company logo or company name.
+- Use one bottom row divided into three equal regions: application version on the left, current initialization status in the center, and a loading animation on the right.
+- Build the loading animation from eight gray-white circular dots. The dots enlarge and fade in sequence around the ring, matching the supplied bubble-loading reference instead of rotating a dashed outline.
+- Do not show a company logo or company name.
 - Keep the splash undecorated and non-interactive. Existing confirmation, error, administrator, and restart dialogs remain ordinary modal dialogs.
 
 ## Runtime Design

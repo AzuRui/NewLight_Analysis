@@ -41,11 +41,14 @@ modify the current movie:
 7. `bleach_correction` - photobleaching correction
 8. `enhance_contrast` - contrast enhancement
 9. `remove_vessel_artifact` - vessel/artifact suppression
+10. `load_roi` - load a saved ROI/atlas file for the current movie
 
 The following are deliberately excluded:
 
 - Data import, channel addition, save, and export operations because workflow
-  files must not pin source or destination paths.
+  files must not pin source or destination movie paths. `load_roi` is the
+  explicit exception: it stores the selected ROI/atlas file path because the
+  ROI file is an input artifact required to reproduce that step.
 - Manual ROI drawing/deletion and interactive crop confirmation because their
   result depends on user interaction and dataset-specific coordinates.
 - Preview-only actions, including display adjustment and vessel-mask preview.
@@ -71,6 +74,23 @@ Each descriptor contains only JSON-compatible values:
   }
 }
 ```
+
+An ROI-loading step uses the same descriptor shape. An NPZ example is:
+
+```json
+{
+  "function": "load_roi",
+  "name": "载入 ROI",
+  "parameters": {
+    "path": "E:/data/cells.npz",
+    "format": "npz"
+  }
+}
+```
+
+Atlas JSON and atlas-image steps additionally store the submitted `min_area`
+parameter. The referenced file must still exist at that path when the workflow
+is replayed; the ROI masks are not duplicated inside the workflow document.
 
 The descriptor stores the submitted parameters that produce the operation.
 Parameter validation remains in the same execution functions used by manual
@@ -117,7 +137,8 @@ The save action reads `TaskController.history` in submission order.
 
 The workflow describes intended processing, not captured pixel data. Saving a
 currently running or queued supported task is valid because its function and
-parameters were already fixed at enqueue time.
+parameters were already fixed at enqueue time. A `load_roi` descriptor also
+includes the selected ROI/atlas file path and its parsing parameters.
 
 ## Execution
 
@@ -165,6 +186,9 @@ Application responsibilities are limited to:
 - Unsupported future-version files show the supported version.
 - Missing current data shows the existing no-movie warning and does not open a
   partially runnable workflow.
+- A replayed `load_roi` step does not open a file or parameter dialog. It uses
+  the stored path, file type, and `min_area` value; a missing path or ROI/movie
+  shape mismatch fails that step and stops later steps in the same run.
 - A step runtime failure is shown through the existing background-task error
   route and prevents later steps in the same workflow from touching data.
 - Saving uses normal filesystem exceptions and reports a concise path-specific
@@ -197,7 +221,9 @@ Record the implementation and verification in `WORK_LOG.md` and
 - FIFO order, stop-on-failure behavior, and cancellation behavior.
 - The JSON schema with a readable example.
 - Version compatibility and the fact that workflows do not contain source
-  videos, output paths, ROI drawings, or analysis results.
+  videos, output paths, ROI drawings, or analysis results. Explain the one
+  input-artifact exception: `load_roi` stores a reference to the selected ROI
+  file, which must remain available at replay time.
 
 ## Compatibility
 

@@ -7,6 +7,8 @@ __pycache__/
 .venv/
 venv/
 env/
+.conda_envs/
+.conda_pkgs/
 
 # IDE / local editor state
 .idea/
@@ -27,6 +29,7 @@ NewLight_user_settings.json
 temp/
 tmp/
 *.log
+neural_starlight.gif
 
 # Large raw / exported imaging data
 *.avi
@@ -41,7 +44,11 @@ tmp/
 # Protected local validation samples.
 # Ignored by Git, but do not delete/move during cleanup unless the user explicitly asks.
 2/
+eye/
 Example.zip
+
+# Vendored runtime test suites are not needed by the application.
+NeuSuite_RuntimeDeps/**/tests/
 
 # OS metadata
 Thumbs.db

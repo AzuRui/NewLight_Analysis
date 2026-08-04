@@ -6,7 +6,7 @@ import sys
 from pathlib import Path
 
 from PyInstaller.config import CONF
-from PyInstaller.utils.hooks import collect_data_files, collect_submodules
+from PyInstaller.utils.hooks import collect_data_files
 
 ROOT = Path.cwd()
 WORKSPACE = ROOT.parent
@@ -64,32 +64,36 @@ hiddenimports = [
     'torch',
     'torchvision',
     'timm',
+    'timm.models.layers',
+    'timm.models.helpers',
+    'timm.models.registry',
     'seaborn',
     'yaml',
     'gdown',
-    'ultralytics',
     'caiman',
     'igraph',
     'leidenalg',
 ]
-hiddenimports += collect_submodules('ultralytics')
 cuda_binaries = collect_conda_cuda_runtime_dlls()
 datas = [
     ('xhr.ico', '.'),
     ('background.png', '.'),
+    ('neural_starlight_startup.gif', '.'),
     ('README.md', '.'),
     ('DESIGN_NOTES.md', '.'),
     ('PACKAGING.md', '.'),
     ('NeuroAlign_atlas_registration_help.txt', '.'),
     ('NeuroAlign_atlas_registration_summary.json', '.'),
     ('neuroalign_step_worker.py', '.'),
+    ('machine_setup.py', '.'),
+    ('tools/install_nvidia_driver.ps1', 'tools'),
     ('workers', 'workers'),
     ('csbdeep', 'csbdeep'),
     ('DeepCADRT_Model', 'DeepCADRT_Model'),
-    (str(WORKSPACE / 'NeuroSeg3' / 'ultralytics'), 'NeuroSeg3/ultralytics'),
-    (str(WORKSPACE / 'NeuroSeg3' / 'weights'), 'NeuroSeg3/weights'),
-    (str(WORKSPACE / 'NeuroSeg3' / 'dataset_cfg'), 'NeuroSeg3/dataset_cfg'),
-    (str(WORKSPACE / 'NeuroSeg3' / 'utils'), 'NeuroSeg3/utils'),
+    (str(WORKSPACE / 'NeuSuite2p' / 'segment_model.pt'), 'NeuSuite2p'),
+    (str(WORKSPACE / 'NeuSuite2p' / 'method'), 'NeuSuite2p/method'),
+    ('NeuSuite_RuntimeDeps', 'NeuSuite_RuntimeDeps'),
+    ('CaImAn_Resources', 'CaImAn_Resources'),
     (str(WORKSPACE / 'DeepCAD-RT' / 'DeepCAD_RT_pytorch' / 'deepcad'), 'DeepCAD-RT/DeepCAD_RT_pytorch/deepcad'),
     (str(WORKSPACE / '2cafe_analysis' / 'NeuroAlign'), 'NeuroAlign'),
 ]
@@ -106,7 +110,7 @@ if ipyparallel_spec and ipyparallel_spec.origin:
 
 a = Analysis(
     ['launch.py'],
-    pathex=[str(ROOT), str(WORKSPACE / 'NeuroSeg3'), str(WORKSPACE / 'DeepCAD-RT' / 'DeepCAD_RT_pytorch')],
+    pathex=[str(ROOT), str(WORKSPACE / 'NeuSuite2p'), str(WORKSPACE / 'DeepCAD-RT' / 'DeepCAD_RT_pytorch')],
     binaries=cuda_binaries,
     datas=datas,
     hiddenimports=hiddenimports,

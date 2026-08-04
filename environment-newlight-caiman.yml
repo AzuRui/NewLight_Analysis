@@ -1,0 +1,14 @@
+name: newlight_caiman
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11
+  - caiman=1.13.1
+  - numpy>=1.26,<2.1
+  - scipy>=1.11,<1.15
+  - scikit-image>=0.22,<0.26
+  - opencv>=4.8
+  - tifffile>=2023.7
+  - keras>=3,<4
+  - pytorch=*=cpu*
+  - pytest>=8,<9

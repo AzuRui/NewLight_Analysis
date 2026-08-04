@@ -1,5 +1,204 @@
 # Work Log
 
+## 2026-08-03
+
+### Release Folder Legacy BAT Removal
+
+- Removed publication of `setup_caiman_latest.bat` and
+  `run_NewLight_Analysis.bat` from both `build_exe.bat` and
+  `build_full_release.bat`. Portable and installer staging folders now expose
+  `NewLight_Analysis.exe` as the only application launcher.
+- Kept the project-root `run_NewLight_Analysis.bat` unchanged as a source-only
+  development launcher. Kept root `setup_caiman_latest.bat` only as a legacy
+  compatibility redirect for source environment setup; neither file is a
+  compiled-runtime dependency.
+- Added a packaging contract test that rejects either legacy BAT name in both
+  release builders. Updated the user manual and handoff so future builds do
+  not reintroduce them.
+
+### First-Run Administrator and Automatic NVIDIA Driver Setup
+
+- Added a frozen-only, versioned first-run gate in `machine_setup.py` and
+  connected it in `launch.py` after Worker dispatch but before GUI imports.
+  Source launches bypass this gate. A missing machine record requires an
+  administrator launch; non-admin first runs show a blocking Chinese message
+  and exit without self-elevating.
+- Machine state is written atomically to
+  `%ProgramData%\NewLight_Analysis\machine_setup_v1.json`. Current states are
+  `complete_cuda`, `complete_cpu_only`, and `pending_restart`; the file contains
+  capability/setup metadata only and no remote-control, licensing, identity,
+  or expiry fields.
+- Display adapters are detected by both display name and PNP vendor ID. NVIDIA
+  `VEN_10DE` is recognized even when Windows shows a basic display adapter;
+  mixed Intel/AMD plus NVIDIA systems follow the NVIDIA path. Explicit
+  AMD/Intel-only systems record CPU mode and warn that DeepCAD-RT and other
+  CUDA-only paths are unavailable. An empty WMI result blocks initialization
+  rather than permanently misclassifying the machine.
+- Added `tools\install_nvidia_driver.ps1`. Its Windows Update Agent COM flow
+  requires administrator rights, searches only applicable uninstalled driver
+  updates, filters NVIDIA display-class updates, accepts their EULA, downloads
+  and installs them, and writes diagnostics under ProgramData. It does not
+  install the full CUDA Toolkit because the portable package includes its
+  CUDA/cuDNN runtime.
+- Split `check_backends.bat` into explicit modes: no argument runs the machine
+  setup UI, `/verify-only` performs non-mutating backend checks, and
+  `/install-gpu-driver` is the only driver-install path. Both portable build
+  scripts use `/verify-only`, so building and testing cannot install a driver
+  or restart Windows accidentally. Source checks now locate the actual
+  `caiman_latest` Python; frozen checks continue preferring the bundled Worker.
+- Successful driver installation records the current Windows boot marker as
+  `pending_restart`. The user gets a yes/no restart dialog with no countdown;
+  a declined restart leaves the system running. Re-launching during the same
+  boot only reminds the user to restart and never repeats installation. After
+  a real reboot, an elevated launch rechecks CUDA before completing setup.
+- Added state-machine, packaging-contract, and retained-example tests. Final
+  serial source regression passed `269 passed`. A new read-only smoke uses
+  only `example\twophone.avi`; source and frozen reads returned three preview
+  frames at shape `(3, 195, 410)` and 40 FPS, with SHA-256 unchanged.
+- Rebuilt `dist\NewLight_Analysis\NewLight_Analysis.exe` with Python 3.11.15
+  and PyInstaller 6.20.0. The build returned code 0 and passed frozen NeuSuite,
+  CaImAn, DeepCAD-RT, CUDA 13.0, and cuDNN 92101 verification. Frozen resources
+  include `_internal\machine_setup.py` and
+  `_internal\tools\install_nvidia_driver.ps1`. No live driver installation,
+  ProgramData setup record, or restart was performed on the development host.
+
+### Frozen NeuSuite Dependency and Worker Multiprocessing Repair
+
+- Reproduced the packaged Fast ROI failure from the user screenshot as
+  `ModuleNotFoundError: No module named 'timm.models.layers'`. The source
+  `caiman_latest` environment contains the deprecated compatibility modules
+  `timm.models.layers`, `timm.models.helpers`, and `timm.models.registry`, but
+  PyInstaller had omitted all three from the frozen Worker.
+- Added those three compatibility entry points to the explicit hidden imports
+  in `NewLight_Analysis.spec`. This preserves the authorized NeuSuite custom
+  runtime without changing its model code or checkpoint.
+- Strengthened `check_backends.bat`: it now imports the actual NeuSuite YOLO
+  runtime, checks the Fast ROI model/runtime, CaImAn motion and ROI workers,
+  CaImAn CNN resource, DeepCAD-RT worker/model, and returns a nonzero exit code
+  if any check fails. `build_exe.bat` runs this check before reporting build
+  completion, so a package with a missing frozen backend can no longer be
+  published as successful.
+- During a real frozen Fast ROI inference, reproduced
+  `Worker script not found: --multiprocessing-fork`; a minimal frozen
+  `multiprocessing.Process` exited with code 2. The root cause was the shared
+  PyInstaller entry point not calling `multiprocessing.freeze_support()`.
+  Added that call at the earliest executable entry in `launch.py`; the same
+  frozen process smoke now prints `child-ok` and exits with code 0.
+- Added packaging contract coverage for the timm compatibility modules, real
+  backend verification, post-build verification, and multiprocessing freeze
+  support. Focused packaging/ROI worker verification passed `21` tests.
+- Rebuilt the portable release with Python 3.11.15 and PyInstaller 6.20.0.
+  The final build returned code 0, copied all release files, and passed its
+  automatic NeuSuite, CaImAn, DeepCAD-RT, CUDA 13.0, and cuDNN 92101 checks.
+  The final EXE is `dist\NewLight_Analysis\NewLight_Analysis.exe`, built at
+  2026-08-03 13:14.
+- Ran the frozen NeuSuite model on one read-only frame from
+  `eye\data\2\A01\result.avi` using CPU inference. It completed in the
+  packaged Worker and produced 15 ROI instances plus NPZ/JSON artifacts in a
+  temporary smoke directory. The source sample was not modified or removed.
+- PyInstaller still emits optional/deprecation warnings for old timm imports,
+  DCNv3 AMP decorators, Intel/MS MPI libraries, and the local Conda OpenCL
+  exit hook. They did not affect the verified application backends or real
+  Fast ROI inference. The timm warnings can only be removed cleanly by later
+  migrating the authorized NeuSuite source to current timm APIs.
+
+## 2026-07-31
+
+### DeepCAD-RT CUDA Manual Requirement
+
+- Confirmed DeepCAD-RT inference is a CUDA-only workflow in the current
+  application. It has no CPU fallback even though several other NewLight
+  operations can run on CPU.
+- Added a prominent warning to the README CUDA section: a CUDA-capable NVIDIA
+  GPU and compatible NVIDIA driver are mandatory; bundling the `.pth` model,
+  worker, and CUDA runtime files is not sufficient on a CPU-only computer.
+- Added a permanent user-manual rule to `PROJECT_HANDOFF.md`. Every future
+  manual revision must repeat the warning in system requirements, the
+  DeepCAD-RT feature description, troubleshooting, and the backend
+  compatibility table.
+- Recorded that the warning must live outside generated `dist` output because
+  `build_exe.bat` deletes `dist` before rebuilding. No application code or EXE
+  was changed for this documentation-only update.
+
+### Detailed Current User Manual
+
+- Replaced reliance on the deleted/outdated generated manual with a durable,
+  source-controlled manual at `docs\NewLight_Analysis_User_Manual.md`.
+- Documented the current Chinese four-tab UI, parameter sidebar, image/ROI
+  toolbars, two-photon TDMS conversion, 8/16-bit import, five-channel
+  grayscale/pseudocolor behavior, protocol baseline rules, stimulus mapping,
+  DeepCAD blending, all preprocessing controls, manual/adaptive ROI workflows,
+  Fast ROI and CaImAn parameters, Atlas Builder, three-stage NeuroAlign,
+  dF/F/peak/correlation/event-average/heatmap analysis, all exports, FIFO task
+  states, and reusable `.nlworkflow.json` behavior.
+- Added formulas and publication-method templates, a 20-row troubleshooting
+  table, compatibility guidance, and 15 numbered screenshot placeholders with
+  exact suggestions for images the user can add later.
+- Added `tools\build_user_manual.py` to generate a consistently styled DOCX.
+  The generated manual contains 314 body paragraphs, 72 headings, 52 tables,
+  and all 15 placeholders.
+- Exported the DOCX through Microsoft Word as a 26-page PDF. Raster review of
+  every page and full-size checks of the cover, long tables, method callouts,
+  formulas, and final glossary found no clipping, overlap, or blank pages.
+- Updated `build_exe.bat` to copy the durable Markdown, DOCX, and PDF manuals
+  into `dist\NewLight_Analysis` after every portable build. The current copies
+  were also placed in the existing dist release without rebuilding the EXE.
+
+## 2026-07-27
+
+### DeepCAD-RT Short-Movie Temporal Stitching Repair
+
+- Diagnosed a real DeepCAD-RT upstream stitching defect with the 19-frame
+  `eye\data\20260723_A04\bin10.tif` validation movie. With the old worker,
+  `patch_t` was reduced to 19 and the single temporal patch wrote only frames
+  0-12; output frames 13-18 were all zero even though their inputs were not
+  empty.
+- Updated `workers\run_deepcadrt.py` to retain the configured temporal patch
+  length and edge-pad movies no longer than one patch to one patch plus one
+  temporal stride. DeepCAD-RT therefore has a leading and trailing temporal
+  stitch window, then its result is cropped back to the original length.
+- Added a second safety net in `analysis_core.preserve_invalid_denoised_frames`:
+  a zero DeepCAD-RT output for a nonempty input frame falls back to that source
+  frame rather than contaminating preview or export through raw/denoised
+  blending.
+- Real GPU validation on the 19-frame sample produced no zero output frames.
+  Its high-pass standard deviation decreased from `383.65` to `9.21`
+  (`2.4%` of the raw value); all former tail frames now have nonzero output.
+- The short-stack repair performs two temporal stitch passes (128 patches for
+  this sample instead of 64), increasing the test runtime to about 18 seconds.
+  This is intentional and required for valid coverage of every frame.
+- Added `tests\test_deepcadrt_short_movie.py`; full regression suite passed:
+  `59 passed`.
+
+## 2026-07-19
+
+### TIFF Import Bit Depth Control
+
+- Added an `Import depth` selector in the Data tab with `Auto`, `16-bit`, and `8-bit` options.
+- Updated `analysis_core.load_movie` so TIFF imports can preserve native 16-bit values in `Auto` / `16-bit` mode, or be intentionally quantized to 8-bit on request.
+- Kept the analysis pipeline in `float32`; only explicit 8-bit import or export paths quantize the data.
+- Extended `analysis_core.save_movie_tiff` and `analysis_core.save_movie` with a `bit_depth` option so TIFF output can be written as `uint8`, `uint16`, or float stack when needed.
+- Added regression tests for TIFF import preservation, TIFF 8-bit conversion, TIFF 16-bit output, and the Data-tab import-depth selector.
+- Verified `conda run -n caiman_latest python -B -m unittest tests.test_bit_depth tests.test_gui_static`.
+- Verified `conda run -n caiman_latest python -B -m unittest tests.test_two_photon_converter tests.test_baseline tests.test_stimulus_input tests.test_interlacing_shift tests.test_background_image`.
+- Verified `conda run -n caiman_latest python -m py_compile NewLight_Analysis.py analysis_core.py tests\test_bit_depth.py tests\test_gui_static.py`.
+
+## 2026-07-20
+
+### Embedded Parameter Panel Layout
+
+- Added a fixed-width `Parameters` panel between the left function tabs and the main image workspace, matching the left control column width.
+- Moved the image canvas, Matplotlib toolbar, ROI action row, frame slider, and Run Log into the workspace column to the right of the new parameter panel.
+- Kept image fitting based on the remaining workspace canvas size, so the image stays centered and aspect-preserved after resize/maximize.
+- Changed simple parameter prompts to render inside the new parameter panel instead of opening small modal popups.
+- Updated Preprocess buttons so clicking a tool loads its parameters into the panel and `Run` executes it.
+- Expanded exposed Preprocess parameters: Image Shift row parity, Enhance Contrast clip limit, Detect Vessels overlay alpha, and Remove Vessel Artifact threshold.
+- Added static GUI tests for the parameter side panel and embedded Preprocess parameter workflow.
+- Verified `conda run -n caiman_latest python -B -m unittest tests.test_gui_static`.
+- Verified `conda run -n caiman_latest python -B -m unittest tests.test_bit_depth tests.test_background_image tests.test_interlacing_shift`.
+- Verified `conda run -n caiman_latest python -m py_compile NewLight_Analysis.py analysis_core.py tests\test_gui_static.py`.
+- Smoke-tested hidden Tk construction and confirmed `Image Shift` loads `range,row_parity` into the parameter panel while the canvas occupies the workspace column.
+
 ## 2026-06-30
 
 ### Window Background Image
@@ -593,6 +792,314 @@
 - Verified `conda run -n caiman_latest python -B -m unittest tests.test_gui_static`.
 - Verified `conda run -n caiman_latest python -m py_compile NewLight_Analysis.py tests\test_gui_static.py`.
 
+## 2026-07-21
+
+### Motion Mode Controls And Built-in Rigid Reference Fix
+
+- Confirmed from the installed CaImAn source that `piecewise` mode runs rigid
+  template generation first and then piecewise-rigid local correction.
+- Changed the CaImAn `Mode` parameter from an unrestricted text entry to a
+  readonly `rigid / piecewise` combobox; the default is now `piecewise`.
+- Reproduced the Built-in reference bug with a synthetic movie: when the first
+  four reference frames were all offset by 4 px, they received zero shift and
+  later stable frames were shifted toward the incorrect opening position.
+- Confirmed there was no frame omission or original-frame splice. The root
+  cause was that a raw mean of the first N frames defined the output coordinate
+  system.
+- Replaced the ambiguous `Template frames` control with `Reference mode`,
+  zero-based `Reference start frame`, `Reference frame count`, and
+  `Max rigid shift px`.
+- Automatic mode now selects a low-motion window near the movie's dominant
+  median position. Manual mode uses the requested start/count interval.
+- Built-in correction now aligns the selected interval to a middle anchor,
+  builds a median template, and then estimates a final shift for every frame,
+  including the selected reference frames.
+- Added Run Log diagnostics for selected interval, anchor, median absolute
+  dy/dx, and maximum absolute dy/dx.
+- Added `tests\test_rigid_motion.py` for unstable openings, displaced stable
+  openings, manual interval behavior, and correction of frames inside the
+  reference interval.
+- Changed CaImAn output handling so its required worker TIFF files remain
+  session-scoped: the input TIFF is deleted immediately, while the corrected
+  result is retained as `CaImAn\caiman_preview.tif` until the application closes
+  and is also loaded as the current software preview.
+- CaImAn no longer reports a temporary path as a saved user result. The Run Log
+  now tells the user to use `Save Current Movie` to keep the preview; Undo can
+  restore the previous movie state.
+- Filtered the harmless Conda OpenCL activation noise (`Access is denied`,
+  missing `temp.txt`) from the application log. The environment's OpenCL vendor
+  directory is read-only for the current user, but CaImAn completes normally.
+- Preserved the display source across CaImAn completion. A frame view reloads
+  the same frame from the corrected movie; a projection view recomputes the
+  selected projection instead of unconditionally replacing a frame with Mean.
+- The Run Log reports the session preview TIFF path so the user can inspect it
+  directly. Permanent output still requires `Save Current Movie`.
+- Added `tests\test_caiman_motion.py` to verify result loading, immediate input
+  cleanup, and retention of the session preview TIFF.
+- Exposed CaImAn `Max shift px`, `Patch stride px`, `Patch overlap px`, and
+  `Max local deviation px` beside the existing mode selector. Defaults are now
+  `piecewise / 12 / 48 / 24 / 5` for the current two-photon data scale.
+- Forwarded all four numeric settings through `analysis_core.run_caiman_motion`
+  to `workers\run_caiman.py` instead of relying on hidden worker defaults.
+- Added worker diagnostics for the actual parameter values, rigid and local
+  median/max absolute y/x shifts, and the fraction of estimates touching the
+  configured displacement limit.
+- Verified the real worker on a 30-frame synthetic shifted movie: it reported
+  maximum rigid shift 7.6 px, maximum local shift 7.6 px, and zero limit hits
+  with `max_shift=12` and `max_deviation=5`.
+
+## 2026-07-22
+
+### Complete Chinese Localization
+
+- Localized the main window, parameter panel, dialogs, file pickers, status
+  messages, Run Log text, validation errors, NeuroAlign help, analysis windows,
+  and Matplotlib chart labels into Chinese.
+- Preserved model and scientific names while adding functional descriptions:
+  `CaImAn 运动矫正/去抖动`, `DeepCAD-RT 深度学习降噪`,
+  `NeuroSeg3 自动 ROI 分割`, and `NeuroAlign 脑图谱配准`.
+- Added `ui_text_zh.py` as the Chinese display catalog for model names,
+  preprocess actions, translated choices, and ROI statistics headings.
+- Replaced display-text routing with stable preprocess action IDs. Chinese
+  combobox choices map back to the original `piecewise`, `rigid`, `auto`,
+  `manual`, `odd`, and `even` backend values.
+- Set the left sidebar to a stable 300 px width and the parameter panel to
+  290 px. Sidebar action buttons share one centered style and the longest
+  model/function name remains fully visible.
+- Localized the Matplotlib navigation toolbar tooltips while preserving its
+  callback names and localized ROI statistics headings without changing the
+  exported dataframe schema.
+- Added `tests\test_chinese_localization.py` and updated GUI static tests to
+  verify Chinese labels, model-name conventions, internal action routing,
+  choice mapping, and stable layout dimensions.
+- Verified the complete test suite: 44 tests passed.
+- Verified a real Tk window at 1412x862 requested size; the parameter panel
+  rendered at 290 px and the preprocess page showed uniform, untruncated
+  action buttons.
+- The EXE was not rebuilt in this update. Source launch through
+  `run_NewLight_Analysis.bat` uses the Chinese interface immediately.
+
+## 2026-07-23
+
+### Combobox Background Integration
+
+- Styled all `ttk.Combobox` controls so their input field, arrow area, and
+  dropdown list match the dark parent panel instead of using the Windows
+  default white background.
+- Kept readable dark-theme hover, selection, disabled-text, border, and arrow
+  colors. Tk/ttk does not provide true per-pixel widget transparency, so panel
+  color matching is the supported visual-transparency implementation.
+- Added a GUI static regression test covering the combobox field and dropdown
+  list background configuration.
+
+### Fast Motion Correction
+
+- Renamed the visible `内置刚性运动矫正` action to `快速运动矫正` while
+  preserving its stable internal action ID.
+- Left the existing two-pass rigid algorithm unchanged. `柔性强度 = 0`
+  returns the rigid movie and shifts exactly, without entering local
+  estimation.
+- Added optional constrained local correction using overlapping patch phase
+  correlation, median vector filtering, dense-field interpolation, spatial
+  smoothing, and one linear image warp after rigid correction.
+- Exposed `柔性强度 (0=关闭)`, `局部块尺寸 (px)`, and
+  `最大局部形变 (px)` with defaults `0.0`, `96`, and `3.0`.
+- Expanded the parameter description with the recommended `0.2-0.5` strength
+  range, speed/stability tradeoffs, deformation-risk warning, and guidance to
+  use CaImAn piecewise-rigid correction for stronger complex motion.
+- Added local grid, dy/dx displacement, and limit-hit diagnostics to the Run
+  Log. Residual template translation is retained because local deformation can
+  bias the first-stage whole-frame estimate.
+- Added numerical regression tests for rigid compatibility, synthetic local
+  deformation improvement, clipping/finite output, and small-image fallback,
+  plus GUI localization and routing tests.
+- Benchmarked a 20-frame synthetic `195 x 410` movie at about 0.46 seconds in
+  the current development environment with a `4 x 8` local grid.
+
+### Responsive Single-Task Queue
+
+- Added `task_queue.py`, which owns one FIFO background worker for the current
+  dataset. Tk-only callbacks commit results after each worker exits, then the
+  next queued task starts. This keeps window repainting, pan/zoom, parameter
+  editing, and logs responsive while preserving movie-operation order.
+- Migrated imports, two-photon conversion, stimulus loading, ROI/atlas work,
+  preprocessing, motion correction, DeepCAD-RT, NeuroSeg3, NeuroAlign stages,
+  dF/F and trace analysis, heatmap AVI, and export/save paths to the shared
+  queue. Direct worker-thread creation is now centralized.
+- Added a persistent `当前数据任务流` panel below Parameters. Pending items use
+  white text, the active item has a green border, completed items use
+  light-gray text, and the final completed item is outlined blue when idle.
+  `取消当前任务` requests cooperative cancellation while retaining later tasks.
+- Primary dataset loads reset visible history only after the new data is
+  active; the load task and later queued work remain visible. Results from an
+  older movie identity are ignored rather than overwriting a new import.
+- Moved `试次平均` into the queue as one task. It derives missing stimulus
+  triggers, baseline, dF/F traces, and trial averages off the Tk thread before
+  opening its plot. This fixes the old asynchronous race where it could request
+  trigger detection and immediately conclude that no triggers existed.
+- Added `tests\test_task_queue.py` for FIFO ordering, main-thread completion
+  ordering, cancellation, and history reset. Added static coverage that keeps
+  trial averaging on the queue.
+- Verified `conda run -n caiman_latest python -m py_compile NewLight_Analysis.py task_queue.py`.
+- Verified `conda run -n caiman_latest python -m pytest -q`: `52 passed`.
+- The Conda/OpenCL `Access is denied` / missing `temp.txt` activation messages
+  still appear in the development shell but have exit code 0 and do not affect
+  queue tests or application behavior.
+
+## 2026-07-24
+
+### Projection-Aware ROI Interaction
+
+- ROI interaction no longer forces the canvas to a mean image. Selecting
+  `圆形 ROI`, `自由绘制 ROI`, or `点击删除 ROI` refreshes the canvas using the
+  currently selected `视图` projection: `均值`, `最大值`, `标准差`, or
+  `25% 分位`.
+- The ROI tools wait for this refresh to finish before accepting a canvas
+  click, preventing a newly drawn ROI from being placed on a stale image.
+- Added static regression coverage that prevents ROI mode changes from
+  assigning the view back to `mean`.
+- Important environment detail: start commands with `conda run -n
+  caiman_latest ...` (or activate that environment) rather than directly
+  executing its `python.exe`. Direct execution omits `Library\\bin` from
+  `PATH`, which makes NumPy's MKL backend terminate during import with Windows
+  exception `0xC06D007F`.
+- Updated the Chinese preprocess-label test for the new `显示调节` action.
+- Verified with `conda run -n caiman_latest --no-capture-output python -m
+  py_compile NewLight_Analysis.py analysis_core.py ui_text_zh.py task_queue.py`.
+- Verified the full suite with the same activated environment: `56 passed`.
+
+### Scrollable Parameter Panel
+
+- Replaced the fixed, clipping `Parameters` content frame with a dedicated
+  Canvas-backed vertical scroll area and visible right-side scrollbar.
+- Kept `当前数据任务流` outside that scroll area, so it remains fixed below the
+  editable parameters while long motion-correction configurations scroll.
+- Added mouse-wheel support while the pointer is over the parameter area and
+  reset the scroll position to the top whenever a parameter panel is opened or
+  cleared.
+- Kept numeric values as precise text inputs rather than replacing them with
+  coarse numeric sliders; the new scrollbar exposes all fields and the
+  `恢复默认` / `运行` / `清空` controls.
+- Reduced parameter-label wrapping width to account for the visible scrollbar
+  and avoid horizontal clipping.
+- Added GUI static regression coverage for the independent parameter scrollbar
+  and scroll-reset methods.
+- Verified `conda run -n caiman_latest python -m py_compile NewLight_Analysis.py task_queue.py`.
+- Verified `conda run -n caiman_latest python -m pytest -q`: `53 passed`.
+
+### Embedded Configuration Panels
+
+- Extended the right-side `参数` panel into a reusable embedded form surface:
+  text fields, readonly choices, checkboxes, file/folder path rows with a
+  `浏览` button, grouped actions, colour swatches, expandable help text, and
+  in-panel validation/progress feedback are now supported.
+- System file/folder pickers remain native Windows dialogs only when the user
+  explicitly selects `浏览` or a file/folder source action. Other configuration
+  interaction no longer creates a separate `Toplevel` window.
+- Moved open/add data source selection, channel pseudo-colour selection,
+  built-in automatic ROI, NeuroSeg3, Atlas Reference Builder, the three-stage
+  NeuroAlign workflow, and heatmap AVI settings into the parameter panel.
+- NeuroAlign stage previews and heatmap frame previews now render in the main
+  image area. Closing either workflow restores the prior movie frame or
+  projection; accepting a final NeuroAlign result restores the movie before
+  importing its ROI map.
+- Added static regression coverage that prevents the migrated entry points
+  from calling their legacy dialog classes and protects embedded path,
+  checkbox, and action controls.
+- Verified `conda run -n caiman_latest python -m py_compile NewLight_Analysis.py task_queue.py`.
+- Verified `conda run -n caiman_latest python -m pytest -q`: `55 passed`.
+## 2026-07-27
+
+### Invalid Start Frames and Automatic Movie FPS
+
+- Added `无效起始帧数` to the `实验协议` panel. The accepted range is
+  `0 <= N < movie frame count`.
+- DeepCAD-RT now sends only `movie[N:]` to the non-causal 3D denoising model,
+  then restores `movie[:N]` pixel-for-pixel at the front of the result. This
+  prevents later anatomical structure from leaking backward into acquisition
+  startup/noise frames while preserving the original frame count and timeline.
+- DeepCAD preview/save caches include `N`. Changing `N` invalidates the old
+  cache and queues a fresh preview instead of silently reusing incompatible
+  output.
+- Baseline, mean/max/std/25th-percentile projections, ROI trace extraction,
+  event averages, and analysis/export paths exclude the invalid prefix from
+  baseline/projection statistics. An explicit baseline window starts at
+  `max(baseline_start_frame, N)` and keeps its requested duration where frames
+  remain.
+- Movie FPS is written back to the protocol field on every primary import.
+  AVI/MP4/MOV/MKV use the container FPS; two-photon folders use `Image frame
+  rate`; TIFF uses ImageJ `fps`, ImageJ `finterval`, OME `TimeIncrement`, then
+  a nearby `protocol*.txt`, in that order. TIFF without rate metadata falls
+  back to `10 Hz` and still requires user confirmation.
+- Added regression coverage in `tests/test_baseline.py`,
+  `tests/test_deepcadrt_short_movie.py`, `tests/test_movie_fps.py`, and
+  `tests/test_gui_static.py`.
+- Verified `conda run -n caiman_latest --no-capture-output python -m pytest -q`:
+  `70 passed`. No EXE was rebuilt and no sample data was removed or moved.
+
+### Dual ROI Engines: CaImAn and Authorized NeuSuite
+
+- Replaced the visible `内置自动 ROI` and generic COCO `NeuroSeg3 自动 ROI 分割`
+  actions with `CaImAn 识别分割` and `快速 ROI 分割`. Both use the embedded
+  right-side parameter panel and the single FIFO task controller.
+- Added `roi_engines.py`, a versioned NPZ contract that validates image shape,
+  names, independent boolean instances, JSON metadata, and aligned numeric
+  arrays without importing either model backend. Empty instances are rejected
+  on load; overlapping irregular instances remain independent.
+- Added `workers/run_caiman_roi.py`. It sets
+  `MKL_THREADING_LAYER=SEQUENTIAL` and `KERAS_BACKEND=torch` before scientific
+  imports, excludes invalid start frames, runs patch CNMF/CNMF-E from a CaImAn
+  memory map, evaluates SNR/spatial-correlation/CNN quality, thresholds each
+  spatial component with `threshold_spatial_components(maxthr=...)`, restores
+  footprints in Fortran order, and exports masks, traces, scores, and summary.
+- Added `workers/run_neusuite_roi.py`. It imports the authorized custom runtime
+  through `method.ultralytics`, aliases checkpoint paths from `ultralytics` to
+  that package, reads `results[0].masks.data` per instance, restores each mask
+  with nearest-neighbor interpolation, and filters by restored pixel area.
+- Added the project-local CPU CaImAn environment definition and setup script.
+  `.conda_envs/newlight_caiman` passed direct NumPy/Torch/Keras/CaImAn imports;
+  controlled CNN resources are in `CaImAn_Resources/model`.
+- Added `setup_neusuite_runtime.bat` and an offline pure-source fallback for
+  `einops`, `efficientnet_pytorch`, and `dill`. The fast worker uses the
+  CUDA-enabled `neuroseg3` environment while dependency fallback lives in
+  `NeuSuite_RuntimeDeps`; it does not load NeuSuite's incompatible Python 3.10
+  `.pyc` files.
+- Real retained-sample validation used `eye/data/2/A01/result.avi` read-only.
+  Fast ROI returned 38 independent `540x512` masks with areas 53-599 px^2 and
+  confidence 0.264-0.716. CaImAn on a 120-frame central crop, excluding five
+  startup frames, returned 64 `192x192` masks and aligned `64x115` traces plus
+  SNR, spatial-correlation, and CNN arrays.
+- Updated `NewLight_Analysis.spec` to package the authorized NeuSuite model and
+  custom runtime, `NeuSuite_RuntimeDeps`, and CaImAn CNN resources, and to stop
+  packaging the generic NeuroSeg3 COCO assets. No EXE was built in this update.
+- Full pytest passes with `102 passed`; Python compilation and a Tk app
+  construction smoke test pass. The known Conda/OpenCL `temp.txt` activation
+  noise remains harmless. No validation sample was deleted, moved, or changed.
+
+## 2026-07-28
+
+### Unified ROI Colors and Embedded ROI List
+
+- Added a stable index-based ROI palette in `analysis_core.py`. ROI colors no
+  longer depend on the total ROI count, so adding a later ROI does not recolor
+  the existing ones.
+- Applied the same color source to ROI image outlines and labels, exported
+  dF/F curves, exported trial-average curves, the interactive dF/F window, and
+  the interactive trial-average window. Stimulus-aligned single-ROI figures
+  intentionally retain gray trials, a black mean, and a red dashed stimulus
+  marker as previously specified.
+- Added `显示 ROI 列表` to the ROI drawing toolbar. It opens an embedded table
+  in the right-side parameter panel with a color swatch, ROI name, and mask
+  area in pixels; no additional popup window is created.
+- The visible ROI table refreshes immediately after ROI import/replacement,
+  drawing, deletion, or clearing. An empty state is displayed when there are
+  no ROI masks.
+- Added `tests/test_roi_colors.py` and GUI static coverage for the shared
+  palette, trace colors, embedded table, toolbar action, and mutation refresh.
+- A Tk smoke test confirmed that a visible two-row ROI list refreshes to one
+  row after deleting the last ROI. Full source validation passes with `111
+  passed`. No EXE was rebuilt and no sample data was changed.
+
 ### Adaptive ROI Guidance Design and Plan
 
 - Confirmed the design for iterative user-guided ROI fitting shared by
@@ -728,3 +1235,330 @@
   `.conda_envs/newlight_caiman/python.exe` because the named `caiman_latest`
   environment currently crashes while importing NumPy native libraries. No
   EXE was built and no validation sample was read, moved, deleted, or written.
+
+### dF/F Peak Marker Window
+
+- Extended the existing `峰值检测` analysis from a text-only count message to
+  a dedicated `dF/F 峰值检测` graph window.
+- The FIFO analysis operation now retains every exact index returned by
+  `core.detect_trace_peaks()` together with the processed dF/F traces, ROI
+  names, and movie sampling rate. The plotted marker count therefore matches
+  the existing `Peak_Count` algorithm exactly; no detection threshold changed.
+- The graph shows one ROI at a time through a readonly ROI selector, avoiding
+  unreadable vertical offsets when many ROIs have different amplitudes. The
+  selector and plot title display that ROI's peak count, while the trace keeps
+  the same stable color as its ROI overlay.
+- Each detected peak is marked at the exact
+  `(peak_time, dF/F[peak])` coordinate with a high-contrast circular point.
+  Non-finite or non-positive movie frame rates are rejected before detection
+  or plotting instead of producing invalid time coordinates.
+- Added the translated Matplotlib toolbar so users can pan, zoom, reset, and
+  save the peak graph. The old text-only message box was removed; a compact
+  per-ROI count summary remains in the run log.
+- Hardened the shared FIFO analysis wrapper while adding this window. Movie,
+  ROI, protocol, trigger, and trace-processing snapshots are now captured by a
+  main-thread `on_start` hook when the operation actually reaches the front of
+  the queue. Completion rejects results if the movie identity, ROI revision,
+  or protocol/trace signature changed, preventing old traces from being
+  written into newer data. ROI-dependent exports declare that dependency even
+  when they do not extract traces.
+- A queued trace task that reaches a new movie without ROI now creates the
+  formal `Global_ROI` through the normal ROI mutation path before snapshotting;
+  it no longer writes a local-only global trace into otherwise empty ROI state.
+- Headless analysis exports now construct `Figure` objects with
+  `FigureCanvasAgg` directly. Importing the Tk GUI can no longer make background
+  PNG/chart exports accidentally create a Tk window through Matplotlib's global
+  backend.
+- Configured portable Chinese font fallbacks for Matplotlib (`Microsoft YaHei`,
+  `SimHei`, `Arial Unicode MS`, then `DejaVu Sans`) so the new graph title and
+  axes do not render as missing glyphs.
+- Added operation/plot and FIFO snapshot regressions. A real Tk window smoke
+  selected ROI-A then ROI-B, preserving their exact `3 / 2` peak indices and
+  reporting zero missing-glyph warnings. Final verification: `199 passed, 1
+  skipped`; source compilation and `git diff --check` passed. The skipped test
+  is the pre-existing full-app auto-crop Tk smoke: this Conda prefix
+  intermittently reports a different Tcl/Tk support file as unreadable even
+  though each reported file exists and is readable. The dedicated peak-window
+  Tk smoke passed in the same environment. No EXE was built and no validation
+  sample was used.
+
+## 2026-07-31
+
+### Default Maximized Main Window
+
+- The main window now keeps `1440x920` as its initial fallback geometry and
+  schedules `_maximize_main_window()` with `after_idle` so Tk completes its
+  first layout before requesting the Windows `zoomed` state.
+- Hidden test roots remain withdrawn instead of being forced visible. Platforms
+  that reject `state("zoomed")` receive a guarded `attributes("-zoomed", True)`
+  fallback.
+- Added static and behavioral regression coverage. A real Tk launch reported
+  `state=zoomed` with an actual `2194x1163` window. No sample data, models, or
+  EXE output were changed.
+
+### Persistent Reusable Processing Workflows
+
+- Added `workflow_core.py`, defining the UTF-8 declarative
+  `.nlworkflow.json` format (`NewLight Workflow`, version `1`) and strict
+  validation for application marker, non-empty ordered steps, supported
+  function IDs, parameter objects, and JSON-compatible values. Chinese labels,
+  duplicate actions, and exact ordering survive save/load round trips.
+- Extended `AppTask` and `TaskController.enqueue_task()` with copied
+  `workflow_step`, `workflow_run_id`, and `workflow_is_last` metadata without
+  changing the existing single-worker FIFO behavior.
+- Added workflow descriptors to nine movie-processing actions: CaImAn motion,
+  fast motion correction, image line-shift correction, Gaussian smoothing,
+  median filtering, background subtraction, bleach correction, contrast
+  enhancement, and vessel-artifact removal. Manual use and replay share the
+  same production methods and parameter normalization paths.
+- Added `load_roi` as a reusable workflow action. Manual NPZ, Atlas JSON, and
+  atlas-image loading now enters the FIFO with a descriptor containing the
+  normalized ROI file path and format; Atlas JSON/images also retain the
+  submitted `min_area`. Replay uses the stored values without reopening a file
+  or parameter dialog, validates NPZ mask shape against the current movie, and
+  stops later same-run steps if the file is missing or incompatible.
+- Added `保存当前工作流`. It collects supported completed/running/queued entries
+  from the current dataset task history, preserves duplicates and order, skips
+  failed/cancelled/unsupported or descriptor-less entries, and reports saved
+  and skipped counts. It stores no movie input/output paths, movie data, ROI
+  masks, or executable code; `load_roi` stores only its external file reference.
+- Added `执行工作流`. It validates the entire file before submission, applies it
+  to the currently loaded dataset, and preserves the descriptor on replayed
+  tasks so they can be saved again. All steps use one workflow run ID.
+- Added stop-on-failure/cancellation behavior. A failed or user-cancelled step
+  prevents later same-run workers from touching data, while unrelated manual
+  tasks continue through the FIFO. Only the final successful step marks a run
+  completed.
+- Increased the current-data task canvas from `185` to `250 px` and placed two
+  equal-width workflow controls below it. Real Tk checks at `1440x920` and
+  `1100x760` confirmed the canvas and both buttons remain visible and the file
+  dialog cancel paths are harmless.
+- Version 1 intentionally excludes movie imports/channel additions,
+  saves/exports, manual ROI tools,
+  interactive auto-crop, display-only controls, DeepCAD-RT cache preview, ROI
+  segmentation, peak detection, and analysis outputs. Their interaction/path
+  or non-chain semantics require separate replay contracts before inclusion.
+- Added focused schema, metadata, capture, filtering, replay, invalid-file,
+  FIFO failure/cancellation, completion, and UI placement regressions. Future
+  user manuals must document the JSON extension, supported/excluded actions,
+  current-data execution, preserved order/duplicates, no embedded paths, stop
+  behavior, task statuses, and the need to save the processed movie separately.
+- Final verification passed in separate clean processes: `235 passed` with
+  `tests/test_peak_detection_plot.py` excluded, followed by `11 passed` in the
+  peak/Tk module (`246 passed` total). The touched Python files compiled,
+  `git diff --check` passed, and real Tk smoke passed at `1440x920` and
+  `1100x760`. The portable EXE was not rebuilt for this source feature.
+
+### Continuous ROI Numbering After Deletion
+
+- Added deletion-specific sequence renumbering for system-generated ROI names.
+  Deleting an earlier ROI now decrements the numeric suffix of following names
+  in the same sequence, for example `AtlasROI1, AtlasROI2, AtlasROI3` becomes
+  `AtlasROI1, AtlasROI2` after deleting the former first item.
+- Supported generated prefixes are `ROI`, `AtlasROI`, `Fast_ROI`,
+  `CaImAn_ROI`, and `NS3_ROI`. Renumbering is deliberately limited to the
+  deleted prefix and deletion path; arbitrary loaded/custom region names remain
+  unchanged, and ordinary name synchronization still preserves imported names.
+- The update changes metadata `base_name` before `sync_roi_names()`, preserving
+  low-quality flags and their displayed `*` marker while keeping masks, names,
+  metadata, colors, and ROI list rows aligned.
+- Added behavioral regression tests for deleting the first generated ROI,
+  deleting a middle generated ROI, preserving low-quality metadata, and
+  protecting custom names.
+- Verification passed: `77` focused ROI/UI tests, the complete suite split into
+  `203` non-peak tests plus `11` peak/Tk tests (`214` total), source
+  compilation, and `git diff --check`. A real Tk Treeview smoke deleted
+  `AtlasROI1` from four entries and read back the visible sequence
+  `AtlasROI1, AtlasROI2, AtlasROI3`. No EXE was rebuilt.
+
+## 2026-07-30
+
+### ROI List Clear Action and Parameter Panel Cleanup
+
+- Removed the generic `清空` footer from embedded parameter/property panels.
+  It previously called `clear_parameter_panel()` and only replaced the panel
+  contents with a placeholder, so its label incorrectly suggested that it
+  cleared the feature's data. Panels with an explicit `cancel_command` still
+  show `取消` where cancellation has real workflow meaning.
+- Added a dedicated `清空全部 ROI` action to `show_roi_list()`. It calls the
+  existing `clear_rois()` mutation path, clearing masks, names, quality
+  metadata, extracted traces, and incrementing `roi_revision`; the visible ROI
+  list then refreshes to its empty state.
+- Added regression coverage for both UI responsibilities. A real Tk click
+  smoke verified two ROI records were removed together with metadata/traces,
+  revision changed once, the empty ROI list stayed visible, and an ordinary
+  property panel contained no generic clear button.
+- Final verification: the non-peak suite passed `200` tests and the peak/Tk
+  module passed `11` tests in its own process (`211` total); source compilation
+  and `git diff --check` passed. One combined-process run reached the known
+  local Conda Tcl/Tk second-interpreter issue (`tcl_findLibrary` / transient
+  `tk.tcl` read failure) before entering the peak test. The affected test passed
+  independently, and the complete application UI click smoke passed. No EXE
+  was rebuilt for this source-only UI change.
+
+## 2026-07-29
+
+### Portable EXE Rebuild After Peak ROI Navigation
+
+- Reviewed `build_exe.bat` and `NewLight_Analysis.spec` after adding synchronized
+  peak-ROI navigation. No new PyInstaller hidden import was needed because the
+  existing TkAgg backend collection covers the toolbar and mouse-wheel event
+  changes, while `roi_engines.py` and `task_queue.py` are reached through the
+  normal import graph.
+- Hardened `build_exe.bat` before it deletes the previous release: it now checks
+  for the NeuSuite model, bundled NeuSuite runtime dependencies, CaImAn
+  resources, and the complete CaImAn/ROI packaging dependency set. Updated the
+  completion text to describe NeuSuite instead of the removed NeuroSeg3 bundle.
+- Ran `build_exe.bat /nopause` with the `caiman_latest` Python 3.11.15 and
+  PyInstaller 6.20.0. PyInstaller, COLLECT, and the frozen OpenCV loader patch
+  completed successfully. The portable release is
+  `dist/NewLight_Analysis/NewLight_Analysis.exe`.
+- Release verification found 13,596 files totaling 4,360,781,440 bytes. It
+  includes `NewLight_Worker.exe`, the DeepCAD-RT `.pth`, NeuSuite `.pt`,
+  NeuSuite runtime dependencies, CaImAn resources, NeuroAlign, DeepCAD-RT
+  source, and patched OpenCV configs. The frozen worker imported all core
+  dependencies, the frozen peak Tk navigation smoke passed, and the packaged
+  GUI remained alive for a 20-second startup smoke before controlled shutdown.
+- PyInstaller reported optional warnings for TensorBoard, Intel/MS MPI, CuPy,
+  and unused compatibility imports. None are used by the verified NewLight
+  paths; the frozen core import and startup checks passed. No installer was
+  generated in this run. Validation samples were untouched.
+
+### Configurable Peak Percentile and ROI Peak Navigation
+
+- Changed the `峰值检测` action to open the embedded right-side parameter
+  panel before queueing analysis. The panel exposes `最低峰值分位数 (%)`,
+  defaults to `25`, validates the inclusive range `0-100`, and remembers the
+  last successfully submitted value in `NewLight_user_settings.json`.
+- `analysis_core.detect_trace_peaks()` now computes a per-ROI minimum height
+  `Q_p = percentile(dF/F, p)`. A detected point must satisfy both
+  `dF/F_peak >= Q_p` and the existing standard-deviation-based prominence and
+  0.5-second minimum-distance rules. Raising `p` removes more low peaks;
+  lowering it keeps more small peaks.
+- The selected percentile is carried with the queued result, shown in the peak
+  window title, and included in the run log. Each ROI still uses the exact peak
+  indices returned by the core detector.
+- The same saved percentile is used by the interactive ROI statistics table,
+  ROI statistics export, and complete analysis export, so `Peak_Count` matches
+  the markers shown by the peak window. The core API keeps `None` as its
+  compatibility default, preserving the former prominence/distance-only
+  behavior for callers that do not opt into a percentile.
+- ROI-statistics and complete-export tasks declare
+  `depends_on_peak_settings=True`. The FIFO `on_start` hook captures the latest
+  saved percentile when each task actually begins, carries it through the
+  operation context, and includes it in the completion signature. A later
+  setting change rejects the stale result instead of applying an old count.
+- Added `PeakPlotToolbar` for the peak graph. Back and Forward now select the
+  previous and next ROI instead of acting as unused Matplotlib view-history
+  controls. Scrolling up/down over the peak canvas performs the same previous/
+  next selection; toolbar buttons, mouse wheel, and the ROI combobox stay in
+  sync and wrap between the first and last ROI. The main viewer toolbar and
+  its scroll behavior are unchanged.
+- Removed the peak selector's temporary local `StringVar`. Its Tcl variable
+  was deleted when the window factory returned, which could clear the initial
+  selection even though `current(0)` had been called. The readonly combobox now
+  owns its displayed value and reliably opens on the first ROI.
+- Regression coverage verifies the embedded pre-run panel, percentile
+  filtering and validation, persistence, legacy core behavior, ROI-statistics
+  consistency, exact result propagation, toolbar callbacks, wheel direction,
+  and first/last ROI wrapping. A real Tk workflow changed the value from `25`
+  to `75`, ran the FIFO task, and opened
+  `dF/F 峰值检测 - 最低分位 75%`.
+- Final verification after ROI navigation: `209 passed`; focused peak tests
+  passed five consecutive runs, Python compilation passed, and
+  `git diff --check` reported no whitespace errors. No EXE was built and no
+  validation sample was used.
+## 2026-08-03 - Animated first-run initialization window
+
+- Optimized `neural_starlight.gif` from 3072 x 2048, 50 frames, about 95.8 MB into `neural_starlight_startup.gif` at 720 x 480, 25 frames, five seconds, about 3.67 MB. Kept the original development asset unchanged.
+- Produced and user-approved `docs/previews/initialization-splash.html`; final design uses centered product identity and a bottom three-column row with version, live status, and a 44 x 44 sequential eight-dot bubble loader.
+- Added `initialization_splash.py` with Pillow GIF decoding, Tk frame animation, bubble animation, thread-safe progress updates, screen centering, resource fallback, and idempotent cleanup.
+- Added progress and dialog-visibility callbacks to `machine_setup.py` for backend verification, boot-state read, display-adapter detection, CUDA verification, driver installation, and completion.
+- Integrated the splash into frozen first-run startup in `launch.py`. Source launches and completed machine setup states bypass it. A dedicated `SplashUnavailableError` permits a no-splash fallback without rerunning failed setup work.
+- Added optimized GIF collection to `NewLight_Analysis.spec`; packaging tests explicitly reject collection of the original large GIF.
+- Verification at this checkpoint: focused setup/splash/packaging suite `30 passed`; real Tk delayed-operation smoke completed in about 1.14 seconds; no real GPU detection, driver installation, ProgramData state mutation, or reboot was performed.
+- Final regression: non-peak suite `265 passed, 1 skipped`; isolated peak/Tk suite `11 passed`; Python compilation and `git diff --check` passed. The optimized GIF was verified as 720 x 480, 25 frames, 5000 ms, infinite loop.
+- Rebuilt the portable release successfully. `dist/NewLight_Analysis/NewLight_Analysis.exe` was produced at 2026-08-03 15:42:34 with size 80,992,523 bytes. Independent frozen backend verification returned exit code 0; the release contains the 3,850,873-byte optimized GIF, does not contain the original GIF, and contains zero legacy setup/source-launch BAT files.
+## 2026-08-03 - Preserve DeepCAD-RT through channel coloring
+
+- Reproduced the reported behavior from source inspection: channel pseudocolor preview returned raw channel RGB before the DeepCAD cache branch, and pseudocolor save returned before all DeepCAD save branches.
+- Confirmed that ordinary preprocessing already updates each `converted_channel_movie`; the structural bypass was specific to cache-based DeepCAD rendering/saving rather than a general pseudocolor failure.
+- Added `analysis_core.blend_channel_movies()` with strict channel-count and shape validation.
+- Added `deepcad_denoised_channels` and changed DeepCAD preview generation to process each available grayscale channel independently. The combined denoised analysis movie is derived from those outputs.
+- Changed pseudocolor frame and projection rendering to blend raw and corresponding denoised channel data before RGB composition. Cache keys now include denoised channel identities and weight.
+- Extended pseudocolor AVI/TIFF writers with optional per-frame DeepCAD overlays, avoiding a full resident blended movie.
+- Updated pseudocolor save and separate grayscale channel save routing so DeepCAD is applied before output mapping. Saving before preview cache completion now runs the same per-channel model path and fills the cache afterward.
+- Focused verification reached `78 passed` before full-suite validation. A direct real-model smoke attempt was terminated by the terminal host timeout and produced no result; it is not counted as successful evidence.
+- Final source regression after the routing fix: non-peak suite `272 passed, 1 skipped`; isolated peak/Tk suite `11 passed`; Python compilation and `git diff --check` passed. `example/twophone.avi` remained unchanged at SHA-256 `3FDA062903E7F1AD8FF79F26857CC6F3C73C23D3F76094FDAB6622710AAD27BA`.
+- Rebuilt the portable release after the fix. `dist/NewLight_Analysis/NewLight_Analysis.exe` was produced at 2026-08-03 16:43:05 with size 80,997,193 bytes. Independent frozen backend verification returned exit code 0; NeuSuite, CaImAn, and DeepCAD-RT loaded, the optimized startup GIF remained bundled, and the release root contained zero legacy BAT files.
+
+## 2026-08-03 - CaImAn multi-scale cell-size ROI segmentation
+
+- Replaced the previous single-diameter default with `范围自适应（推荐）`: minimum, geometric-middle, and maximum representative cell diameters are processed as independent CaImAn candidates. `快速单尺度` preserves the former single-diameter run for compatibility and rapid tests.
+- Added `从当前 ROI 填入直径范围`. It estimates equivalent diameters from hand-drawn ROI masks, applies small margins when both small and large examples exist, and changes only the maximum when a user supplies one example.
+- Added `roi_adaptation.caiman_multiscale_diameters()` to skip scales with identical effective `gSig`. Added a pure multiscale fusion routine that only merges genuine spatial duplicates, retains the higher CaImAn quality candidate, and keeps all mask-aligned arrays plus scale provenance.
+- Added `analysis_core.merge_caiman_multiscale_roi_results()`, which writes a combined NPZ/JSON artifact with effective scales, per-ROI `scale_diameter`/`scale_gsig`, source artifact paths, and cross-scale duplicate count.
+- Integrated multiscale execution into both ordinary and adaptive CaImAn paths. Runs remain sequential within the existing single FIFO task worker; cancellation is checked between scales. The GUI reports effective scale count at queue time and reports scales plus removed duplicates at completion.
+- Added focused regression cases for range inference, `gSig` deduplication, quality-aware duplicate replacement, preservation of adjacent correlated cells, merged artifact provenance, and GUI exposure. Verification: `55 passed` for ROI adaptation/backend wrapper tests and `44 passed` for GUI static tests. Python compilation and `git diff --check` also passed. The persistent OpenCL `temp.txt` message originates from the local CaImAn Conda environment cleanup after successful execution; it is not a test failure.
+
+### Follow-up: strange default result on twophone sample
+
+- Inspected the user's still-live session artifacts instead of tuning from the screenshot alone. The three default scales returned `24/7/8` candidates at `8/12/18 px`; the merged output contained 36 ROIs after only three duplicate removals.
+- Confirmed the apparent corner-like shapes were real, contiguous CaImAn masks rather than a contour-rendering defect. The 24 masks from the `8 px` scale had areas `24-75 px^2`, SNR `0.52-1.13`, and mostly near-zero spatial correlation, while CNN scores were almost all `0.9-1.0`.
+- Traced this to CaImAn's metric-union selection and the application's multiscale union: CNN-only small-scale passes were considered accepted and ranked highly, even though they had no temporal or spatial support.
+- Changed the derived default range from `0.67x-1.5x` to `1.0x-2.0x` the legacy diameter (`12-24 px` for the normal `12 px` default), including one-time recognition and migration of the previously generated `8-18 px` pair.
+- Added multiscale non-CNN evidence gating for direct runs. A component now needs configured SNR, configured spatial correlation, or reproduction at another scale. Adaptive candidate mode remains unfiltered until its established adaptive quality-selection stage; fast single-scale compatibility remains unchanged.
+- Replayed fusion against the exact existing artifacts: 27 CNN-only candidates were rejected, three duplicates were merged, and the result fell from 36 to 9 ROIs with retained areas `105-469 px^2`; no `8 px` component survived. Focused regression passed `102` tests.
+
+### Follow-up: CaImAn run button did nothing
+
+- Reproduced the click path with a direct GUI handler test. `_run_caiman_roi_from_panel()` raised `NameError: default_min is not defined` before protocol application, settings persistence, or task queue submission.
+- Moved legacy/default-range calculation into `_caiman_diameter_defaults(saved)` and reused it during both panel creation and execution. The regression test now proves a valid range-mode submission calls `enqueue_task()` once.
+- Added a parameter-action exception boundary so unexpected callback failures are visible in the right-side feedback and run log with traceback instead of being silently swallowed by Tk.
+- Focused regression passed `125` tests after updating the refactored static contract.
+
+### Follow-up: adaptive fit failed with `NoneType.masks`
+
+- Traced the reported background exception to `_enqueue_adaptive_roi()`. A misplaced `else` attached the CaImAn generation block to `if not reused`; a normal first run (`reused=False`) therefore left `bank=None` and immediately failed in `adapt_candidate_bank()`.
+- Restored the intended nested engine branch and moved `_candidate_bank_from_result()` to the shared cache-miss path after either backend completes.
+- Added a functional cache-miss regression that executes the actual queued worker closure and verifies backend invocation, candidate-bank construction, and adaptive selection.
+- Focused regression passed `126` tests across workflow GUI behavior, GUI static contracts, ROI adaptation, and backend wrappers.
+
+## 2026-08-03 - NeuroAlign uses the current processed video stream
+
+- Traced the screenshot error to `_collect_neuroalign_panel_values()`, which called `float()` on the valid comma-separated `tps_smooth_candidates` value `12,8,5,3,1`.
+- Added typed NeuroAlign configuration parsing. Integer controls remain integers, scalar controls become floats, and TPS smoothness candidates remain a validated normalized comma-separated list.
+- Removed the registration-video selector and legacy saved video value from the active right-side NeuroAlign panel. Registration input is now always the current in-memory analysis movie rather than `state.source_path`.
+- Added a session-temporary, streaming AVI snapshot writer. It avoids allocating a full second rendered movie, preserves one intensity mapping across frames, prefers lossless FFV1, and falls back to MJPG where required by OpenCV.
+- Bound the three-stage wizard to one movie object/generation and added stale-result rejection so stages cannot silently mix preprocessed and original movies.
+- Added seven focused tests for parser behavior, panel fields, settings persistence, snapshot location/identity, worker backend routing, generation invalidation, and decoded AVI dimensions/content.
+- Verification: NeuroAlign plus GUI static suite `51 passed`; workflow GUI suite `24 passed`; Python compilation and `git diff --check` passed before the documentation update. No EXE was built and no sample data was modified.
+
+## 2026-08-04 - NeuroAlign central contour remained unmatched
+
+- Rechecked the user's latest outer preview and the actual `example` run artifacts. The subject mask had two bilateral connected components, but the worker still called `largest_contour_from_mask()`, so the affine fit received only one hemisphere while the Atlas outer polygon represented both.
+- Added `bilateral_outer_contour()` in `neuroalign_step_worker.py`. It joins the selected left/right components only at their natural top and bottom overlap rows, preserving the longitudinal fissure for the midline detector and leaving `subject_mask.npy` untouched.
+- Offline replay on the current output improved the initial affine brain IoU from `0.354` to approximately `0.86`, reduced midline error from `15.457 px` to approximately `5 px`, and restored the transformed Atlas width from approximately `208 px` to approximately `418 px`.
+- Added `tests/test_neuroalign_bilateral_contour.py` for bilateral coverage and non-mutation of the saved mask. Focused NeuroAlign/current-stream/GUI verification passed `53` tests; Python compilation and `git diff --check` passed. No EXE was built and no validation/sample data was deleted.
+
+## 2026-08-04 - Hide stale Atlas Builder ROIs during NeuroAlign preview
+
+- The latest screenshot showed the new bilateral outer fit was working (`mean contour error = 27.287 px`, `midline error = 5.890 px`), while colored Atlas regions remained at the upper-left.
+- Traced those colored regions to the old ROIs already stored by Atlas Reference Builder. They were being drawn by the common main-view redraw layer on top of the NeuroAlign preview; they were not an untransformed Atlas output from the current stage.
+- Updated `redraw()` to hide existing ROI overlays only for `neuroalign_preview`. Cancel/close restores the original view, and final acceptance still replaces the ROI list with the warped Atlas result.
+- Added a GUI static regression for preview isolation. Focused NeuroAlign/current-stream/GUI verification passed `54` tests; no EXE was built and no sample data was modified.
+
+## 2026-08-04 - Updated the user manual after NeuroAlign revisions
+
+- Used the user's edited `docs/NewLight_Analysis_User_Manual.docx` as the source and applied local content updates rather than replacing the document structure.
+- Updated release instructions, first-run administrator/CUDA behavior, current processed-video routing, session-scoped NeuroAlign snapshots, bilateral contour troubleshooting, old Atlas Builder ROI preview isolation, and the NeuroAlign FAQ.
+- Final structural check: `301` paragraphs, `38` tables, `8` embedded visuals, and `22` rows in the FAQ table. The final file is `docs/NewLight_Analysis_User_Manual.docx`.
+- The bundled DOCX renderer could not run because LibreOffice/`soffice` is absent on this machine. Existing missing image alt-text findings were left unchanged because this task was a content update, not an accessibility redesign. No EXE was built and no sample data was modified.
+
+## 2026-08-04 - Repository cleanup and release preparation
+
+- Protected local experiment data by adding `eye/` to `.gitignore`; existing `2/` and `example/` validation data remain untouched.
+- Kept the portable release directory and the installer outside normal Git tracking. The installer is `Output/NewLight_Analysis_setup.exe` (SHA-256: `AED6D7EC02F9DE6414BD3BAD52DC3ACC1BB8EE45656DDD76A166E2EF73E1BA8A`).
+- Excluded the uncompressed 100 MB startup GIF from GitHub tracking; the packaged startup asset is `neural_starlight_startup.gif`.
+- Python compilation passed and the full `caiman_latest` test run passed: `307 passed, 15 subtests passed`. The CaImAn OpenCL cleanup message remains a non-fatal environment warning.
+- Upload is pending because this repository has no configured GitHub remote. The installer should be published as a GitHub Release asset rather than committed into the repository.

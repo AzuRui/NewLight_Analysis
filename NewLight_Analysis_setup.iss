@@ -4,7 +4,7 @@
 
 #define MyAppName "NewLight_Analysis"
 #define MyAppVersion "1.0"
-#define MyAppPublisher "NewLight"
+#define MyAppPublisher "Azu"
 #define MyAppExeName "NewLight_Analysis.exe"
 #define MyAppAssocName MyAppName + ""
 #define MyAppAssocExt ".myp"
@@ -13,7 +13,7 @@
 [Setup]
 ; 注意：AppId 的值唯一标识此应用程序。不要在其他应用程序的安装程序中使用相同的 AppId 值。
 ; (若要生成新的 GUID，请在 IDE 中单击 "工具|生成 GUID"。)
-AppId={{A37DBF29-C9CC-4C2C-A383-4E173369EECA}
+AppId={{86DE2D1D-33B1-4BAA-9A8D-4C46039E2DA4}
 AppName={#MyAppName}
 AppVersion={#MyAppVersion}
 ;AppVerName={#MyAppName} {#MyAppVersion}
@@ -29,12 +29,15 @@ ArchitecturesAllowed=x64compatible
 ; 和注册表的 64 位视图。
 ArchitecturesInstallIn64BitMode=x64compatible
 ChangesAssociations=yes
-DisableProgramGroupPage=yes
+DefaultGroupName={#MyAppName}
+AllowNoIcons=yes
 ; 取消注释以下行以在非管理安装模式下运行 (仅为当前用户安装)。
 ;PrivilegesRequired=lowest
 PrivilegesRequiredOverridesAllowed=dialog
-OutputBaseFilename=NewLight_Analysis安装程序
+OutputBaseFilename=NewLight_Analysis_setup
 SetupIconFile=E:\WorkSpace\NewLight_Analysis\xhr.ico
+Password=xhr8880601
+Encryption=yes
 SolidCompression=yes
 WizardStyle=modern zircon
 
@@ -56,7 +59,7 @@ Root: HKA; Subkey: "Software\Classes\{#MyAppAssocKey}\DefaultIcon"; ValueType: s
 Root: HKA; Subkey: "Software\Classes\{#MyAppAssocKey}\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#MyAppExeName}"" ""%1"""
 
 [Icons]
-Name: "{autoprograms}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
+Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
 Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
 
 [Run]

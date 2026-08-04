@@ -32,7 +32,6 @@ Output:
 ```text
 E:\WorkSpace\NewLight_Analysis\build_release\NewLight_Analysis\NewLight_Analysis.exe
 E:\WorkSpace\NewLight_Analysis\build_release\NewLight_Analysis\_internal\NewLight_Worker.exe
-E:\WorkSpace\NewLight_Analysis\build_release\run_NewLight_Analysis.bat
 ```
 
 ## Distribution
