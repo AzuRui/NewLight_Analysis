@@ -1,143 +1,174 @@
 # NewLight_Analysis
 
-NewLight_Analysis is an integrated two-photon analysis front end for experimenters. It combines the expected workflow from the LabVIEW two-photon analysis software, the ROI and heatmap analysis style from `2cafe_analysis`, CaImAn source extraction, and the authorized NeuSuite instance-segmentation model.
+NewLight_Analysis 是面向实验人员的双光子成像分析软件。它整合了
+LabVIEW 双光子分析流程、`2cafe_analysis` 的 ROI 与热图分析方式、
+CaImAn 源提取算法，以及已授权的 NeuSuite 实例分割模型。
 
-The UI uses a dark neurosurgical imaging workstation style: low-glare panels, cyan/purple accents, and a subtle neural starfield header while keeping the imaging canvas high contrast for grayscale data inspection.
+软件采用低眩光的深色神经成像工作站风格，同时保持灰度图像区域的高
+对比度，便于检查成像数据。主界面使用 Python/Tkinter 实现，后台模型和
+耗时任务通过独立 worker 运行。
 
-## Recommended Architecture
+## 软件架构
 
-- Main app: plain Python/Tkinter, so users can launch it by double-clicking `run_NewLight_Analysis.bat`.
-- Fast ROI backend: the authorized `NeuSuite2p/segment_model.pt` and custom runtime run through the existing CUDA-enabled `neuroseg3` environment.
-- CaImAn ROI backend: CNMF/CNMF-E runs through the project-local `.conda_envs/newlight_caiman` environment created by `setup_newlight_caiman.bat`.
-- Both ROI workers return versioned NPZ artifacts containing independent arbitrary-shape masks; neither converts instances to circles, ellipses, or connected components from a merged PNG.
-- Built-in fallback algorithms are included for motion correction, filtering, vessel artifact detection, ROI drawing, dF/F extraction, heatmap export, trace plotting, and correlation.
+- 主程序使用 Python/Tkinter，源码调试可运行 `run_NewLight_Analysis.bat`。
+- 快速 ROI 后端使用授权的 `NeuSuite2p/segment_model.pt`，并通过已有的
+  CUDA-enabled `neuroseg3` 环境运行。
+- CaImAn ROI 后端使用 CNMF/CNMF-E，并通过项目环境
+  `.conda_envs/newlight_caiman` 运行。
+- 两个 ROI worker 输出带版本信息的 NPZ 结果，并保留每个 ROI 的任意形状，
+  不会把实例强制转换为圆形、椭圆或合并后的连通区域。
+- 软件内置运动矫正、滤波、血管/伪影检测、ROI 绘制、dF/F、热图、曲线和
+  相关性分析等基础算法。
 
-This avoids forcing users to understand conda environments. The user sees one app; developers can maintain each algorithm in its own environment.
+软件用户只需要面对一个分析界面；不同算法的环境隔离由开发和打包脚本
+负责维护。
 
-## Launch
+## 源码运行
 
-```powershell
-E:\WorkSpace\NewLight_Analysis\run_NewLight_Analysis.bat
+在项目根目录执行：
+
+```bat
+run_NewLight_Analysis.bat
 ```
 
-or:
+或者：
 
 ```powershell
 cd E:\WorkSpace\NewLight_Analysis
 python NewLight_Analysis.py
 ```
 
-## Build The EXE
+源码运行用于开发和调试。正式用户应运行打包后的
+`NewLight_Analysis.exe`，不需要打开源码环境。
 
-On a build machine with Conda, run:
+## 编译 EXE
 
-```powershell
+在安装了 Conda 的 Windows 编译机上，推荐执行：
+
+```bat
 build_portable_exe.bat
 ```
 
-This prepares or checks the `caiman_latest` build environment and then creates
-the portable onedir application under `dist\NewLight_Analysis`. Existing
-CUDA-enabled packages are preserved. Use `setup_build_environment.bat` when
-only environment setup is needed, or `build_full_release.bat` when Inno Setup
-is installed and an installer is required.
+该脚本会先检查或准备 `caiman_latest` 编译环境，再调用
+`build_exe.bat` 生成便携版程序。已有的 CUDA、cuDNN 和 PyTorch 包会被
+保留，不会因为编译而自动替换。
 
-For the complete Chinese build and release guide, see `BUILD_README.md`.
+只准备环境而不编译：
 
-## User Manual
+```bat
+setup_build_environment.bat
+```
 
-The detailed Chinese user manual is maintained at:
+完整的中文环境配置、编译、验证和发布说明见：
 
 ```text
-NewLight_Analysis_User_Manual.pdf
+BUILD_README.md
 ```
 
-Release builds copy these files into `dist\NewLight_Analysis`. The manual
-contains numbered screenshot placeholders so project screenshots can be added
-later without restructuring the operating instructions.
+## 用户手册
 
-## First Version Features
+详细中文用户手册位于：
 
-- Load `.tif`, `.tiff`, `.avi`, `.mp4`, `.mov`, `.mkv` movies.
-- Load stimulus `.txt/.csv/.dat` files, or generate triggers from fixed time intervals.
-- Set movie frame rate, stimulus sample rate, baseline time window, and pre/post trigger windows from the GUI.
-- Preview mean, max, standard deviation, and 25% percentile images.
-- Drag the frame slider under the main viewer to inspect any frame after preprocessing.
-- Preprocessing with parameter dialogs and undo:
-  - CaImAn motion correction backend
-  - built-in rigid motion correction
-  - Gaussian smoothing
-  - median filtering
-  - background subtraction
-  - bleaching correction
-  - contrast enhancement
-  - vessel/artifact detection
-  - vessel/artifact suppression
-- Acceleration panel:
-  - detects CUDA status for the main Python process and the isolated NeuroSeg3 environment
-  - uses CuPy automatically for supported array operations when available
-  - falls back to CPU/NumPy when CuPy is unavailable
-- ROI tools:
-  - `CaImAn 识别分割`: CNMF for two-photon data or CNMF-E for one-photon data, with quality scores and temporal traces
-  - `快速 ROI 分割`: authorized NeuSuite projection-image instance segmentation
-  - zero detections or worker failures preserve the current ROI set
-  - atlas/image ROI import
-  - center-circle ROI drawing
-  - freehand ROI drawing
-  - load/save ROI `.npz`
-- Analysis:
-  - dF/F trace extraction
-  - optional `env_secant` baseline correction
-  - adjustable dF/F moving-average window
-  - stimulus trigger marking
-  - trial average around triggers
-  - peak counting
-  - ROI correlation
-  - ROI statistics table and Excel export
-  - heatmap display
-  - standalone heatmap AVI generation with live frame preview and cancel support
-  - export CSV/XLSX/PNG/JSON/NPZ results
+```text
+docs\NewLight_Analysis_User_Manual.md
+docs\NewLight_Analysis_User_Manual.docx
+docs\NewLight_Analysis_User_Manual.pdf
+```
 
-## Suggested Experimenter Workflow
+发布构建会将手册复制到 `dist\NewLight_Analysis`。手册中保留了编号的
+截图占位位置，后续可以补充界面截图而不需要重写操作流程。
 
-1. Double-click `run_NewLight_Analysis.bat`.
-2. Open a movie in the Data tab.
-3. If the experiment has stimulation, open the stimulus file, fill the Protocol fields, then click `Detect Triggers`.
-4. Run preprocessing operations as needed. Every preprocessing step is stored in the undo stack.
-5. Create ROIs with `CaImAn 识别分割`, `快速 ROI 分割`, atlas/image import, circle drawing, or freehand drawing.
-6. Extract dF/F traces, inspect peak/correlation/trial-average views, then export the analysis.
+## 主要功能
 
-`Export Analysis` does not create AVI videos automatically. Use `Analysis -> Generate Heatmap AVI` when a heatmap video is needed. The heatmap window previews the currently selected frame, updates when parameters or frame position change, and allows cancelling during video generation.
+- 导入 `.tif`、`.tiff`、`.avi`、`.mp4`、`.mov`、`.mkv` 等视频或图像数据。
+- 导入刺激事件文件，或按照固定时间间隔生成刺激触发点。
+- 设置视频帧率、刺激采样率、baseline 起始帧、baseline 持续帧数及刺激前后窗口。
+- 预览均值、最大值、标准差和 25% 分位数图像。
+- 使用帧滑块检查预处理后任意帧。
+- 支持 8 bit 和 16 bit 数据处理，并尽量保持输入位深。
+- 预处理：CaImAn 运动矫正、快速刚性运动矫正、刚性加柔性形变矫正、
+  高斯平滑、中值滤波、背景扣除、漂白校正、阴影/高亮/亮度/对比度调整、
+  血管和伪影检测抑制、DeepCAD-RT 深度学习降噪。
+- 加速状态检查：检查 CUDA 状态，支持时使用 CuPy，没有 CuPy 时回退到 CPU/NumPy。
+- ROI：`CaImAn 识别分割`、`快速 ROI 分割`、自适应拟合、低质量标记、
+  图谱导入、中心圆、自由轮廓、ROI 列表、颜色管理、NPZ 保存和载入。
+- Atlas Reference Builder 标准图谱构建和 NeuroAlign 当前视频流脑区配准。
+- 分析：dF/F、25% 分位数或指定帧区间 baseline、刺激-响应对齐平均、峰值标记、
+  ROI 相关性、统计表、热图、热图 AVI，以及 CSV/XLSX/PNG/JSON/NPZ/TIFF/AVI 导出。
+- 工作流：保存当前数据任务流为 JSON，并在其他数据上重新执行。
 
-## ROI Engine Choice
+## 推荐操作流程
 
-Use `快速 ROI 分割` for interactive projection-based segmentation. Its useful controls are confidence, instance IoU, model input size, and restored-pixel area limits. The worker reads `results[0].masks.data` directly and preserves overlapping instances.
+1. 源码调试时运行 `run_NewLight_Analysis.bat`，发布版运行 `NewLight_Analysis.exe`。
+2. 在“数据”页面导入视频、TIFF 或双光子原始数据文件夹。
+3. 如有刺激，导入刺激文件并设置视频帧率、刺激采样率和 baseline 参数。
+4. 根据需要执行预处理，每一步都会进入任务流和撤销记录。
+5. 使用 CaImAn、快速 ROI、图谱导入、圆形或自由轮廓生成 ROI。
+6. 检查 ROI 列表和低质量标记，必要时进行自适应拟合或手动补充。
+7. 提取 dF/F，检查峰值、刺激对齐平均、相关性和热图。
+8. 使用“保存当前视频”或分析页面导出结果，也可以保存当前任务流为 JSON。
 
-Use `CaImAn 识别分割` when temporal calcium activity should participate in source extraction. Cell diameter is converted to `gSig = max(1, round(diameter / 4))`; component quality is filtered with temporal SNR, spatial correlation, and the optional CaImAn CNN score. The footprint threshold is relative to each component peak.
+## ROI 算法选择
 
-## Backend Notes
+### 快速 ROI 分割
 
-Create the isolated CaImAn environment and controlled CNN resources with:
+适合快速得到投影图 ROI。主要参数包括置信度、实例 IoU、模型输入尺寸和
+恢复后的像素面积范围。worker 直接读取实例 mask，并保留重叠的独立 ROI。
+
+### CaImAn 识别分割
+
+适合利用钙信号时间变化进行源提取。细胞直径转换为：
+
+```text
+gSig = max(1, round(细胞直径 / 4))
+```
+
+组件还可以根据时间信噪比、空间相关性和可选 CaImAn CNN 分数筛选。
+
+## 后端环境
+
+```bat
+setup_newlight_caiman.bat
+setup_neusuite_runtime.bat
+```
+
+前者准备 CaImAn 环境和 CNN 资源，后者准备 NeuSuite 纯 Python 运行时依赖。
+
+## CUDA 限制
+
+> **重要：DeepCAD-RT 必须依赖 CUDA。** DeepCAD-RT 没有 CPU fallback，
+> 只能在具备兼容 NVIDIA GPU 和驱动的电脑上运行。安装包中的模型和 CUDA
+> 运行库不会让它在纯 CPU、AMD 或 Intel 显卡电脑上可用。
+
+- 快速 ROI 分割可以通过 PyTorch 使用 CUDA。
+- 投影、dF/F、平滑和 ROI 曲线提取在安装 CuPy 时可以使用 GPU。
+- 没有 CuPy 时，这些基础运算回退到 CPU/NumPy。
+- CaImAn 运动矫正速度取决于版本、CPU、磁盘和参数。
+
+## Git LFS 与大文件
+
+Git LFS 会把大文件以指针形式放入 Git 仓库，把真实二进制内容放到 LFS
+对象存储中。它适合管理模型文件、较大的示例资源或其他二进制文件。
+
+但 Git LFS 不是无限容量，也不能绕过 GitHub 的所有限制：
+
+- 单个 LFS 文件仍受 GitHub 单文件大小限制。当前安装包约 2.4 GB，仍超过常用的 2 GiB 上限。
+- LFS 还受仓库存储容量和下载流量配额限制，额度取决于 GitHub 账户计划。
+- 使用 LFS 后，协作者需要安装 Git LFS，并执行 `git lfs pull` 才能取回真实文件。
+- GitHub Release 附件和 Git LFS 是两套机制；LFS 文件不会自动成为 Release 附件。
+
+建议：源码、配置和小型模型正常提交 Git；小于限制的模型可以使用 LFS；
+2.4 GB 安装包放到 OneDrive、Google Drive、OSS 等大文件存储中，并在
+GitHub Release 或 README 中提供下载地址和 SHA-256 校验值。
+
+启用 LFS 的示例：
 
 ```powershell
-setup_newlight_caiman.bat
+git lfs install
+git lfs track "DeepCADRT_Model/*.pth"
+git add .gitattributes DeepCADRT_Model/*.pth
+git commit -m "chore: track model with Git LFS"
 ```
 
-Prepare the small pure-Python NeuSuite runtime dependencies with `setup_neusuite_runtime.bat`. The script can copy them from the authorized NeuSuite bundle when PyPI is unavailable.
-
-## CUDA Acceleration
-
-The desktop client now checks available acceleration backends from the Preprocess tab.
-
-> **Important - DeepCAD-RT requires CUDA:** DeepCAD-RT denoising has no CPU
-> fallback in NewLight_Analysis. It can run only on a CUDA-capable NVIDIA GPU
-> with a compatible NVIDIA driver. Bundling the `.pth` model and CUDA runtime
-> libraries does not make DeepCAD-RT usable on a CPU-only computer. Other
-> functions may support CPU execution as described below, but that does not
-> apply to DeepCAD-RT.
-
-- NeuSuite fast ROI runs in the isolated `neuroseg3` conda environment and can use CUDA through PyTorch when that environment sees the GPU.
-- Main-app operations such as projection, dF/F, Gaussian smoothing, and ROI trace extraction can use CuPy when CuPy is installed in the Python environment that launches the desktop app.
-- If CuPy is not installed, those operations automatically fall back to CPU/NumPy.
-- CaImAn motion correction is left in the `caiman_latest` environment and may still be CPU/I/O bound depending on the CaImAn build.
-
-For a packaged client, the practical high-value path is to keep NeuroSeg3 GPU-enabled and optionally provide a CuPy-enabled main runtime for large movies.
+使用前请确认模型大小、LFS 存储配额和团队成员的下载方式。不要对当前
+2.4 GB 安装包直接执行 `git lfs track`，因为它仍超过单文件限制。
