@@ -70,6 +70,7 @@ NewLight_Analysis_User_Manual.pdf
 - 加速状态检查：检查 CUDA 状态，支持时使用 CuPy，没有 CuPy 时回退到 CPU/NumPy。
 - ROI：`CaImAn 识别分割`、`快速 ROI 分割`、自适应拟合、低质量标记、
   图谱导入、中心圆、自由轮廓、ROI 列表、颜色管理、NPZ 保存和载入。
+  脑图谱样例可查看brain_line_mask_completed.png。
 - Atlas Reference Builder 标准图谱构建和 NeuroAlign 当前视频流脑区配准。
 - 分析：dF/F、25% 分位数或指定帧区间 baseline、刺激-响应对齐平均、峰值标记、
   ROI 相关性、统计表、热图、热图 AVI，以及 CSV/XLSX/PNG/JSON/NPZ/TIFF/AVI 导出。
