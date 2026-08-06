@@ -75,8 +75,16 @@ if not exist "%GPU_WORKER%" (
 )
 echo.
 echo CaImAn backend:
-"%WORKER_PY%" "%RESOURCE_DIR%\workers\run_caiman.py" --help
-if errorlevel 1 (
+set "CAIMAN_DATA=%RESOURCE_DIR%\CaImAn_Resources"
+set "PYTHONPATH=%RESOURCE_DIR%;%PYTHONPATH%"
+set "CAIMAN_VERIFY_DIR=%TEMP%\newlight_caiman_verify_%RANDOM%_%RANDOM%"
+mkdir "%CAIMAN_VERIFY_DIR%" >nul 2>nul
+pushd "%CAIMAN_VERIFY_DIR%"
+"%WORKER_PY%" -c "from caiman_headless import install_caiman_headless_compat; install_caiman_headless_compat(); import caiman; from caiman.source_extraction.cnmf.params import CNMFParams; CNMFParams(params_dict={}); print('CaImAn frozen CNMFParams OK', caiman.__version__)"
+set "CAIMAN_CHECK_RESULT=!ERRORLEVEL!"
+popd
+rmdir "%CAIMAN_VERIFY_DIR%" >nul 2>nul
+if not "!CAIMAN_CHECK_RESULT!"=="0" (
   echo CaImAn backend check failed.
   set "FAILED=1"
 ) else (

@@ -1724,3 +1724,58 @@
   1.027 GiB) and contains zero
   Torch/CUDA files. Focused packaging/backend verification passed: `60 passed`.
   No Inno installer was built in this change.
+- 2026-08-05: Fixed split GPU addon DeepCAD-RT startup failure caused by the
+  missing frozen `skimage.io` module. Replaced the only DeepCAD `skimage.io`
+  writer use with `tifffile.imwrite` and added a runtime fallback in
+  `workers/run_deepcadrt.py` for old addons. Verified the existing GPU worker
+  can import `deepcad.data_process`; rebuilt the CPU portable package and
+  verified the updated worker script was bundled. Added a build-script check
+  so missing `check_backends.bat` fails the build instead of producing an
+  incomplete directory.
+- 2026-08-05: Fixed the subsequent split-addon DeepCAD failure
+  `cv2 ... recursion is detected`. The addon had retained an absolute
+  `D:/anaconda3/envs/caiman_latest` OpenCV loader path. Because NewLight runs
+  DeepCAD headlessly, moved the optional movie-display cv2 import behind the
+  display functions and installed a headless cv2 placeholder in the worker
+  for compatibility with already-downloaded addons. Verified the full frozen
+  import chain (`deepcad.test_collection`) in `NewLight_GPU_Worker.exe`, ran
+  `tests/test_deepcadrt_short_movie.py` (`5 passed`), and rebuilt the CPU
+  portable package and core installer.
+
+- 2026-08-05: 修复拆解版核心包的三个 worker 依赖错误：CaImAn worker 在导入阶段
+  安装无 Notebook 的 `IPython.display`/`ipywidgets`/`holoviews` 兼容层，CPU
+  PyInstaller 核心恢复 CaImAn 必需依赖；`roi_engines.py` 显式进入 `_internal`。
+  同时修复 GPU 独立 worker 对核心共享 ROI 模块的查找，并在 GPU 扩展安装和
+  `build_full_exe.bat` 中自动同步该模块，兼容已有 GPU 扩展压缩包。
+  最终冻结包导入测试和 CaImAn 刚性运动矫正烟雾测试通过，真实 `twophone.avi`
+  CaImAn ROI 输出 14 个组件；全套测试 `303 passed`。重新生成：
+  `dist\NewLight_Analysis` 和 `Output\NewLight_Analysis_Core_Setup_v1.0.1.exe`。
+
+- 2026-08-05: 修复编译版无法启动的问题。`launch.py` 现在只在源码模式检查
+  Python 包；PyInstaller 模式直接使用 `_internal` 内置依赖，避免将
+  `openpyxl` 误报为缺失，也不再提示用户运行 `run_NewLight_Analysis.bat`。
+  Inno Setup 同时排除 `run*.bat`、`build*.bat`、`setup*.bat`、`.spec` 和
+  `.iss` 开发文件。新增启动回归测试后全套测试为 `304 passed`；冻结版进程
+  启动验证通过，核心安装包重新生成于 2026-08-05 14:49。
+
+- 2026-08-05: 修复其他电脑覆盖安装后 `cv2` 报
+  `ImportError: DLL load failed ... 找不到指定的程序`。根因是 Inno Setup
+  覆盖安装不会删除旧文件：旧包残留的 `cv2/config-3.11.py` 会优先于新包的
+  `config-3.py` 被加载，从而把旧 `cv2.pyd` 与新 OpenCV DLL 混用。
+  核心版和完整版安装脚本现在会在复制新文件前删除核心 `_internal\cv2`、
+  根级 `opencv*.dll` 和 `opencv*.exe`，但保留 `_internal\GPU_Addon`。
+  本地测试安装包提升为 `v1.0.2`；冻结 `cv2 5.0.0` 导入、后端检查和
+  `304 passed` 均通过。核心安装包 SHA-256：
+  `A4681B1A67036885FC1E2A4274960439DD46263EE7694A940D90E486DE8973B1`。
+
+- 2026-08-06: 修复目标电脑 CaImAn 运动矫正与 ROI 分割在
+  `CNMFParams` 初始化时找不到 `_internal\caiman\utils` 的问题。本机此前
+  因工作目录是 Git 仓库，`get_caiman_version()` 从 `git rev-parse` 提前
+  返回，掩盖了冻结目录缺失；目标电脑无 `.git` 后才触发文件扫描。
+  新增 `CaImAn_Resources\RELEASE`（`Version:1.13.1`），冻结 worker 强制使用
+  内置 `CAIMAN_DATA`。构建自检现在从非 Git 的 `%TEMP%` 目录实际初始化
+  `CNMFParams`。运动 worker 的 `CAIMAN_TEMP` 同时改到用户临时目录，避免
+  写入只读安装目录。非 Git 实测：分块运动矫正通过、CaImAn ROI 输出 14 个
+  组件、资源目录未创建 temp；全套测试 `306 passed`。最终核心安装包提升为
+  `NewLight_Analysis_Core_Setup_v1.0.3.exe`，439,312,353 bytes，SHA-256：
+  `7781D2F2BEF28B10A94C48B771F5313E2CD746864808ED6E427B8025DBCA45A4`。

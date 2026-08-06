@@ -1,4 +1,5 @@
 import unittest
+import sys
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
@@ -12,6 +13,19 @@ from workers import run_deepcadrt
 
 
 class DeepCadRtShortMovieTests(unittest.TestCase):
+    def test_headless_worker_stubs_optional_opencv_viewer(self):
+        original = sys.modules.pop("cv2", None)
+        try:
+            run_deepcadrt.install_headless_cv2_compat()
+            module = sys.modules["cv2"]
+            self.assertTrue(callable(module.imshow))
+            with self.assertRaisesRegex(RuntimeError, "display is disabled"):
+                module.imshow("unused")
+        finally:
+            sys.modules.pop("cv2", None)
+            if original is not None:
+                sys.modules["cv2"] = original
+
     def test_short_movie_is_padded_to_two_temporal_stitch_windows(self):
         movie = np.arange(19 * 3 * 4, dtype=np.float32).reshape(19, 3, 4)
 

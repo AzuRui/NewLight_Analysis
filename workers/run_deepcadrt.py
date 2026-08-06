@@ -18,6 +18,45 @@ DEEPCAD_DOWNLOAD_FOLDER = Path("ModelForPytorch") / "DownloadedModel"
 _DLL_DIRECTORY_HANDLES = []
 
 
+def install_skimage_io_compat() -> None:
+    """Provide the TIFF writer DeepCAD imports when skimage.io is omitted."""
+    try:
+        from skimage import io  # noqa: F401
+        return
+    except (ImportError, ModuleNotFoundError):
+        import types
+
+        io_module = types.ModuleType("skimage.io")
+
+        def imsave(path, image, check_contrast=False):
+            tifffile.imwrite(path, image)
+
+        io_module.imsave = imsave
+        sys.modules["skimage.io"] = io_module
+        try:
+            import skimage
+
+            skimage.io = io_module
+        except ImportError:
+            pass
+
+
+def install_headless_cv2_compat() -> None:
+    """Avoid loading the optional OpenCV movie viewer during inference."""
+    if "cv2" in sys.modules:
+        return
+    cv2_module = types.ModuleType("cv2")
+
+    def unavailable(*_args, **_kwargs):
+        raise RuntimeError("DeepCAD-RT OpenCV display is disabled in the headless worker.")
+
+    cv2_module.namedWindow = unavailable
+    cv2_module.imshow = unavailable
+    cv2_module.waitKey = unavailable
+    cv2_module.destroyWindow = unavailable
+    sys.modules["cv2"] = cv2_module
+
+
 def configure_addon_cuda_dlls(deepcad_dir: Path) -> None:
     addon_dir = deepcad_dir.parent.parent
     cuda_dir = addon_dir / "cuda"
@@ -163,6 +202,8 @@ def main() -> int:
         gdown_stub.download = _download_stub
         sys.modules["gdown"] = gdown_stub
 
+    install_skimage_io_compat()
+    install_headless_cv2_compat()
     import torch
     from deepcad.test_collection import testing_class
 

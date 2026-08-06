@@ -50,17 +50,22 @@ def main():
     if not setup_ok:
         return 0
 
-    missing = [name for name in REQUIRED if importlib.util.find_spec(name) is None]
-    if missing:
-        root = tk.Tk()
-        root.withdraw()
-        messagebox.showerror(
-            "NewLight_Analysis cannot start",
-            "Missing Python packages:\n\n"
-            + "\n".join(missing)
-            + "\n\nInstall them in the Python used by run_NewLight_Analysis.bat, then launch again.",
-        )
-        return 1
+    # PyInstaller already carries the application runtime inside _internal.
+    # importlib.find_spec() is not a valid dependency check in a frozen app:
+    # packages may live in the archive or use a loader without a filesystem
+    # spec, which previously produced a false "openpyxl is missing" dialog.
+    if not frozen:
+        missing = [name for name in REQUIRED if importlib.util.find_spec(name) is None]
+        if missing:
+            root = tk.Tk()
+            root.withdraw()
+            messagebox.showerror(
+                "NewLight_Analysis 无法启动",
+                "源码运行环境缺少 Python 包：\n\n"
+                + "\n".join(missing)
+                + "\n\n请使用项目环境启动，或运行开发者环境配置脚本后重试。",
+            )
+            return 1
     import NewLight_Analysis
 
     NewLight_Analysis.main()

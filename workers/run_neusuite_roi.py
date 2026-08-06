@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -11,6 +12,22 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+
+
+def ensure_shared_module_path() -> None:
+    """Locate core-side shared modules when this script runs in GPU Addon."""
+    candidates = [
+        ROOT,
+        Path(os.environ.get("NEWLIGHT_RESOURCE_DIR", "")),
+        Path(sys.executable).resolve().parent,
+        Path(sys.executable).resolve().parent.parent,
+    ]
+    for candidate in candidates:
+        if candidate.is_dir() and (candidate / "roi_engines.py").is_file():
+            path = str(candidate)
+            if path not in sys.path:
+                sys.path.insert(0, path)
+            return
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -119,6 +136,7 @@ def _write_json(path: Path, value: dict) -> None:
 def run(args) -> int:
     import numpy as np
     import tifffile
+    ensure_shared_module_path()
     from roi_engines import save_roi_artifact
 
     input_path = Path(args.input).resolve()

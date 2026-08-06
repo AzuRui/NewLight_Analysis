@@ -1,3 +1,4 @@
+import os
 import subprocess
 import tempfile
 import unittest
@@ -8,9 +9,22 @@ import numpy as np
 import tifffile
 
 import analysis_core as core
+from workers import run_caiman
 
 
 class CaimanMotionTests(unittest.TestCase):
+    def test_worker_uses_writable_user_temp_instead_of_bundled_resources(self):
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.dict("os.environ", {}, clear=False), mock.patch.object(
+            run_caiman.tempfile, "gettempdir", return_value=tmp
+        ):
+            with mock.patch.dict("os.environ", {"CAIMAN_TEMP": ""}, clear=False):
+                del os.environ["CAIMAN_TEMP"]
+                path = run_caiman.prepare_caiman_temp_dir()
+
+                self.assertEqual(path, Path(tmp) / "NewLight_Analysis" / "caiman")
+                self.assertTrue(path.is_dir())
+                self.assertEqual(os.environ["CAIMAN_TEMP"], str(path))
+
     def test_result_is_loaded_and_session_preview_tiff_is_retained(self):
         movie = np.arange(3 * 12 * 16, dtype=np.float32).reshape(3, 12, 16)
 

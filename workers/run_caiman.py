@@ -10,6 +10,8 @@ from pathlib import Path
 import numpy as np
 import tifffile
 
+from caiman_headless import install_caiman_headless_compat
+
 
 warnings.filterwarnings(
     "ignore",
@@ -24,6 +26,18 @@ def prepare_opencl_vendor_file() -> None:
         (vendor_dir / "temp.txt").touch(exist_ok=True)
     except Exception:
         pass
+
+
+def prepare_caiman_temp_dir() -> Path:
+    configured = os.environ.get("CAIMAN_TEMP", "").strip()
+    temp_dir = (
+        Path(configured).expanduser()
+        if configured
+        else Path(tempfile.gettempdir()) / "NewLight_Analysis" / "caiman"
+    )
+    temp_dir.mkdir(parents=True, exist_ok=True)
+    os.environ["CAIMAN_TEMP"] = str(temp_dir)
+    return temp_dir
 
 
 def print_shift_statistics(label: str, y_values, x_values, limit: float | None = None) -> None:
@@ -51,7 +65,9 @@ def flattened_shift_values(values) -> np.ndarray:
 
 def motion(args) -> int:
     try:
+        prepare_caiman_temp_dir()
         prepare_opencl_vendor_file()
+        install_caiman_headless_compat()
         import caiman as cm
         from caiman.motion_correction import MotionCorrect
         from caiman.source_extraction.cnmf import params as params

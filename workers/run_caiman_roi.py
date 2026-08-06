@@ -9,6 +9,8 @@ import os
 import sys
 from pathlib import Path
 
+from caiman_headless import install_caiman_headless_compat
+
 
 def configure_backend_environment(caiman_data: str | None = None, session_dir: str | None = None) -> None:
     os.environ["MKL_THREADING_LAYER"] = "SEQUENTIAL"
@@ -162,6 +164,7 @@ def _build_cnmf_params(args, dims):
 
 def run(args) -> int:
     configure_backend_environment(args.caiman_data or None, args.session_dir)
+    install_caiman_headless_compat()
 
     import numpy as np
     import tifffile

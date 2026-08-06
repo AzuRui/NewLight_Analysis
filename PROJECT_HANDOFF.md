@@ -1457,3 +1457,98 @@ For future updates:
   `dist\NewLight_Analysis`, while `build_full_exe.bat` embeds the unified GPU
   addon and builds `full_diss\NewLight_Analysis`. Do not add these files, the
   local spec, frozen OpenCV patch, or `full_diss` back to Git.
+- DeepCAD-RT split GPU addon fix: the frozen GPU worker previously failed with
+  `ModuleNotFoundError: No module named 'skimage.io'` because scikit-image's
+  lazy-loaded submodule was not bundled. DeepCAD's TIFF save path now uses
+  tifffile, and `workers/run_deepcadrt.py` installs a compatibility fallback
+  for old addons. The CPU portable build was rebuilt on 2026-08-05 and the
+  updated worker script is present in `dist\NewLight_Analysis`.
+- The next split-addon failure was an OpenCV recursive import caused by the
+  addon's frozen `cv2/config.py` retaining the build-machine Conda path.
+  DeepCAD only imports OpenCV for optional result-display windows, which are
+  disabled by NewLight. The DeepCAD display module now imports cv2 lazily, and
+  the headless worker supplies a cv2 placeholder for old addons. This avoids
+  redownloading the 2.5 GB GPU addon. Focused tests passed (`5 passed`) and the
+  CPU portable package plus core installer were rebuilt on 2026-08-05.
+
+## Latest Split-Package Fix (2026-08-05)
+
+- CaImAn motion correction and CaImAn ROI workers now install a headless
+  compatibility layer before importing CaImAn. This handles frozen environments
+  where `IPython.display`, `ipywidgets`, or `holoviews` are absent while keeping
+  real packages when they are available.
+- `roi_engines.py` is explicitly included in the CPU core. The GPU worker now
+  searches `NEWLIGHT_RESOURCE_DIR` and nearby application directories for that
+  shared module. `machine_setup.py` and `build_full_exe.bat` also synchronize it
+  into `GPU_Addon`, so the existing GPU archive does not need to be repacked.
+- Verification on the current machine: frozen import chain passed; rigid
+  CaImAn motion correction passed on `example\twophone.avi`; real CaImAn ROI
+  extraction produced 14 components; full test suite passed (`303 passed`).
+- Latest local artifacts:
+  `dist\NewLight_Analysis` rebuilt at 2026-08-05 14:22;
+  `Output\NewLight_Analysis_Core_Setup_v1.0.1.exe` rebuilt at 2026-08-05 14:27.
+  GitHub Release assets were intentionally left unchanged pending testing on
+  another computer.
+
+### Other-Computer Test Order
+
+1. Install the latest local core installer, then launch the installed program.
+2. Load `example\twophone.avi` and test CaImAn motion correction.
+3. Test CaImAn ROI segmentation; confirm an NPZ ROI artifact and summary JSON
+   are created.
+4. Install or enable the unified GPU addon, then test Fast ROI. The addon must
+   contain `NewLight_GPU_Worker.exe`, DeepCAD-RT, the NeuSuite model/runtime,
+   and the synchronized `roi_engines.py`.
+5. Test DeepCAD-RT only on a compatible NVIDIA CUDA system. AMD/Intel systems
+   should continue in CPU mode and report CUDA-only features as unavailable.
+
+## Startup Fix (2026-08-05)
+
+- Frozen `launch.py` no longer checks Python packages with `importlib.find_spec`.
+  PyInstaller packages use the bundled `_internal` runtime, so that source-mode
+  check caused a false `openpyxl` missing dialog on other computers.
+- The compiled application starts directly from its EXE. The installer excludes
+  developer launch/build/setup batch files and packaging metadata. Users do not
+  need `run_NewLight_Analysis.bat` or any Python environment for the core EXE.
+- Regression coverage was added; the complete test suite is now `304 passed`.
+- Latest local installer:
+  `Output\NewLight_Analysis_Core_Setup_v1.0.1.exe`, rebuilt 2026-08-05 14:49.
+  GitHub Release assets remain unchanged until external-machine testing passes.
+
+## OpenCV Upgrade Cleanup (2026-08-05)
+
+- In-place installation over older builds could retain
+  `_internal\cv2\config-3.11.py` and `python-3.11`. OpenCV explicitly prefers
+  `config-3.11.py` over the current `config-3.py`, causing an old `cv2.pyd` to
+  load against the newly installed DLL set and fail with WinError 127
+  (`The specified procedure could not be found`).
+- Both Inno Setup scripts now delete the core `_internal\cv2` directory and
+  root-level `opencv*.dll`/`opencv*.exe` files before installing the new copy.
+  `_internal\GPU_Addon` is intentionally preserved.
+- Local test artifacts are now versioned `1.0.2` to distinguish them from the
+  older installers. Current core installer:
+  `Output\NewLight_Analysis_Core_Setup_v1.0.2.exe`, 439,293,510 bytes,
+  SHA-256 `A4681B1A67036885FC1E2A4274960439DD46263EE7694A940D90E486DE8973B1`.
+- Frozen OpenCV 5.0.0 import, backend verification, and the complete test suite
+  (`304 passed`) succeeded. GitHub Release assets remain unchanged.
+
+## CaImAn Frozen Version Fix (2026-08-06)
+
+- `CNMFParams` calls `caiman.utils.utils.get_caiman_version()`. On the build
+  machine it silently succeeded through `git rev-parse` because the worker cwd
+  was the repository. On a target computer without `.git`, CaImAn fell back to
+  `os.listdir()` on `_internal\caiman\utils`, which is stored in PyInstaller's
+  PYZ and has no physical directory.
+- `CaImAn_Resources\RELEASE` now provides the official CaImAn release fallback
+  (`Version:1.13.1`). Frozen subprocesses receive the bundled resource path as
+  `CAIMAN_DATA`.
+- The motion worker now places `CAIMAN_TEMP` under the writable user temp
+  directory rather than attempting to create a folder inside `_internal`.
+- `check_backends.bat /verify-only` changes to a non-Git `%TEMP%` directory and
+  constructs a real `CNMFParams`; packaging now fails if this regression returns.
+- Non-Git frozen verification passed for piecewise motion correction and CaImAn
+  ROI extraction (14 components). The complete suite passed (`306 passed`).
+- Use only the latest local test installer:
+  `Output\NewLight_Analysis_Core_Setup_v1.0.3.exe`, 439,312,353 bytes,
+  SHA-256 `7781D2F2BEF28B10A94C48B771F5313E2CD746864808ED6E427B8025DBCA45A4`.
+  GitHub Release assets remain unchanged pending external-machine verification.

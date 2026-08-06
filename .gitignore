@@ -37,7 +37,11 @@ Output/
 # published in the user-facing source repository.
 /build_cpu_exe.bat
 /build_full_exe.bat
+/build_cpu_installer.bat
+/build_full_installer.bat
 /NewLight_Analysis.spec
+/NewLight_Analysis_setup.iss
+/NewLight_Analysis_full_setup.iss
 /tools/patch_frozen_cv2.py
 /full_diss/
 

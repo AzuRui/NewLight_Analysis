@@ -157,6 +157,17 @@ def _gpu_addon_ready(addon_dir: Path) -> bool:
     )
 
 
+def _sync_gpu_shared_modules(root: Path, addon_dir: Path) -> None:
+    """Make core Python helpers available to the isolated GPU worker."""
+    source = root / "roi_engines.py"
+    if not source.is_file():
+        return
+    target = addon_dir / source.name
+    if not target.is_file() or source.stat().st_size != target.stat().st_size:
+        addon_dir.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, target)
+
+
 # Compatibility for source integrations that imported the old private helper.
 _deepcad_addon_ready = _gpu_addon_ready
 
@@ -170,6 +181,7 @@ def inspect_gpu_addon(
     """Inspect the optional GPU package without making it a startup gate."""
     root = _resource_dir(Path(application_dir))
     addon_dir = root / GPU_ADDON_DIR_NAME
+    _sync_gpu_shared_modules(root, addon_dir)
     if not _gpu_addon_ready(addon_dir):
         message = "GPU 扩展未配置，当前使用 CPU 模式。"
         _emit(progress, message)
@@ -194,6 +206,7 @@ def ensure_gpu_addon(
     """Download and safely install the unified optional GPU extension."""
     root = _resource_dir(Path(application_dir))
     addon_dir = root / GPU_ADDON_DIR_NAME
+    _sync_gpu_shared_modules(root, addon_dir)
     if _gpu_addon_ready(addon_dir):
         return True, "统一 GPU 扩展已安装。"
 
@@ -285,6 +298,7 @@ def ensure_gpu_addon(
                     shutil.copytree(item, target, dirs_exist_ok=True)
                 else:
                     shutil.copy2(item, target)
+            _sync_gpu_shared_modules(root, addon_dir)
         finally:
             shutil.rmtree(staging, ignore_errors=True)
         return True, "统一 GPU 扩展安装完成。"

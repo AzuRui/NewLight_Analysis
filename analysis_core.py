@@ -3218,6 +3218,10 @@ def run_conda_worker(
     env.setdefault("NEWLIGHT_RESOURCE_DIR", str(APP_RESOURCE_DIR))
     env.setdefault("MKL_THREADING_LAYER", "SEQUENTIAL")
     env.setdefault("KERAS_BACKEND", "torch")
+    if IS_FROZEN:
+        env["CAIMAN_DATA"] = str(CAIMAN_RESOURCE_DIR)
+    else:
+        env.setdefault("CAIMAN_DATA", str(CAIMAN_RESOURCE_DIR))
     return subprocess.run(
         cmd,
         cwd=cwd,
