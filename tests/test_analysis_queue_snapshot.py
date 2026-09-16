@@ -80,6 +80,34 @@ class AnalysisQueueSnapshotTests(unittest.TestCase):
         self.assertEqual(result["roi_revision"], 2)
         self.assertEqual(result["output"], ((8, 6, 7), (8, 1), (6, 7), ["NewROI"]))
 
+    def test_direct_trace_extraction_snapshots_sampling_rate(self):
+        app, captured = self.make_app()
+        app.state.fs = 12.5
+        app.trace_filter_mode_var = ValueVar("关闭")
+        app.trace_filter_low_var = ValueVar("0.1")
+        app.trace_filter_high_var = ValueVar("5.0")
+
+        app.queue_trace_extraction(show_window=False)
+        result = captured["worker"](threading.Event())
+
+        self.assertEqual(result[2].shape, (6, 1))
+
+    def test_direct_trace_extraction_supports_adaptive_filter(self):
+        app, captured = self.make_app()
+        t = np.arange(200, dtype=np.float32) / 20.0
+        signal = 10.0 + np.sin(2 * np.pi * 1.5 * t)
+        app.state.movie = np.repeat(signal[:, None, None], 20, axis=1).reshape(200, 4, 5)
+        app.state.fs = 20.0
+        app.trace_filter_mode_var = ValueVar("自适应 FFT 带通")
+        app.trace_filter_low_var = ValueVar("0.1")
+        app.trace_filter_high_var = ValueVar("5.0")
+
+        app.queue_trace_extraction(show_window=False)
+        result = captured["worker"](threading.Event())
+
+        self.assertEqual(result[2].shape, (200, 1))
+        self.assertTrue(np.all(np.isfinite(result[2])))
+
     def test_finish_rejects_result_after_roi_revision_changes(self):
         app, captured = self.make_app()
         completed = mock.Mock()

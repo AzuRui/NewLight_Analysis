@@ -8147,6 +8147,7 @@ class NewLightApp:
         baseline_duration = int(self.state.baseline_duration_frames)
         invalid_start_frames = int(self.state.invalid_start_frames)
         roi_masks = [np.asarray(mask, dtype=bool).copy() for mask in self.state.roi_masks]
+        fs = float(self.state.fs)
         baseline_correct = bool(self.trace_baseline_correct_var.get())
         baseline_window = int(float(self.trace_baseline_window_var.get()))
         smooth_window = int(float(self.trace_smooth_window_var.get()))
