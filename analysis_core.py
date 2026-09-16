@@ -2279,12 +2279,150 @@ def moving_average_traces(traces: np.ndarray, window: int = 1) -> np.ndarray:
     return out
 
 
-def process_traces(traces: np.ndarray, baseline_correct: bool = True, baseline_window: int = 30, smooth_window: int = 1) -> np.ndarray:
+def process_traces(
+    traces: np.ndarray,
+    baseline_correct: bool = True,
+    baseline_window: int = 30,
+    smooth_window: int = 1,
+    fs: float | None = None,
+    filter_mode: str = "off",
+    filter_low_hz: float = 0.1,
+    filter_high_hz: float = 5.0,
+) -> np.ndarray:
     out = traces.astype(np.float32, copy=True)
     if baseline_correct:
         out = baseline_correct_traces(out, baseline_window, method="env_secant")
     out = moving_average_traces(out, smooth_window)
+    if str(filter_mode or "off").strip().lower() not in {"off", "none", "关闭", "禁用"}:
+        if fs is None:
+            raise ValueError("启用 dF/F 滤波时必须提供视频采样率。")
+        out, _ = filter_trace_signals(
+            out,
+            fs=float(fs),
+            mode=filter_mode,
+            low_hz=filter_low_hz,
+            high_hz=filter_high_hz,
+        )
     return out.astype(np.float32)
+
+
+def _trace_noise_bins(freqs: np.ndarray, noise_frequencies=(50.0, 60.0), bandwidth=1.0) -> np.ndarray:
+    """Return bins around common mains-frequency noise and its harmonics."""
+    freqs = np.asarray(freqs, dtype=np.float64)
+    mask = np.zeros(freqs.shape, dtype=bool)
+    max_freq = float(np.max(freqs)) if freqs.size else 0.0
+    for base in noise_frequencies:
+        base = float(base)
+        if base <= 0:
+            continue
+        harmonic = base
+        while harmonic <= max_freq + bandwidth:
+            mask |= np.abs(freqs - harmonic) <= float(bandwidth)
+            harmonic += base
+    return mask
+
+
+def trace_spectrum(
+    traces: np.ndarray,
+    fs: float,
+    *,
+    noise_frequencies=(50.0, 60.0),
+) -> tuple[np.ndarray, np.ndarray]:
+    """Compute a CPU FFT power matrix with shape ``(frequency, ROI)``."""
+    data = np.asarray(traces, dtype=np.float64)
+    if data.ndim == 1:
+        data = data[:, None]
+    if data.ndim != 2 or data.shape[0] < 4:
+        raise ValueError("FFT 频谱至少需要 4 帧有效 dF/F 数据。")
+    fs = float(fs)
+    if not np.isfinite(fs) or fs <= 0:
+        raise ValueError("视频采样率必须大于 0。")
+    finite = np.isfinite(data)
+    centered = np.where(finite, data, 0.0)
+    centered -= np.mean(centered, axis=0, keepdims=True)
+    window = np.hanning(centered.shape[0])[:, None]
+    spectrum = np.fft.rfft(centered * window, axis=0)
+    power = (np.abs(spectrum) ** 2 / max(centered.shape[0], 1)).astype(np.float32)
+    freqs = np.fft.rfftfreq(centered.shape[0], d=1.0 / fs).astype(np.float32)
+    noise = _trace_noise_bins(freqs, noise_frequencies=noise_frequencies, bandwidth=1.0)
+    power[noise, :] = 0.0
+    if power.shape[0]:
+        power[0, :] = 0.0
+    return freqs, power
+
+
+def estimate_trace_band(
+    traces: np.ndarray,
+    fs: float,
+    *,
+    noise_frequencies=(50.0, 60.0),
+) -> tuple[float, float]:
+    """Estimate a useful signal band from the strongest aggregate FFT region."""
+    freqs, power = trace_spectrum(traces, fs, noise_frequencies=noise_frequencies)
+    aggregate = np.nanmedian(power, axis=1) if power.size else np.array([], dtype=float)
+    valid = np.isfinite(aggregate) & (freqs > 0)
+    nyquist = float(fs) / 2.0
+    if not np.any(valid):
+        return max(0.01, min(nyquist * 0.02, nyquist * 0.5)), max(0.02, nyquist * 0.9)
+    smooth = ndimage.gaussian_filter1d(aggregate.astype(np.float64), sigma=1.0)
+    smooth[~valid] = 0.0
+    peak_index = int(np.argmax(smooth))
+    peak = float(smooth[peak_index])
+    resolution = float(freqs[1] - freqs[0]) if freqs.size > 1 else fs / max(len(traces), 1)
+    threshold = max(float(np.nanmedian(smooth[valid])) * 3.0, peak * 0.08)
+    candidate = valid & (smooth >= threshold)
+    # Select the contiguous high-energy component containing the dominant peak.
+    left = peak_index
+    right = peak_index
+    while left > 1 and candidate[left - 1]:
+        left -= 1
+    while right < len(candidate) - 1 and candidate[right + 1]:
+        right += 1
+    if right <= left:
+        low = max(resolution, float(freqs[peak_index]) * 0.25)
+        high = min(nyquist - resolution, max(float(freqs[peak_index]) * 2.0, low + 4 * resolution))
+    else:
+        low = max(resolution, float(freqs[left]) - resolution)
+        high = min(nyquist - resolution, float(freqs[right]) + resolution)
+    if high <= low:
+        return max(resolution, 0.01), max(resolution * 2, nyquist * 0.9)
+    return float(low), float(high)
+
+
+def filter_trace_signals(
+    traces: np.ndarray,
+    fs: float,
+    *,
+    mode: str = "adaptive",
+    low_hz: float = 0.1,
+    high_hz: float = 5.0,
+) -> tuple[np.ndarray, dict]:
+    """CPU-only Butterworth band-pass filtering for ROI dF/F traces."""
+    data = np.asarray(traces, dtype=np.float32)
+    if data.ndim != 2 or data.shape[0] < 8 or data.shape[1] == 0:
+        return data.copy(), {"mode": str(mode), "low_hz": float(low_hz), "high_hz": float(high_hz)}
+    fs = float(fs)
+    nyquist = fs / 2.0
+    if not np.isfinite(fs) or fs <= 0 or nyquist <= 0:
+        raise ValueError("视频采样率必须大于 0。")
+    mode = str(mode or "adaptive").strip().lower()
+    if mode in {"adaptive", "auto", "自适应"}:
+        low, high = estimate_trace_band(data, fs)
+    else:
+        low, high = float(low_hz), float(high_hz)
+    resolution = fs / float(data.shape[0])
+    low = max(resolution, low if np.isfinite(low) else resolution)
+    high = min(nyquist - resolution, high if np.isfinite(high) else nyquist - resolution)
+    if low <= 0 or high <= low or high >= nyquist:
+        raise ValueError(f"带通范围无效：{low:g}-{high:g} Hz，Nyquist={nyquist:g} Hz。")
+    sos = signal.butter(3, [low / nyquist, high / nyquist], btype="bandpass", output="sos")
+    padlen = min(max(0, data.shape[0] - 1), 3 * (2 * len(sos) + 1))
+    filtered = signal.sosfiltfilt(sos, data.astype(np.float64), axis=0, padlen=padlen)
+    return filtered.astype(np.float32), {
+        "mode": "adaptive" if mode in {"adaptive", "auto", "自适应"} else "manual",
+        "low_hz": float(low),
+        "high_hz": float(high),
+    }
 
 
 def detect_trace_peaks(

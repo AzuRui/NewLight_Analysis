@@ -1698,6 +1698,10 @@ class NewLightApp:
         self.trace_baseline_correct_var = tk.BooleanVar(value=True)
         self.trace_baseline_window_var = tk.StringVar(value="30")
         self.trace_smooth_window_var = tk.StringVar(value="1")
+        self.trace_filter_mode_var = tk.StringVar(value="adaptive")
+        self.trace_filter_low_var = tk.StringVar(value="0.1")
+        self.trace_filter_high_var = tk.StringVar(value="5.0")
+        self.trace_filter_band_var = tk.StringVar(value="自适应频带：尚未计算")
         self.acceleration_var = tk.StringVar(value="auto")
         self.deepcad_enabled_var = tk.BooleanVar(value=False)
         self.deepcad_weight_var = tk.StringVar(value="0.5")
@@ -1909,6 +1913,23 @@ class NewLightApp:
         ttk.Entry(trace_box, textvariable=self.trace_baseline_window_var, width=10).grid(row=1, column=1, sticky="ew", padx=(6, 0), pady=2)
         ttk.Label(trace_box, text="移动平均窗口").grid(row=2, column=0, sticky="w", pady=2)
         ttk.Entry(trace_box, textvariable=self.trace_smooth_window_var, width=10).grid(row=2, column=1, sticky="ew", padx=(6, 0), pady=2)
+        ttk.Label(trace_box, text="dF/F 滤波模式").grid(row=3, column=0, sticky="w", pady=2)
+        filter_mode = ttk.Combobox(
+            trace_box,
+            textvariable=self.trace_filter_mode_var,
+            values=("自适应 FFT 带通", "手动带通", "关闭"),
+            state="readonly",
+            width=16,
+        )
+        filter_mode.grid(row=3, column=1, sticky="ew", padx=(6, 0), pady=2)
+        filter_mode.bind("<<ComboboxSelected>>", lambda _event: self._update_trace_filter_controls())
+        ttk.Label(trace_box, text="带通下限 (Hz)").grid(row=4, column=0, sticky="w", pady=2)
+        ttk.Entry(trace_box, textvariable=self.trace_filter_low_var, width=10).grid(row=4, column=1, sticky="ew", padx=(6, 0), pady=2)
+        ttk.Label(trace_box, text="带通上限 (Hz)").grid(row=5, column=0, sticky="w", pady=2)
+        ttk.Entry(trace_box, textvariable=self.trace_filter_high_var, width=10).grid(row=5, column=1, sticky="ew", padx=(6, 0), pady=2)
+        ttk.Label(trace_box, textvariable=self.trace_filter_band_var, style="Muted.TLabel", wraplength=220).grid(row=6, column=0, columnspan=2, sticky="w", pady=(2, 4))
+        ttk.Button(trace_box, text="生成 FFT 频谱热图", style="Sidebar.TButton", command=self.show_trace_spectrum).grid(row=7, column=0, columnspan=2, sticky="ew", pady=2)
+        self._update_trace_filter_controls()
 
         export_box = ttk.LabelFrame(analysis_tab, text="导出", padding=8)
         export_box.grid(row=2, column=0, sticky="ew", pady=6)
@@ -6413,6 +6434,118 @@ class NewLightApp:
             self.extract_traces(show_window=show_window)
         return self.state.traces
 
+    def _trace_filter_settings(self):
+        mode_var = getattr(self, "trace_filter_mode_var", None)
+        low_var = getattr(self, "trace_filter_low_var", None)
+        high_var = getattr(self, "trace_filter_high_var", None)
+        mode_display = mode_var.get().strip() if mode_var is not None else "关闭"
+        mode = "adaptive" if mode_display.startswith("自适应") else "manual" if mode_display.startswith("手动") else "off"
+        try:
+            low = float(low_var.get()) if low_var is not None else 0.1
+            high = float(high_var.get()) if high_var is not None else 5.0
+        except ValueError as exc:
+            raise ValueError(f"带通频率必须是数字：{exc}")
+        return mode, low, high
+
+    def _trace_filter_signature(self):
+        mode, low, high = self._trace_filter_settings()
+        return mode, float(low), float(high)
+
+    def _update_trace_filter_controls(self):
+        mode = self.trace_filter_mode_var.get().strip()
+        enabled = not mode.startswith("关闭")
+        for var in (self.trace_filter_low_var, self.trace_filter_high_var):
+            if not enabled:
+                var.set(var.get())
+        if mode.startswith("自适应"):
+            self.trace_filter_band_var.set("自适应频带：运行提取后显示")
+        elif mode.startswith("手动"):
+            self.trace_filter_band_var.set("手动频带将受 Nyquist 频率限制")
+        else:
+            self.trace_filter_band_var.set("滤波已关闭")
+
+    def _apply_trace_filter(self, traces, fs):
+        mode, low, high = self._trace_filter_settings()
+        if mode == "off":
+            return np.asarray(traces, dtype=np.float32).copy(), None
+        filtered, info = core.filter_trace_signals(
+            np.asarray(traces, dtype=np.float32), float(fs),
+            mode=mode, low_hz=low, high_hz=high,
+        )
+        return filtered, info
+
+    def _refresh_trace_filter_band_label(self, traces, fs):
+        try:
+            mode, low, high = self._trace_filter_settings()
+            if mode == "off":
+                self.trace_filter_band_var.set("滤波已关闭")
+            elif mode == "adaptive":
+                low, high = core.estimate_trace_band(np.asarray(traces), float(fs))
+                self.trace_filter_band_var.set(f"自适应频带：{low:.3g} - {high:.3g} Hz（CPU）")
+            else:
+                self.trace_filter_band_var.set(f"实际带通：{low:.3g} - {high:.3g} Hz（CPU）")
+        except Exception as exc:
+            self.trace_filter_band_var.set(f"频带估计失败：{exc}")
+
+    def show_trace_spectrum(self):
+        if not self.require_movie():
+            return
+        if not self.state.roi_masks:
+            self.ensure_global_roi()
+        self.apply_protocol(update_baseline=False)
+        roi_masks = [np.asarray(mask, dtype=bool).copy() for mask in self.state.roi_masks]
+        fs = float(self.state.fs)
+        self.queue_analysis_operation(
+            "计算 dF/F FFT 频谱热图",
+            lambda movie, baseline, _traces, masks, names, fs_value, _frames, _context, _cancel: {
+                "freqs": core.trace_spectrum(
+                    core.process_traces(
+                        core.extract_traces(movie, masks, "dff", baseline, acceleration="cpu"),
+                        baseline_correct=bool(self.trace_baseline_correct_var.get()),
+                        baseline_window=int(float(self.trace_baseline_window_var.get())),
+                        smooth_window=int(float(self.trace_smooth_window_var.get())),
+                        filter_mode="off",
+                    ),
+                    float(fs_value),
+                ),
+                "names": list(names),
+            },
+            self._finish_trace_spectrum,
+            need_traces=False,
+            depends_on_rois=True,
+        )
+
+    def _save_figure(self, fig, initialfile):
+        path = self.ask_analysis_save_path(
+            "保存频谱热图",
+            initialfile,
+            ".png",
+            [("PNG 图片", "*.png"), ("全部文件", "*.*")],
+        )
+        if path:
+            fig.savefig(path, dpi=200, bbox_inches="tight")
+            self.log(f"FFT 频谱热图已保存：{path}")
+
+    def _finish_trace_spectrum(self, result):
+        (freqs, power), names = result["freqs"], result["names"]
+        win = tk.Toplevel(self.root)
+        win.title("dF/F FFT 频谱热图（CPU）")
+        win.configure(bg=THEME["bg"])
+        fig = Figure(figsize=(9, 5), dpi=100)
+        fig.patch.set_facecolor(THEME["bg"])
+        ax = fig.add_subplot(111)
+        image = ax.imshow(np.log1p(power.T), aspect="auto", origin="lower", extent=[float(freqs[0]), float(freqs[-1]), 0.5, len(names) + 0.5], cmap="magma")
+        ax.set_xlabel("频率 (Hz)")
+        ax.set_ylabel("ROI")
+        ax.set_yticks(np.arange(1, len(names) + 1))
+        ax.set_yticklabels(names)
+        ax.set_title("dF/F FFT 功率谱热图（已抑制 50/60 Hz 工频及谐波）")
+        fig.colorbar(image, ax=ax, label="log(1 + power)")
+        canvas = FigureCanvasTkAgg(fig, master=win)
+        canvas.draw()
+        canvas.get_tk_widget().pack(fill="both", expand=True, padx=8, pady=8)
+        ttk.Button(win, text="保存频谱热图", command=lambda: self._save_figure(fig, "dff_fft_spectrum_heatmap.png")).pack(pady=(0, 8))
+
     def queue_analysis_operation(
         self,
         label,
@@ -6438,6 +6571,7 @@ class NewLightApp:
                     bool(self.trace_baseline_correct_var.get()),
                     int(float(self.trace_baseline_window_var.get())),
                     int(float(self.trace_smooth_window_var.get())),
+                    self._trace_filter_signature(),
                 )
             return (
                 int(self.state.baseline_start_frame),
@@ -6479,6 +6613,7 @@ class NewLightApp:
                 baseline_correct=bool(self.trace_baseline_correct_var.get()),
                 baseline_window=int(float(self.trace_baseline_window_var.get())),
                 smooth_window=int(float(self.trace_smooth_window_var.get())),
+                filter_settings=self._trace_filter_signature(),
             )
             snapshot["analysis_signature"] = current_analysis_signature()
 
@@ -6527,6 +6662,10 @@ class NewLightApp:
                     baseline_correct=current["baseline_correct"],
                     baseline_window=current["baseline_window"],
                     smooth_window=current["smooth_window"],
+                    fs=fs,
+                    filter_mode=current["filter_settings"][0],
+                    filter_low_hz=current["filter_settings"][1],
+                    filter_high_hz=current["filter_settings"][2],
                 )
             if cancel_event.is_set():
                 raise TaskCancelled()
@@ -6583,6 +6722,7 @@ class NewLightApp:
                 self.state.dff_movie = None
             if traces is not None:
                 self.state.traces = traces
+                self._refresh_trace_filter_band_label(traces, self.state.fs)
             on_complete(result["output"])
 
         return self.enqueue_task(label, worker, finish, on_start=prepare)
@@ -6684,6 +6824,7 @@ class NewLightApp:
             baseline_correct = bool(self.trace_baseline_correct_var.get())
             baseline_window = int(float(self.trace_baseline_window_var.get()))
             smooth_window = int(float(self.trace_smooth_window_var.get()))
+            filter_mode, filter_low, filter_high = self._trace_filter_settings()
 
             def worker(cancel_event):
                 source_id = id(self.state.movie)
@@ -6714,6 +6855,10 @@ class NewLightApp:
                     baseline_correct=baseline_correct,
                     baseline_window=baseline_window,
                     smooth_window=smooth_window,
+                    fs=fs,
+                    filter_mode=filter_mode,
+                    filter_low_hz=filter_low,
+                    filter_high_hz=filter_high,
                 )
                 if cancel_event.is_set():
                     raise TaskCancelled()
@@ -7997,6 +8142,7 @@ class NewLightApp:
         baseline_correct = bool(self.trace_baseline_correct_var.get())
         baseline_window = int(float(self.trace_baseline_window_var.get()))
         smooth_window = int(float(self.trace_smooth_window_var.get()))
+        filter_mode, filter_low, filter_high = self._trace_filter_settings()
         acceleration = self.acceleration()
 
         def worker(cancel_event):
@@ -8016,6 +8162,10 @@ class NewLightApp:
                 baseline_correct=baseline_correct,
                 baseline_window=baseline_window,
                 smooth_window=smooth_window,
+                fs=fs,
+                filter_mode=filter_mode,
+                filter_low_hz=filter_low,
+                filter_high_hz=filter_high,
             )
             if cancel_event.is_set():
                 raise TaskCancelled()
@@ -8029,6 +8179,7 @@ class NewLightApp:
             self.state.baseline_image = baseline
             self.state.dff_movie = None
             self.state.traces = traces
+            self._refresh_trace_filter_band_label(traces, self.state.fs)
             correction = "开启" if baseline_correct else "关闭"
             self.log(f"已提取曲线：{traces.shape}，基线校正={correction}，平滑窗口={smooth_window}")
             if on_ready is not None:
@@ -8140,6 +8291,7 @@ class NewLightApp:
         baseline_correct = bool(self.trace_baseline_correct_var.get())
         baseline_window = int(float(self.trace_baseline_window_var.get()))
         smooth_window = int(float(self.trace_smooth_window_var.get()))
+        filter_mode, filter_low, filter_high = self._trace_filter_settings()
 
         def worker(cancel_event):
             source_id = id(self.state.movie)
@@ -8186,6 +8338,10 @@ class NewLightApp:
                 baseline_correct=baseline_correct,
                 baseline_window=baseline_window,
                 smooth_window=smooth_window,
+                fs=fs,
+                filter_mode=filter_mode,
+                filter_low_hz=filter_low,
+                filter_high_hz=filter_high,
             )
             if cancel_event.is_set():
                 raise TaskCancelled()
@@ -8202,6 +8358,7 @@ class NewLightApp:
             self.state.baseline_image = baseline
             self.state.dff_movie = None
             self.state.traces = traces
+            self._refresh_trace_filter_band_label(traces, fs)
             self.state.trigger_frames = event_frames
             self._show_trial_average_window(trials, trial_t, roi_names)
             self.log(f"已显示试次平均，n={trials.shape[0]}。")
