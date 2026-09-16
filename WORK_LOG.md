@@ -1795,3 +1795,13 @@
   单独拉线；增加浅色点阵背景、柔和阴影、编号徽标、CUDA 状态标签和底部
   推荐路径。最终图像为 2400 x 1600、200 DPI，经视觉检查无文字、节点或
   连线遮挡。
+- 2026-09-16: 在分析页 dF/F 选项中加入 CPU-only 频谱滤波。默认使用 FFT
+  自适应带通，先以 ROI dF/F 频谱估计主要信号带，并抑制 50/60 Hz 工频及谐波；
+  用户也可切换为手动带通或关闭滤波。新增 FFT 频谱热图按钮、频带状态显示和
+  Nyquist 边界校验。滤波统一接入曲线提取、峰值、刺激事件对齐和试次平均链路，
+  不改变原始视频，也不调用 GPU。新增 `tests/test_trace_filter.py`，针对性测试
+  通过 59 项；完整测试在 caiman_latest 的 conda run 方式下通过 309 passed、
+  2 skipped。CPU 安装包已由 `build_cpu_installer.bat /rebuild` 生成，大小
+  439,355,530 bytes，SHA-256 为
+  `EA9C01BC6C0E243D5CE63842F777A07CB9DDDFCBF90C7BEBC5027F453372057F`，并替换
+  GitHub `v1.0.1` Release 中的同名安装包资产。
