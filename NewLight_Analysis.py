@@ -6475,17 +6475,20 @@ class NewLightApp:
         return filtered, info
 
     def _refresh_trace_filter_band_label(self, traces, fs):
+        band_var = getattr(self, "trace_filter_band_var", None)
+        if band_var is None:
+            return
         try:
             mode, low, high = self._trace_filter_settings()
             if mode == "off":
-                self.trace_filter_band_var.set("滤波已关闭")
+                band_var.set("滤波已关闭")
             elif mode == "adaptive":
                 low, high = core.estimate_trace_band(np.asarray(traces), float(fs))
-                self.trace_filter_band_var.set(f"自适应频带：{low:.3g} - {high:.3g} Hz（CPU）")
+                band_var.set(f"自适应频带：{low:.3g} - {high:.3g} Hz（CPU）")
             else:
-                self.trace_filter_band_var.set(f"实际带通：{low:.3g} - {high:.3g} Hz（CPU）")
+                band_var.set(f"实际带通：{low:.3g} - {high:.3g} Hz（CPU）")
         except Exception as exc:
-            self.trace_filter_band_var.set(f"频带估计失败：{exc}")
+            band_var.set(f"频带估计失败：{exc}")
 
     def show_trace_spectrum(self):
         if not self.require_movie():
@@ -6531,16 +6534,21 @@ class NewLightApp:
         win = tk.Toplevel(self.root)
         win.title("dF/F FFT 频谱热图（CPU）")
         win.configure(bg=THEME["bg"])
-        fig = Figure(figsize=(9, 5), dpi=100)
-        fig.patch.set_facecolor(THEME["bg"])
+        fig = Figure(figsize=(9, 5), dpi=100, facecolor="white")
+        fig.patch.set_facecolor("white")
         ax = fig.add_subplot(111)
-        image = ax.imshow(np.log1p(power.T), aspect="auto", origin="lower", extent=[float(freqs[0]), float(freqs[-1]), 0.5, len(names) + 0.5], cmap="magma")
+        ax.set_facecolor("white")
+        image = ax.imshow(np.log1p(power.T), aspect="auto", origin="lower", extent=[float(freqs[0]), float(freqs[-1]), 0.5, len(names) + 0.5], cmap="jet")
         ax.set_xlabel("频率 (Hz)")
         ax.set_ylabel("ROI")
         ax.set_yticks(np.arange(1, len(names) + 1))
         ax.set_yticklabels(names)
         ax.set_title("dF/F FFT 功率谱热图（已抑制 50/60 Hz 工频及谐波）")
-        fig.colorbar(image, ax=ax, label="log(1 + power)")
+        ax.tick_params(colors="#1f2933")
+        for spine in ax.spines.values():
+            spine.set_color("#9aa8b2")
+        colorbar = fig.colorbar(image, ax=ax, label="log(1 + power)")
+        colorbar.ax.set_facecolor("white")
         canvas = FigureCanvasTkAgg(fig, master=win)
         canvas.draw()
         canvas.get_tk_widget().pack(fill="both", expand=True, padx=8, pady=8)
@@ -6662,7 +6670,7 @@ class NewLightApp:
                     baseline_correct=current["baseline_correct"],
                     baseline_window=current["baseline_window"],
                     smooth_window=current["smooth_window"],
-                    fs=fs,
+                    fs=current["fs"],
                     filter_mode=current["filter_settings"][0],
                     filter_low_hz=current["filter_settings"][1],
                     filter_high_hz=current["filter_settings"][2],
