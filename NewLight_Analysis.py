@@ -5933,10 +5933,17 @@ class NewLightApp:
                     **workflow_options,
                 )
             if action_id == "background_subtract":
+                percentile = self._param_float(values, "background_percentile", 20.0, min_value=0.0, max_value=99.0)
                 sigma = self._param_float(values, "sigma", 20.0, min_value=1.0)
+                strength = self._param_float(values, "subtraction_strength", 1.0, min_value=0.0, max_value=1.0)
                 return self.apply_movie_operation(
                     label,
-                    lambda m: core.background_subtract(m, sigma),
+                    lambda m: core.background_subtract(
+                        m,
+                        sigma,
+                        background_percentile=percentile,
+                        subtraction_strength=strength,
+                    ),
                     **workflow_options,
                 )
             if action_id == "bleach_correction":
@@ -6483,7 +6490,7 @@ class NewLightApp:
             if mode == "off":
                 band_var.set("滤波已关闭")
             elif mode == "adaptive":
-                low, high = core.estimate_trace_band(np.asarray(traces), float(fs))
+                low, high = core.adaptive_trace_band(np.asarray(traces), float(fs))
                 band_var.set(f"自适应频带：{low:.3g} - {high:.3g} Hz（CPU）")
             else:
                 band_var.set(f"实际带通：{low:.3g} - {high:.3g} Hz（CPU）")

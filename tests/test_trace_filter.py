@@ -52,3 +52,40 @@ def test_manual_bandpass_rejects_invalid_nyquist_range():
 def test_process_traces_requires_sampling_rate_when_filtering():
     with pytest.raises(ValueError, match="采样率"):
         core.process_traces(np.ones((20, 1), dtype=np.float32), filter_mode="manual")
+
+
+def test_background_subtract_estimates_diffuse_fluorescence_background():
+    movie = np.full((12, 16, 16), 20.0, dtype=np.float32)
+    movie[6, 7:9, 7:9] += 40.0
+    result = core.background_subtract(
+        movie,
+        sigma=2.0,
+        background_percentile=20.0,
+        subtraction_strength=1.0,
+    )
+    assert float(np.median(result)) == pytest.approx(0.0, abs=0.5)
+    assert float(result[6, 7:9, 7:9].mean()) > 20.0
+    assert float(result.min()) >= 0.0
+
+
+def test_background_subtract_strength_is_bounded_and_preserves_scale():
+    movie = np.full((8, 10, 10), 12.0, dtype=np.float32)
+    result = core.background_subtract(
+        movie,
+        sigma=1.0,
+        background_percentile=20.0,
+        subtraction_strength=0.5,
+    )
+    assert float(result.mean()) == pytest.approx(6.0, abs=0.2)
+
+
+def test_adaptive_band_expands_estimated_limits():
+    fs = 40.0
+    t = np.arange(800) / fs
+    traces = np.stack([np.sin(2 * np.pi * 2.0 * t)], axis=1).astype(np.float32)
+    estimated = core.estimate_trace_band(traces, fs)
+    expanded = core.adaptive_trace_band(traces, fs)
+    _, info = core.filter_trace_signals(traces, fs, mode="adaptive")
+    assert expanded == pytest.approx((info["low_hz"], info["high_hz"]))
+    assert info["low_hz"] == pytest.approx(estimated[0] / 4.0)
+    assert info["high_hz"] == pytest.approx(fs / 2.0 - fs / len(traces))

@@ -1742,14 +1742,32 @@ def median_filter_movie(movie: np.ndarray, size: int) -> np.ndarray:
     return out
 
 
-def background_subtract(movie: np.ndarray, sigma: float) -> np.ndarray:
-    sigma = max(1.0, float(sigma))
-    out = np.empty_like(movie, dtype=np.float32)
-    for i, frame in enumerate(movie):
-        bg = gaussian_filter(frame, sigma=sigma)
-        out[i] = frame - bg
-    out -= out.min()
-    return out.astype(np.float32)
+def background_subtract(
+    movie: np.ndarray,
+    sigma: float = 20.0,
+    *,
+    background_percentile: float = 20.0,
+    subtraction_strength: float = 1.0,
+) -> np.ndarray:
+    """Suppress diffuse fluorescence background without high-pass blackening.
+
+    A temporal low percentile estimates stable background at each pixel. The
+    estimate is spatially smoothed to represent diffuse illumination and is
+    subtracted from every frame with a user-controlled strength. The output is
+    clipped at zero, preserving the physical nonnegative intensity scale.
+    ``sigma`` remains as the legacy spatial-scale argument for saved workflows.
+    """
+    arr = np.asarray(movie, dtype=np.float32)
+    if arr.ndim != 3 or arr.shape[0] == 0:
+        return arr.copy()
+    percentile = float(np.clip(background_percentile, 0.0, 99.0))
+    strength = float(np.clip(subtraction_strength, 0.0, 1.0))
+    scale = max(1.0, float(sigma))
+    finite = np.where(np.isfinite(arr), arr, np.nan)
+    background = np.nanpercentile(finite, percentile, axis=0).astype(np.float32)
+    background = gaussian_filter(background, sigma=scale).astype(np.float32)
+    out = arr - strength * background[None, :, :]
+    return np.maximum(out, 0.0).astype(np.float32)
 
 
 def bleach_correct(movie: np.ndarray) -> np.ndarray:
@@ -2389,6 +2407,20 @@ def estimate_trace_band(
     return float(low), float(high)
 
 
+def adaptive_trace_band(traces: np.ndarray, fs: float) -> tuple[float, float]:
+    """Expand the detected signal band for gentler adaptive filtering."""
+    data = np.asarray(traces)
+    estimated_low, estimated_high = estimate_trace_band(data, fs)
+    resolution = float(fs) / float(max(data.shape[0], 1))
+    nyquist = float(fs) / 2.0
+    low = max(resolution, estimated_low / 4.0)
+    high = min(nyquist - resolution, estimated_high * 16.0)
+    if high <= low:
+        low = max(resolution, 0.01)
+        high = max(low + resolution, nyquist - resolution)
+    return float(low), float(high)
+
+
 def filter_trace_signals(
     traces: np.ndarray,
     fs: float,
@@ -2407,7 +2439,7 @@ def filter_trace_signals(
         raise ValueError("视频采样率必须大于 0。")
     mode = str(mode or "adaptive").strip().lower()
     if mode in {"adaptive", "auto", "自适应"}:
-        low, high = estimate_trace_band(data, fs)
+        low, high = adaptive_trace_band(data, fs)
     else:
         low, high = float(low_hz), float(high_hz)
     resolution = fs / float(data.shape[0])

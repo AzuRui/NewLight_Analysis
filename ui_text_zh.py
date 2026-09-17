@@ -85,8 +85,12 @@ PREPROCESS_PANEL_SPECS = {
     },
     "background_subtract": {
         "label": "背景扣除",
-        "description": "从每帧中扣除高斯模糊后的局部背景。",
-        "fields": [("sigma", "背景 sigma", 20)],
+        "description": "荧光背景抑制：用时间低分位估计弥散背景，再以空间平滑和可调强度扣除；不会把每帧直接做成黑底。",
+        "fields": [
+            ("background_percentile", "背景分位数 (%)", 20),
+            ("sigma", "背景空间尺度 sigma", 20),
+            ("subtraction_strength", "扣除强度 (0-1)", 1.0),
+        ],
     },
     "bleach_correction": {
         "label": "光漂白校正",
