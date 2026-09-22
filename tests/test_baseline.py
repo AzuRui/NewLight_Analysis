@@ -46,6 +46,24 @@ class BaselineFrameSelectionTests(unittest.TestCase):
 
         np.testing.assert_allclose(projection, np.percentile(movie[2:], 25, axis=0))
 
+    def test_invalid_end_frames_are_excluded_from_baseline_and_projection(self):
+        movie = np.arange(6, dtype=np.float32).reshape(6, 1, 1)
+        baseline = core.baseline_from_frames(
+            movie,
+            duration_frames=0,
+            invalid_start_frames=1,
+            invalid_end_frames=2,
+        )
+        np.testing.assert_allclose(baseline, np.percentile(movie[1:4], 25, axis=0))
+        projection = core.compute_projection(
+            movie,
+            "mean",
+            acceleration="cpu",
+            invalid_start_frames=1,
+            invalid_end_frames=2,
+        )
+        np.testing.assert_allclose(projection, np.mean(movie[1:4], axis=0))
+
 
 if __name__ == "__main__":
     unittest.main()

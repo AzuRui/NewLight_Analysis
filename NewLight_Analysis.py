@@ -1688,6 +1688,7 @@ class NewLightApp:
         self.fs_var = tk.StringVar(value="10")
         self.stim_fs_var = tk.StringVar(value="2000")
         self.invalid_start_frames_var = tk.StringVar(value="0")
+        self.invalid_end_frames_var = tk.StringVar(value="0")
         self.baseline_start_var = tk.StringVar(value="0")
         self.baseline_duration_var = tk.StringVar(value="0")
         self.trigger_threshold_var = tk.StringVar(value="0")
@@ -1855,6 +1856,7 @@ class NewLightApp:
             ("视频帧率 (Hz)", self.fs_var),
             ("刺激采样率 (Hz)", self.stim_fs_var),
             ("无效起始帧数", self.invalid_start_frames_var),
+            ("无效尾帧数", self.invalid_end_frames_var),
             ("基线起始帧", self.baseline_start_var),
             ("基线持续帧数", self.baseline_duration_var),
             ("触发阈值", self.trigger_threshold_var),
@@ -3330,6 +3332,7 @@ class NewLightApp:
                 mean_start if mode == "mean" else 0,
                 mean_duration if mode == "mean" else 0,
                 int(self.state.invalid_start_frames),
+                int(getattr(self.state, "invalid_end_frames", 0)),
             )
             if cache_key not in self.deepcad_projection_cache:
                 self.deepcad_projection_cache[cache_key] = core.compute_projection(
@@ -3339,6 +3342,7 @@ class NewLightApp:
                     mean_start_frame=mean_start,
                     mean_duration_frames=mean_duration,
                     invalid_start_frames=self.state.invalid_start_frames,
+                    invalid_end_frames=getattr(self.state, "invalid_end_frames", 0),
                 )
             return self.render_image_for_display(core.blend_images(img, self.deepcad_projection_cache[cache_key], weight))
         return self.render_image_for_display(img)
@@ -3582,6 +3586,7 @@ class NewLightApp:
         baseline_start = int(self.state.baseline_start_frame)
         baseline_duration = int(self.state.baseline_duration_frames)
         invalid_start_frames = int(self.state.invalid_start_frames)
+        invalid_end_frames = int(getattr(self.state, "invalid_end_frames", 0))
         projection_mode = self.projection_mode.get()
         acceleration = self.acceleration()
 
@@ -3593,6 +3598,7 @@ class NewLightApp:
                 baseline_start,
                 baseline_duration,
                 invalid_start_frames=invalid_start_frames,
+                invalid_end_frames=invalid_end_frames,
             )
             if cancel_event.is_set():
                 raise TaskCancelled()
@@ -3603,6 +3609,7 @@ class NewLightApp:
                 mean_start_frame=baseline_start,
                 mean_duration_frames=baseline_duration,
                 invalid_start_frames=invalid_start_frames,
+                invalid_end_frames=invalid_end_frames,
             )
             if cancel_event.is_set():
                 raise TaskCancelled()
@@ -3854,27 +3861,31 @@ class NewLightApp:
         try:
             old_baseline = (
                 self.state.invalid_start_frames,
+                self.state.invalid_end_frames,
                 self.state.baseline_start_frame,
                 self.state.baseline_duration_frames,
             )
             self.state.fs = float(self.fs_var.get())
             self.state.stimulus_fs = float(self.stim_fs_var.get())
             invalid_start_frames = int(round(float(self.invalid_start_frames_var.get())))
+            invalid_end_frames = int(round(float(self.invalid_end_frames_var.get())))
             baseline_start_frame = int(round(float(self.baseline_start_var.get())))
             baseline_duration_frames = int(round(float(self.baseline_duration_var.get())))
-            if invalid_start_frames < 0 or baseline_start_frame < 0 or baseline_duration_frames < 0:
-                raise ValueError("无效起始帧数、基线起始帧和持续帧数必须大于或等于 0")
-            if self.state.movie is not None and invalid_start_frames >= self.state.movie.shape[0]:
+            if invalid_start_frames < 0 or invalid_end_frames < 0 or baseline_start_frame < 0 or baseline_duration_frames < 0:
+                raise ValueError("无效起始帧数、无效尾帧数、基线起始帧和持续帧数必须大于或等于 0")
+            if self.state.movie is not None and invalid_start_frames + invalid_end_frames >= self.state.movie.shape[0]:
                 raise ValueError(
-                    f"无效起始帧数 {invalid_start_frames} 必须小于视频总帧数 {self.state.movie.shape[0]}"
+                    f"无效帧范围 {invalid_start_frames}+{invalid_end_frames} 必须小于视频总帧数 {self.state.movie.shape[0]}"
                 )
             self.state.invalid_start_frames = invalid_start_frames
+            self.state.invalid_end_frames = invalid_end_frames
             self.state.baseline_start_frame = baseline_start_frame
             self.state.baseline_duration_frames = baseline_duration_frames
             self.state.pre_trigger_s = float(self.pre_trigger_var.get())
             self.state.post_trigger_s = float(self.post_trigger_var.get())
             baseline_changed = old_baseline != (
                 self.state.invalid_start_frames,
+                self.state.invalid_end_frames,
                 self.state.baseline_start_frame,
                 self.state.baseline_duration_frames,
             )
@@ -3883,7 +3894,7 @@ class NewLightApp:
                 self.state.dff_movie = None
                 self.state.traces = None
                 self._converted_projection_cache = {}
-            if old_baseline[0] != self.state.invalid_start_frames:
+            if old_baseline[:2] != (self.state.invalid_start_frames, self.state.invalid_end_frames):
                 self.clear_deepcad_cache()
             if update_baseline and self.state.movie is not None:
                 self.queue_movie_view_refresh("应用实验协议", preserve_view=False)
@@ -3894,10 +3905,8 @@ class NewLightApp:
                     self.state.baseline_start_frame,
                 )
                 if self.state.movie is not None:
-                    end_frame = min(
-                        self.state.movie.shape[0],
-                        effective_baseline_start + self.state.baseline_duration_frames,
-                    ) - 1
+                    valid_end = self.state.movie.shape[0] - self.state.invalid_end_frames
+                    end_frame = min(valid_end, effective_baseline_start + self.state.baseline_duration_frames) - 1
                 if end_frame is None:
                     self.log("实验协议已应用；dF/F 基线使用所选帧窗口的均值。")
                 else:
@@ -3906,11 +3915,12 @@ class NewLightApp:
                         f"dF/F 基线使用第 {effective_baseline_start}-{end_frame} 帧的均值。"
                     )
             else:
-                valid_note = (
-                    f"（已排除前 {self.state.invalid_start_frames} 个无效帧）"
-                    if self.state.invalid_start_frames
-                    else ""
-                )
+                notes = []
+                if self.state.invalid_start_frames:
+                    notes.append(f"前 {self.state.invalid_start_frames} 个")
+                if self.state.invalid_end_frames:
+                    notes.append(f"后 {self.state.invalid_end_frames} 个")
+                valid_note = f"（已排除{'和'.join(notes)}无效帧）" if notes else ""
                 self.log(f"实验协议已应用；dF/F 基线使用有效视频的第 25 百分位{valid_note}。")
         except Exception as exc:
             messagebox.showerror("应用实验协议失败", str(exc))
@@ -6592,6 +6602,7 @@ class NewLightApp:
                 int(self.state.baseline_start_frame),
                 int(self.state.baseline_duration_frames),
                 int(self.state.invalid_start_frames),
+                int(getattr(self.state, "invalid_end_frames", 0)),
                 float(self.state.fs),
                 tuple(np.asarray(self.state.trigger_frames, dtype=int).tolist()),
                 float(self.state.pre_trigger_s),
@@ -6619,6 +6630,7 @@ class NewLightApp:
                 baseline_start=int(self.state.baseline_start_frame),
                 baseline_duration=int(self.state.baseline_duration_frames),
                 invalid_start_frames=int(self.state.invalid_start_frames),
+                invalid_end_frames=int(getattr(self.state, "invalid_end_frames", 0)),
                 fs=float(self.state.fs),
                 trigger_frames=np.asarray(self.state.trigger_frames, dtype=int).copy(),
                 pre_trigger_s=float(self.state.pre_trigger_s),
@@ -6651,6 +6663,7 @@ class NewLightApp:
             baseline_start = current["baseline_start"]
             baseline_duration = current["baseline_duration"]
             invalid_start_frames = current["invalid_start_frames"]
+            invalid_end_frames = current["invalid_end_frames"]
             fs = current["fs"]
             trigger_frames = current["trigger_frames"]
             baseline = None
@@ -6660,6 +6673,7 @@ class NewLightApp:
                     baseline_start,
                     baseline_duration,
                     invalid_start_frames=invalid_start_frames,
+                    invalid_end_frames=invalid_end_frames,
                 )
             if cancel_event.is_set():
                 raise TaskCancelled()
@@ -7457,6 +7471,7 @@ class NewLightApp:
         baseline_start = int(self.state.baseline_start_frame)
         baseline_duration = int(self.state.baseline_duration_frames)
         invalid_start_frames = int(self.state.invalid_start_frames)
+        invalid_end_frames = int(getattr(self.state, "invalid_end_frames", 0))
         acceleration = self.acceleration()
 
         if adaptive:
@@ -7477,6 +7492,7 @@ class NewLightApp:
                 mean_start_frame=baseline_start,
                 mean_duration_frames=baseline_duration,
                 invalid_start_frames=invalid_start_frames,
+                invalid_end_frames=invalid_end_frames,
             )
             if cancel_event.is_set():
                 raise TaskCancelled()
@@ -8153,6 +8169,7 @@ class NewLightApp:
         baseline_start = int(self.state.baseline_start_frame)
         baseline_duration = int(self.state.baseline_duration_frames)
         invalid_start_frames = int(self.state.invalid_start_frames)
+        invalid_end_frames = int(getattr(self.state, "invalid_end_frames", 0))
         roi_masks = [np.asarray(mask, dtype=bool).copy() for mask in self.state.roi_masks]
         fs = float(self.state.fs)
         baseline_correct = bool(self.trace_baseline_correct_var.get())
@@ -8169,6 +8186,7 @@ class NewLightApp:
                 baseline_start,
                 baseline_duration,
                 invalid_start_frames=invalid_start_frames,
+                invalid_end_frames=invalid_end_frames,
             )
             if cancel_event.is_set():
                 raise TaskCancelled()
@@ -8297,6 +8315,7 @@ class NewLightApp:
         baseline_start = int(self.state.baseline_start_frame)
         baseline_duration = int(self.state.baseline_duration_frames)
         invalid_start_frames = int(self.state.invalid_start_frames)
+        invalid_end_frames = int(getattr(self.state, "invalid_end_frames", 0))
         roi_masks = [np.asarray(mask, dtype=bool).copy() for mask in self.state.roi_masks]
         roi_names = list(self.state.roi_names)
         fs = float(self.state.fs)
@@ -8347,6 +8366,7 @@ class NewLightApp:
                 baseline_start,
                 baseline_duration,
                 invalid_start_frames=invalid_start_frames,
+                invalid_end_frames=invalid_end_frames,
             )
             traces = core.extract_traces(movie, roi_masks, "dff", baseline, acceleration=acceleration)
             traces = core.process_traces(

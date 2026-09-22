@@ -101,6 +101,7 @@ class AnalysisState:
     fs: float = 10.0
     stimulus_fs: float = 2000.0
     invalid_start_frames: int = 0
+    invalid_end_frames: int = 0
     baseline_start_frame: int = 0
     baseline_duration_frames: int = 0
     pre_trigger_s: float = 0.0
@@ -1335,14 +1336,37 @@ def compute_baseline(movie: np.ndarray, mode: str = "percentile", start: int = 0
     return baseline
 
 
-def normalized_invalid_start_frames(movie: np.ndarray, invalid_start_frames: int | float = 0) -> int:
+def normalized_invalid_frame_window(
+    movie: np.ndarray,
+    invalid_start_frames: int | float = 0,
+    invalid_end_frames: int | float = 0,
+) -> tuple[int, int]:
     frame_count = int(np.asarray(movie).shape[0])
-    invalid = int(round(float(invalid_start_frames)))
-    if invalid < 0:
-        raise ValueError("无效起始帧数必须大于或等于 0")
-    if frame_count <= 0 or invalid >= frame_count:
-        raise ValueError(f"无效起始帧数 {invalid} 必须小于视频总帧数 {frame_count}")
+    invalid_start = int(round(float(invalid_start_frames)))
+    invalid_end = int(round(float(invalid_end_frames)))
+    if invalid_start < 0 or invalid_end < 0:
+        raise ValueError("无效起始帧数和无效尾帧数必须大于或等于 0")
+    if frame_count <= 0 or invalid_start + invalid_end >= frame_count:
+        raise ValueError(
+            f"无效帧范围 {invalid_start}+{invalid_end} 必须小于视频总帧数 {frame_count}"
+        )
+    return invalid_start, invalid_end
+
+
+def normalized_invalid_start_frames(movie: np.ndarray, invalid_start_frames: int | float = 0) -> int:
+    """Backward-compatible start-only validation helper."""
+    invalid, _ = normalized_invalid_frame_window(movie, invalid_start_frames, 0)
     return invalid
+
+
+def valid_movie_slice(
+    movie: np.ndarray,
+    invalid_start_frames: int | float = 0,
+    invalid_end_frames: int | float = 0,
+) -> np.ndarray:
+    start, end = normalized_invalid_frame_window(movie, invalid_start_frames, invalid_end_frames)
+    stop = movie.shape[0] - end if end else movie.shape[0]
+    return np.asarray(movie)[start:stop]
 
 
 def baseline_from_frames(
@@ -1350,18 +1374,26 @@ def baseline_from_frames(
     start_frame: int | float = 0,
     duration_frames: int | float = 0,
     invalid_start_frames: int | float = 0,
+    invalid_end_frames: int | float = 0,
 ) -> np.ndarray:
-    invalid = normalized_invalid_start_frames(movie, invalid_start_frames)
-    start = max(invalid, int(round(float(start_frame))))
+    invalid, invalid_end = normalized_invalid_frame_window(movie, invalid_start_frames, invalid_end_frames)
+    valid_end = movie.shape[0] - invalid_end if invalid_end else movie.shape[0]
+    start = max(invalid, int(round(float(start_frame))) if start_frame is not None else invalid)
     duration = max(0, int(round(float(duration_frames))))
     if duration <= 0:
-        return compute_baseline(movie, mode="percentile", start=invalid)
-    if start >= movie.shape[0]:
-        raise ValueError(f"基线起始帧 {start} 超出视频总帧数 {movie.shape[0]}")
-    end = min(movie.shape[0], start + duration)
+        return compute_baseline(movie, mode="percentile", start=invalid, end=valid_end)
+    if start >= valid_end:
+        raise ValueError(f"基线起始帧 {start} 超出有效视频范围 {invalid}-{valid_end - 1}")
+    end = min(valid_end, start + duration)
     if end <= start:
-        raise ValueError("基线持续帧数没有选中任何帧")
+        raise ValueError("基线持续帧数没有选中任何有效帧")
     return compute_baseline(movie, mode="mean", start=start, end=end)
+
+
+def _deprecated_invalid_start_error(invalid_start_frames: int | float) -> None:
+    """Kept as a private compatibility marker for old source integrations."""
+    if float(invalid_start_frames) < 0:
+        raise ValueError("无效起始帧数必须大于或等于 0")
 
 
 def baseline_from_seconds(movie: np.ndarray, fs: float, start_s: float, duration_s: float, mode: str = "percentile") -> np.ndarray:
@@ -1384,6 +1416,7 @@ def compute_projection(
     mean_start_frame: int = 0,
     mean_duration_frames: int = 0,
     invalid_start_frames: int = 0,
+    invalid_end_frames: int = 0,
 ) -> np.ndarray:
     """Create a display projection without changing the analysis movie.
 
@@ -1392,14 +1425,15 @@ def compute_projection(
     describe the full movie.
     """
     arr_movie = np.asarray(movie)
-    invalid = normalized_invalid_start_frames(arr_movie, invalid_start_frames)
+    invalid, invalid_end = normalized_invalid_frame_window(arr_movie, invalid_start_frames, invalid_end_frames)
+    valid_end = arr_movie.shape[0] - invalid_end if invalid_end else arr_movie.shape[0]
     if mode == "mean" and int(mean_duration_frames) > 0:
         start = max(invalid, int(mean_start_frame))
-        end = min(arr_movie.shape[0], start + int(mean_duration_frames))
+        end = min(valid_end, start + int(mean_duration_frames))
         if end > start:
             arr_movie = arr_movie[start:end]
     else:
-        arr_movie = arr_movie[invalid:]
+        arr_movie = arr_movie[invalid:valid_end]
     cp = get_cupy() if acceleration in {"auto", "gpu"} else None
     if cp is not None and mode in {"mean", "max", "std"}:
         arr = cp.asarray(arr_movie, dtype=cp.float32)
