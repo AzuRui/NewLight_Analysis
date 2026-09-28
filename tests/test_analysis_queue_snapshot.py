@@ -177,8 +177,9 @@ class AnalysisQueueSnapshotTests(unittest.TestCase):
         captured["on_start"]()
         result = captured["worker"](threading.Event())
         baseline, traces, fs, frames = result["output"]
-        expected_baseline = core.baseline_from_frames(app.state.movie, 2, 2, invalid_start_frames=1)
-        expected_traces = core.extract_traces(app.state.movie, app.state.roi_masks, "dff", expected_baseline)
+        valid_movie = core.valid_movie_slice(app.state.movie, 1, 0)
+        expected_baseline = core.baseline_from_frames(valid_movie, 1, 2)
+        expected_traces = core.extract_traces(valid_movie, app.state.roi_masks, "dff", expected_baseline)
         expected_traces = core.process_traces(
             expected_traces,
             baseline_correct=False,
@@ -189,7 +190,7 @@ class AnalysisQueueSnapshotTests(unittest.TestCase):
         np.testing.assert_allclose(baseline, expected_baseline)
         np.testing.assert_allclose(traces, expected_traces)
         self.assertEqual(fs, 25.0)
-        np.testing.assert_array_equal(frames, [3, 6])
+        np.testing.assert_array_equal(frames, [2, 5])
 
     def test_operation_context_uses_start_time_acceleration_and_event_window(self):
         app, captured = self.make_app()

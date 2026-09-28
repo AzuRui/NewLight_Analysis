@@ -5091,6 +5091,7 @@ class NewLightApp:
                 else ()
             )
             invalid_start_frames = int(self.state.invalid_start_frames)
+            invalid_end_frames = int(getattr(self.state, "invalid_end_frames", 0))
             out_dir = self.deepcad_temp_dir()
 
             def save_pseudocolor(cancel_event):
@@ -6649,7 +6650,10 @@ class NewLightApp:
             source = current["source"]
             source_id = current["source_id"]
             roi_revision = current["roi_revision"]
-            movie = np.asarray(source, dtype=np.float32).copy()
+            original_movie = np.asarray(source, dtype=np.float32)
+            analysis_start = int(current["invalid_start_frames"])
+            analysis_end = int(current["invalid_end_frames"])
+            movie = core.valid_movie_slice(original_movie, analysis_start, analysis_end).copy()
             roi_masks = [np.asarray(mask, dtype=bool).copy() for mask in current["roi_masks"]]
             roi_names = list(current["roi_names"])
             if roi_dependent and int(self.state.roi_revision) != roi_revision:
@@ -6660,20 +6664,25 @@ class NewLightApp:
                 raise ValueError("ROI 尺寸与当前视频不一致，请重新载入或绘制 ROI。")
             if len(roi_names) != len(roi_masks):
                 roi_names = [roi_names[index] if index < len(roi_names) else f"ROI{index + 1}" for index in range(len(roi_masks))]
-            baseline_start = current["baseline_start"]
+            baseline_start = max(0, current["baseline_start"] - analysis_start)
             baseline_duration = current["baseline_duration"]
             invalid_start_frames = current["invalid_start_frames"]
             invalid_end_frames = current["invalid_end_frames"]
             fs = current["fs"]
-            trigger_frames = current["trigger_frames"]
+            trigger_frames = core.remap_trigger_frames(
+                current["trigger_frames"],
+                original_movie.shape[0],
+                analysis_start,
+                analysis_end,
+            )
             baseline = None
             if need_baseline or need_traces:
                 baseline = core.baseline_from_frames(
                     movie,
                     baseline_start,
                     baseline_duration,
-                    invalid_start_frames=invalid_start_frames,
-                    invalid_end_frames=invalid_end_frames,
+                    invalid_start_frames=0,
+                    invalid_end_frames=0,
                 )
             if cancel_event.is_set():
                 raise TaskCancelled()
@@ -6841,6 +6850,7 @@ class NewLightApp:
             baseline_start = int(self.state.baseline_start_frame)
             baseline_duration = int(self.state.baseline_duration_frames)
             invalid_start_frames = int(self.state.invalid_start_frames)
+            invalid_end_frames = int(getattr(self.state, "invalid_end_frames", 0))
             roi_masks = [np.asarray(mask, dtype=bool).copy() for mask in self.state.roi_masks]
             roi_names = list(self.state.roi_names)
             fs = float(self.state.fs)
@@ -6857,26 +6867,38 @@ class NewLightApp:
 
             def worker(cancel_event):
                 source_id = id(self.state.movie)
-                event_frames = frames
-                if event_frames.size == 0:
+                original_event_frames = frames
+                if original_event_frames.size == 0:
                     if interval > 0:
-                        event_frames = core.generate_interval_triggers(
+                        original_event_frames = core.generate_interval_triggers(
                             trigger_start, interval, fs, movie_frames, pre_s, post_s
                         )
                     else:
                         samples = core.detect_stimulus_triggers(stimulus, stimulus_fs, threshold=trigger_threshold)
-                        event_frames = core.map_stimulus_triggers_to_frames(
+                        original_event_frames = core.map_stimulus_triggers_to_frames(
                             samples, stimulus_fs, fs, movie_frames, pre_s, post_s
                         )
-                event_frames = np.asarray(event_frames, dtype=int)
+                original_event_frames = np.asarray(original_event_frames, dtype=int)
+                event_frames = core.remap_trigger_frames(
+                    original_event_frames,
+                    movie_frames,
+                    invalid_start_frames,
+                    invalid_end_frames,
+                )
                 if event_frames.size == 0:
                     raise ValueError("未检测到可用于事件对齐的有效刺激触发。")
-                movie = np.asarray(self.state.movie, dtype=np.float32).copy()
+                movie = core.valid_movie_slice(
+                    np.asarray(self.state.movie, dtype=np.float32),
+                    invalid_start_frames,
+                    invalid_end_frames,
+                ).copy()
+                baseline_start_effective = max(0, baseline_start - invalid_start_frames)
                 baseline = core.baseline_from_frames(
                     movie,
-                    baseline_start,
+                    baseline_start_effective,
                     baseline_duration,
-                    invalid_start_frames=invalid_start_frames,
+                    invalid_start_frames=0,
+                    invalid_end_frames=0,
                 )
                 traces = core.extract_traces(movie, roi_masks, "dff", baseline, acceleration=acceleration)
                 traces = core.process_traces(
@@ -6910,15 +6932,15 @@ class NewLightApp:
                 )
                 if cancel_event.is_set():
                     raise TaskCancelled()
-                return source_id, baseline, traces, event_frames, paths
+                return source_id, baseline, traces, event_frames, original_event_frames, paths
 
             def finish(result):
-                source_id, baseline, traces, event_frames, paths = result
+                source_id, baseline, traces, event_frames, original_event_frames, paths = result
                 if source_id == id(self.state.movie):
                     self.state.baseline_image = baseline
                     self.state.dff_movie = None
                     self.state.traces = traces
-                    self.state.trigger_frames = event_frames
+                    self.state.trigger_frames = original_event_frames
                     self.redraw()
                 self.log(f"刺激事件对齐平均已导出 {len(paths)} 个文件到 {out_dir}")
                 messagebox.showinfo("刺激事件对齐平均", f"刺激事件分析已保存到：\n{out_dir}")
@@ -8177,16 +8199,23 @@ class NewLightApp:
         smooth_window = int(float(self.trace_smooth_window_var.get()))
         filter_mode, filter_low, filter_high = self._trace_filter_settings()
         acceleration = self.acceleration()
+        analysis_start = invalid_start_frames
+        analysis_end = invalid_end_frames
 
         def worker(cancel_event):
             source_id = id(self.state.movie)
-            movie = np.asarray(self.state.movie, dtype=np.float32).copy()
+            movie = core.valid_movie_slice(
+                np.asarray(self.state.movie, dtype=np.float32),
+                analysis_start,
+                analysis_end,
+            ).copy()
+            effective_baseline_start = max(0, baseline_start - analysis_start)
             baseline = core.baseline_from_frames(
                 movie,
-                baseline_start,
+                effective_baseline_start,
                 baseline_duration,
-                invalid_start_frames=invalid_start_frames,
-                invalid_end_frames=invalid_end_frames,
+                invalid_start_frames=0,
+                invalid_end_frames=0,
             )
             if cancel_event.is_set():
                 raise TaskCancelled()
@@ -8330,7 +8359,12 @@ class NewLightApp:
 
         def worker(cancel_event):
             source_id = id(self.state.movie)
-            movie = np.asarray(self.state.movie, dtype=np.float32).copy()
+            original_movie = np.asarray(self.state.movie, dtype=np.float32)
+            movie = core.valid_movie_slice(
+                original_movie,
+                invalid_start_frames,
+                invalid_end_frames,
+            ).copy()
             event_frames = trigger_frames
             if event_frames.size == 0:
                 if interval > 0:
@@ -8356,17 +8390,23 @@ class NewLightApp:
                         pre_trigger_s,
                         post_trigger_s,
                     )
-            event_frames = np.asarray(event_frames, dtype=int)
+            original_event_frames = np.asarray(event_frames, dtype=int)
+            event_frames = core.remap_trigger_frames(
+                original_event_frames,
+                original_movie.shape[0],
+                invalid_start_frames,
+                invalid_end_frames,
+            )
             if event_frames.size == 0:
                 raise ValueError("未检测到可用于试次平均的有效刺激触发。")
             if cancel_event.is_set():
                 raise TaskCancelled()
             baseline = core.baseline_from_frames(
                 movie,
-                baseline_start,
+                max(0, baseline_start - invalid_start_frames),
                 baseline_duration,
-                invalid_start_frames=invalid_start_frames,
-                invalid_end_frames=invalid_end_frames,
+                invalid_start_frames=0,
+                invalid_end_frames=0,
             )
             traces = core.extract_traces(movie, roi_masks, "dff", baseline, acceleration=acceleration)
             traces = core.process_traces(
@@ -8384,10 +8424,10 @@ class NewLightApp:
             trials, trial_t = core.trial_average(traces, event_frames, fs, pre_trigger_s, post_trigger_s)
             if trials.size == 0:
                 raise ValueError("所选事件前后窗口内没有完整试次。")
-            return source_id, baseline, traces, event_frames, trials, trial_t
+            return source_id, baseline, traces, event_frames, trials, trial_t, original_event_frames
 
         def finish(result):
-            source_id, baseline, traces, event_frames, trials, trial_t = result
+            source_id, baseline, traces, event_frames, trials, trial_t, original_event_frames = result
             if source_id != id(self.state.movie):
                 self.log("已忽略过期的试次平均结果。")
                 return
@@ -8395,7 +8435,7 @@ class NewLightApp:
             self.state.dff_movie = None
             self.state.traces = traces
             self._refresh_trace_filter_band_label(traces, fs)
-            self.state.trigger_frames = event_frames
+            self.state.trigger_frames = original_event_frames
             self._show_trial_average_window(trials, trial_t, roi_names)
             self.log(f"已显示试次平均，n={trials.shape[0]}。")
 

@@ -1369,6 +1369,23 @@ def valid_movie_slice(
     return np.asarray(movie)[start:stop]
 
 
+def remap_trigger_frames(
+    trigger_frames: np.ndarray,
+    movie_frame_count: int,
+    invalid_start_frames: int = 0,
+    invalid_end_frames: int = 0,
+) -> np.ndarray:
+    """Convert original-frame triggers to coordinates in the valid movie slice."""
+    start, end = normalized_invalid_frame_window(
+        np.empty((int(movie_frame_count), 1, 1), dtype=np.uint8),
+        invalid_start_frames,
+        invalid_end_frames,
+    )
+    stop = int(movie_frame_count) - end if end else int(movie_frame_count)
+    frames = np.asarray(trigger_frames, dtype=int).reshape(-1)
+    return frames[(frames >= start) & (frames < stop)] - start
+
+
 def baseline_from_frames(
     movie: np.ndarray,
     start_frame: int | float = 0,
