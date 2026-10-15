@@ -67,7 +67,7 @@ set "GPU_WORKER=%RESOURCE_DIR%\GPU_Addon\NewLight_GPU_Worker.exe"
 if not exist "%GPU_WORKER%" (
   echo Optional GPU ROI addon is not installed; skipping NeuSuite fast ROI check.
 ) else (
-  "%GPU_WORKER%" "workers\run_neusuite_roi.py" --help >nul
+  "%GPU_WORKER%" "GPU_Addon\workers\run_neusuite_roi.py" --help >nul
   if errorlevel 1 (
     echo Fast ROI GPU worker check failed.
     set "FAILED=1"
