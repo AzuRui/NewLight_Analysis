@@ -3765,13 +3765,20 @@ def run_fast_roi_segmentation(
     artifact_path = job_dir / "fast_rois.npz"
     summary_path = job_dir / "fast_summary.json"
     tifffile.imwrite(input_path, image, photometric="minisblack")
-    script = WORKER_DIR / "run_neusuite_roi.py"
     if IS_FROZEN:
         if not GPU_WORKER_EXE.is_file():
             raise FileNotFoundError("未安装 GPU 扩展，快速 ROI 需要 CUDA GPU worker。")
+        # 冻结版必须运行 GPU 扩展自带的 worker 脚本：GPU worker 可执行文件携带的
+        # 是 GPU_Addon 的 torch 原生库，若运行主包 workers 脚本会加载主包 torch 的
+        # python 文件，两者版本错配（主包 2.12.1 引用 Stream.is_capturing，GPU 2.10
+        # 已移除）会在 import 阶段抛 AttributeError 并导致 worker_launcher 崩溃。
+        script = GPU_ADDON_DIR / "workers" / "run_neusuite_roi.py"
+        if not script.is_file():
+            raise FileNotFoundError(f"GPU 扩展缺少快速 ROI worker 脚本：{script}")
         weights_path = GPU_NEUSUITE_DEFAULT_WEIGHTS.resolve()
         runtime_path = GPU_NEUSUITE_RUNTIME_ROOT.resolve()
     else:
+        script = WORKER_DIR / "run_neusuite_roi.py"
         weights_path = Path(weights).resolve() if weights else NEUSUITE_DEFAULT_WEIGHTS.resolve()
         runtime_path = Path(runtime_root).resolve() if runtime_root else NEUSUITE_RUNTIME_ROOT.resolve()
     args = [
