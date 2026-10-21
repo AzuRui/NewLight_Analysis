@@ -120,4 +120,4 @@ gSig = max(1, round(细胞直径 / 4))
 
 ## 联系方式
 
-如有其他需求，请通过 **[lzr01070323@gmail.com](mailto:lzr01070323@gmail.com)** 联系。
+如有其他需求，请通过 **[lzr01070323@gmail.com](mailto:lzr01070323@gmail.com)** 和 **[https://www.newlightxhr.com/index.html](mailto:https://www.newlightxhr.com/index.html)** 联系。
