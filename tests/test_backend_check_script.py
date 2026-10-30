@@ -109,3 +109,24 @@ def test_interpreter_resolution_lives_in_one_subroutine():
 
     assert text.count("conda run -n caiman_latest") == 1
     assert text.count("call :RESOLVE_PY") == 3
+
+
+def test_unknown_option_exits_nonzero_while_help_exits_zero():
+    # A mistyped option must never look like a passed check, but /help is a normal exit.
+    text = batch_text()
+
+    assert 'if /I "%~1"=="/help" goto :USAGE' in text
+    assert 'set "OPTION_EXIT=64"' in text
+    assert 'endlocal & exit /b %OPTION_EXIT%' in text
+    # The unknown-option path is the only place that sets the failing code.
+    assert text.count('set "OPTION_EXIT=') == 2
+    assert "exit /b 64" not in text
+
+
+def test_setup_branch_keeps_the_console_and_log_claims_separate():
+    text = batch_text()
+
+    assert "Every stage is printed below as it runs" in text
+    # This run forwards progress to stdout, so it must not claim the machine log holds it.
+    assert "The application logs its own setup stages to" in text
+    assert "Progress is also appended to" not in text

@@ -1,12 +1,15 @@
 @echo off
 setlocal EnableExtensions EnableDelayedExpansion
 cd /d "%~dp0"
+set "OPTION_EXIT=0"
 if /I "%~1"=="/install-gpu-driver" goto :INSTALL_GPU_DRIVER
 if /I "%~1"=="/verify-only" goto :VERIFY_BACKENDS
 if /I "%~1"=="/update-gpu" goto :UPDATE_GPU
 if /I "%~1"=="/help" goto :USAGE
 if "%~1"=="" goto :SETUP_MACHINE
 echo Unknown option: %~1
+echo A mistyped option is reported here and exits with code 64; it never means a check passed.
+set "OPTION_EXIT=64"
 goto :USAGE
 
 :USAGE
@@ -15,7 +18,7 @@ echo   (no argument)       run the first-run setup and print every progress mess
 echo   /verify-only        check the installed backends and print the paths being checked
 echo   /update-gpu         install or update the optional unified GPU addon with progress
 echo   /install-gpu-driver run the bundled NVIDIA driver installer
-endlocal & exit /b 0
+endlocal & exit /b %OPTION_EXIT%
 
 :RESOLVE_PY
 rem Resolve RESOURCE_DIR and WORKER_PY for the directory this script lives in.
@@ -38,8 +41,9 @@ exit /b 0
 call :RESOLVE_PY
 echo Starting first-run setup for: %CD%
 echo Worker used: %WORKER_PY%
-echo Progress lines are printed as each stage runs; the GPU addon download is the slow part.
-echo Progress is also appended to: %PROGRAMDATA%\NewLight_Analysis\setup_progress.log
+echo Every stage is printed below as it runs; the GPU addon download is the slow part.
+echo The application logs its own setup stages to:
+echo   %PROGRAMDATA%\NewLight_Analysis\setup_progress.log
 "%WORKER_PY%" -c "import sys; from pathlib import Path; from machine_setup import ensure_first_run_setup; getattr(sys.stdout, 'reconfigure', lambda **kwargs: None)(errors='replace'); ok = ensure_first_run_setup(Path(r'%CD%'), progress=lambda message: print('[NewLight] ' + str(message), flush=True)); print('[NewLight] setup result: ' + str(ok), flush=True); raise SystemExit(0 if ok else 1)"
 set "SETUP_RESULT=%ERRORLEVEL%"
 echo First-run setup exit code: %SETUP_RESULT%
