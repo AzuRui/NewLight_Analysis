@@ -1933,3 +1933,88 @@
   `api.github.com` / `uploads.github.com` 均可用，未使用 7897 代理。
   结果：新装用户不再触发上一条的首次初始化失败；已经装过旧包并加装 GPU 扩展的用户
   仍按上一条覆盖 `{安装目录}\check_backends.bat`（或重装新包）即可。
+- 2026-10-30: 查清“用 `check_backends.bat` 加装 GPU 扩展跑了很久、没输出、最后也没装上”，
+  并把加装过程做成可见的（提交 `21c78ee`、`1c2861d`、`32a597d`、`6b6aa66`）。三条根因：
+  (1) bat 的 `:SETUP_MACHINE` 调 `ensure_first_run_setup(Path(r'%CD%'))` 时**不传 progress
+  回调**，`_emit` 只在有回调时才说话，于是 2.58 GB 下载/3.6 GB 解压复制全程一个字都不打印，
+  看起来像卡死；GUI 侧 `launch.py` 在拿不到 splash 时同样不带回调，同样静默。
+  (2) `ensure_first_run_setup` 的 `complete_cuda` 分支会调 `ensure_gpu_addon`，但把它的
+  返回消息丢掉、失败也返回 True → bat 退出码 0，用户既看不到原因也被告知“成功过”。
+  (3) `ensure_gpu_addon` 无视 `%PROGRAMDATA%\NewLight_Analysis\GPU_Addon_CUDA.zip`
+  已经校验通过的缓存，每次都重下分段包，弱网下“跑很久”就是这一步。
+  改动：`machine_setup.py` 加 `_human_size`/`_describe_setup_error`/`_hash_file`/
+  `_stream_to_file`/`_download_to`/`setup_log_path`/`_file_logging_progress`，
+  `ensure_gpu_addon` 重写为“目标目录→缓存 SHA-256→（校验通过则跳过下载）→分段下载并逐段
+  校验→解压（逐 member 报进度与耗时）→磁盘空间预检→顶层条目复制带 2 秒心跳→总耗时”，
+  失败原因走 `_describe_setup_error`（HTTP 状态、errno 28 磁盘不足、36/206 路径过长、
+  13/5 权限、坏 ZIP 提示删缓存），`ensure_application_setup` 在冻结且无回调时把阶段写进
+  `ProgramData\NewLight_Analysis\setup_progress.log`，`complete_cuda` 分支改为把未装上的原因
+  emit 出来。`check_backends.bat` 重写：`:RESOLVE_PY` 统一解释器探测（原两份合一），
+  `:SETUP_MACHINE` 与新增 `:UPDATE_GPU` 都传 `progress=lambda` 实时打 `[NewLight]`/`[GPU]`
+  并 `reconfigure(errors='replace')` 防中文把控制台打崩，新增 `/update-gpu`、`/help`，
+  `/verify-only` 先打印五条路径再逐段带 `!TIME!` 起止与退出码，末尾固定
+  `Verification exit code: N`；顺带修掉“敲错参数也算通过”：`/help` 退出码 0、未知选项 64。
+  实测判据（本机 RTX 4080 + 真实缓存包，dist 干净 CPU 构建）：`check_backends.bat /update-gpu`
+  52 秒退出码 0，逐行可见 `缓存校验通过，跳过下载。`、`正在安装统一 GPU 扩展：5471 个条目，
+  解压后约 3.6 GB；临时目录剩余 46.4 GB，安装目录剩余 186.9 GB`、`解压完成，耗时 21.2s`、
+  `复制：第 357/388 项（torch），3449 个文件 / 3.1 GB（223.2 MB/s）`、
+  `统一 GPU 扩展安装完成。 总耗时 49.8s`；随后 `/verify-only` 退出码 0，
+  `NeuSuite fast ROI GPU worker OK.` 与 `DeepCAD-RT CUDA worker OK.`（`NVIDIA GeForce RTX 4080`）
+  均在真实扩展上跑通。第一次跑出来的 `校验 缓存安装包：1.0 MB/2.4 GB（976.6 GB/s）` 是假数：
+  `_hash_file` 用 `last_emit = started - 2.0` 强制第一块就发一行，速率除以微秒窗口，
+  故 `6b6aa66` 改成心跳窗口统一常量 + `_rate_text` 只在 ≥0.05 秒窗口才报速率，
+  小文件校验只剩一行诚实输出。选项退出码实测：`/help` → 0、`/verfy-only` 与
+  `/verify-onl` → 64。回归：`tests/test_machine_setup.py` 新增 6 项（阶段可见、缓存免网、
+  失败原因可达 progress、冻结无回调落盘、速率窗口诚实、小文件单行），
+  `tests/test_backend_check_script.py` 新增 6 项（progress 打印、`/update-gpu`、路径与耗时、
+  `:RESOLVE_PY` 去重、未知选项 64、控制台与日志两种说法不再混用），
+  全量 `337 passed, 15 subtests passed`，唯一失败是 `newlight_cpu` 缺 `torch` 的既有环境问题；
+  `test_peak_detection_plot.py` 在整轮并行跑时出现过一次真 Tk 环境 `TclError`，单跑 3/3 通过。
+  热替换边界（再次实测确认）：`check_backends.bat` 是安装目录散装文件，覆盖即生效，能拿到
+  “显示进度/显示原因/显示路径与耗时”；缓存复用与耗时统计在 exe 的 PYZ 里，必须装新包。
+- 2026-10-30: 用上面四条提交重建 CPU 安装包并替换发布资产。
+  构建分两步跑，中间补一个只有手工步骤才能补上的文件：`build_cpu_exe.bat /nopause`
+  （PyInstaller + `patch_frozen_cv2.py` + 复制 bat + 内建闸门
+  `dist\NewLight_Analysis\check_backends.bat /verify-only`，该闸门退出码 0）→
+  `git checkout -- dist/NewLight_Analysis/NewLight_Analysis_User_Manual.pdf`（887,222 bytes）→
+  `ISCC.exe NewLight_Analysis_setup.iss` `Successful compile (197.031 sec)`。
+  原因：`build_cpu_exe.bat` 第 47 行 `rmdir /s /q dist` 会把这份只存在于 git 里的打包手册
+  一起删掉，而 spec 和两个 build 脚本都不会重新生成它，所以每次 `/rebuild` 出来的包都少这份
+  PDF（今天早些时候的两次重建同样如此）；这是构建脚本的已知缺口，本次用恢复 HEAD 版本的方式补齐，
+  未改动构建脚本，也未使用工作区里那份未提交的 `NewLight_Analysis用户使用手册.pdf`。
+  进包校验：`dist\NewLight_Analysis\check_backends.bat` 7,551 bytes、SHA-256
+  `96a62709ee965953611e230fa2607297ae0ca546d84a9ae6cf9c218dc79be7ad`，与仓库那份逐字节相同，
+  Inno 日志确认压缩的就是这两个文件；`dist\_internal\machine_setup.py` 与源码同为 37,405 bytes，
+  冻结 worker 探测 `has _rate_text True`、`window 2.0 0.05`、`_hash_file` 源码已无
+  `started - 2.0`。产物 `Output\NewLight_Analysis_Core_Setup_v1.0.3.exe`
+  440,228,896 bytes，SHA-256
+  `595e39615e8268d239912255568ffc57984c7882e6ca044d50bae738e6f42f64`。
+  新包实机（本机 RTX 4080，`ProgramData` 里已有 2,580,860,592 bytes 的完好缓存）：
+  `check_backends.bat /update-gpu` 退出码 0、墙钟 51 秒，阶段依次为
+  `清单要求的安装包 SHA-256：2b2aec07…3cb2` → `发现缓存安装包（2.4 GB），先校验 SHA-256…` →
+  `校验 缓存安装包：2.4 GB/2.4 GB（1.4 GB/s）`（只有一行，且不再有 976.6 GB/s 这种假速率）→
+  `缓存校验通过，跳过下载。` → `解压完成，耗时 19.7s` →
+  `复制：第 364/388 项（tzdata），5187 个文件 / 3.6 GB（198.6 MB/s）` →
+  `统一 GPU 扩展安装完成。 总耗时 48.3s`；扩展到位后 `/verify-only` 退出码 0，
+  `CPU core imports OK`（0.63 s）、`NeuSuite fast ROI GPU worker OK.`（0.40 s）、
+  `CaImAn frozen CNMFParams OK 1.13.1`（8.64 s）之后接 `CaImAn motion and ROI backends OK.`
+  （ROI `--help` 那一步 bat 没有单独计时，只在同一秒内返回 0）、
+  `DeepCAD-RT CUDA worker OK.`（1.40 s，打印 `NVIDIA GeForce RTX 4080`）；再跑一次
+  `/update-gpu` 2 秒退出码 0
+  （`[GPU] 统一 GPU 扩展已安装：…\_internal\GPU_Addon`），确认幂等、不会重复下载。
+  发布（公开链接不留 404 空窗）：临时名
+  `NewLight_Analysis_Core_Setup_v1.0.1.exe.pending6b6aa66` 上传返回 201（54.99 秒、
+  8.01 MB/s、asset id 691455008、GitHub 侧 digest
+  `sha256:595e3961…42f64` 与本地 certutil 一致）→ 删除旧 asset 691237865 返回 204 →
+  `PATCH` 回正式名返回 200。回读：Release `v1.0.1`（id 364821243）仅 1 个资产 691455008，
+  name `NewLight_Analysis_Core_Setup_v1.0.1.exe`、size 440,228,896、state uploaded；
+  公开下载链接 302 到 `release-assets.githubusercontent.com` 的签名地址（`rscd` 里文件名就是
+  正式名），带 `Range: bytes=0-0` 探测返回 206 且 `Content-Range: bytes 0-0/440228896`，
+  即线上服务的确实是本次新包。
+  本次网络形态：`git push`/`git fetch` 直连 `github.com` 失败（`Recv failure: Connection was
+  reset`），按既有约定用 `-c http.proxy=http://127.0.0.1:7897` 单命令走代理推送（未改全局配置），
+  提交 `32a597d`、`6b6aa66` 均已推到 `origin/codex/unified-gpu-addon`；
+  `api.github.com` 与 `uploads.github.com` 直连可用（本次上传未加代理），
+  而 `release-assets.githubusercontent.com` 经该代理做 TLS 握手失败（curl 35）、直连正常（206）。
+  结果：新装/重装用户拿到“全程可见进度 + 命中缓存免重下 + 失败原因可行动”的加装流程；
+  只覆盖了 bat 的旧包用户已经能看到进度、原因、路径与耗时，但缓存复用与总耗时统计仍需装新包。
