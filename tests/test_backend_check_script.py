@@ -1,0 +1,71 @@
+r"""Guard rails for the packaged release gate `check_backends.bat`.
+
+The gate runs the frozen workers the same way the installed application does, so the
+paths and exit-code handling in the batch file are load bearing:
+
+* `worker_launcher.py` resolves a *relative* script argument against `sys._MEIPASS`,
+  which for the released flat GPU addon is the `GPU_Addon` folder itself.  Passing
+  `GPU_Addon\workers\run_neusuite_roi.py` therefore looks for
+  `GPU_Addon\GPU_Addon\workers\...` and falls back to the current directory, which in
+  an installed package is the application root (the addon lives in `_internal`), so the
+  check aborts with "Worker script not found" even on a healthy addon.
+* A PyInstaller worker that cannot start its embedded interpreter exits with `-1`.
+  `if errorlevel 1` is false for `-1`, so success must be tested as an exact zero.
+"""
+
+import re
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[1]
+BATCH = ROOT / "check_backends.bat"
+CORE = ROOT / "analysis_core.py"
+
+
+def batch_text() -> str:
+    return BATCH.read_text(encoding="utf-8")
+
+
+def core_text() -> str:
+    return CORE.read_text(encoding="utf-8")
+
+
+def test_fast_roi_gpu_check_uses_absolute_addon_script_path():
+    text = batch_text()
+
+    assert 'set "GPU_ROI_SCRIPT=%RESOURCE_DIR%\\GPU_Addon\\workers\\run_neusuite_roi.py"' in text
+    assert '"%GPU_WORKER%" "%GPU_ROI_SCRIPT%" --help' in text
+
+
+def test_gpu_worker_is_never_handed_a_relative_addon_script():
+    # A relative argument is resolved against the addon folder (sys._MEIPASS) and then
+    # against the current directory; neither matches an installed package layout.
+    for invocation in re.findall(r'"%GPU_WORKER%"\s+"([^"]+)"', batch_text()):
+        assert invocation.startswith(("%GPU_ROI_SCRIPT%", "%RESOURCE_DIR%")), invocation
+
+
+def test_addon_script_absence_reports_its_own_diagnostic():
+    text = batch_text()
+
+    assert 'if not exist "%GPU_ROI_SCRIPT%"' in text
+    assert "GPU addon is out of date" in text
+
+
+def test_backend_checks_require_an_exact_zero_exit_code():
+    text = batch_text()
+
+    assert "if errorlevel 1" not in text
+    for variable in (
+        "CORE_CHECK_RESULT",
+        "ROI_CHECK_RESULT",
+        "CAIMAN_CHECK_RESULT",
+        "CAIMAN_ROI_RESULT",
+        "DEEPCAD_CHECK_RESULT",
+    ):
+        assert f'set "{variable}=!ERRORLEVEL!"' in text, variable
+        assert f'if not "!{variable}!"=="0"' in text, variable
+
+
+def test_fast_roi_path_matches_frozen_dispatch():
+    # The gate must exercise the same script the frozen application dispatches to.
+    assert 'GPU_ADDON_DIR / "workers" / "run_neusuite_roi.py"' in core_text()

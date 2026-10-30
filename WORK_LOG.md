@@ -1873,3 +1873,38 @@
   uploaded=439345957），回读新资产 id 690687446、size 439,345,957、state uploaded、
   GitHub 侧 `sha256:17ce062c...281739` 与本地 certutil 完全一致。
   本次直连 GitHub 可用，未使用 7897 代理。
+- 2026-10-30: 修复 `check_backends.bat` 加装 GPU 扩展后必然校验失败。根因：提交
+  `c952e58` 把快速 ROI GPU 检查传给 worker 的脚本参数从 `workers\run_neusuite_roi.py`
+  改成相对的 `GPU_Addon\workers\run_neusuite_roi.py`。`worker_launcher.py` 对相对参数
+  先拼 `sys._MEIPASS`，而已发布的统一 GPU 扩展是扁平 onedir，`_MEIPASS` 就是
+  `GPU_Addon` 本身，于是变成 `GPU_Addon\GPU_Addon\workers\...`；退回当前目录时当前目录
+  是安装根 `{app}`，扩展实际在 `{app}\_internal\GPU_Addon`，两条路都不存在 →
+  `Worker script not found` + 退出码 2。旧写法正好经 `_MEIPASS` 命中扩展自带脚本，
+  这就是“之前可以执行”。影响面：`machine_setup.py:ensure_first_run_setup()` 把
+  `verify_backends()`（即 `check_backends.bat /verify-only`）当作初始化闸门，失败即弹
+  “首次初始化失败”并返回，后续 `ensure_gpu_addon()` 下载/安装不会执行；
+  `build_full_exe.bat` 同样在该检查非零时 `goto :BUILD_FAILED`。应用运行路径本来就传
+  绝对路径（`analysis_core` 的 `GPU_ADDON_DIR / "workers" / "run_neusuite_roi.py"`），
+  未受影响，也无需改动。修复：检查改用同一绝对路径
+  `%RESOURCE_DIR%\GPU_Addon\workers\run_neusuite_roi.py`，脚本缺失时单独提示
+  `GPU addon is out of date ... Reinstall the unified GPU addon`。同时修掉一个假阳性：
+  worker 起不来（加载不到 `python311.dll`）返回 `-1`，`if errorlevel 1` 对 `-1` 判假，
+  会把坏扩展报成 `NeuSuite fast ROI GPU worker OK.` / `DeepCAD-RT CUDA worker OK.`；
+  四处检查（含 CaImAn ROI、bundled python）统一改为 `!ERRORLEVEL!` 与 `0` 精确比较并在
+  消息里带上退出码，沿用 CaImAn 段既有写法。验证：复刻安装布局
+  `{app}\_internal\GPU_Addon`（扁平）+ 记录 argv 的桩 worker 跑真实 bat，修复后
+  `NeuSuite fast ROI GPU worker OK.` 且 argv 为绝对路径、修复前同布局
+  `Fast ROI GPU worker check failed.`；脚本删除 → out-of-date 提示；exe 删除 → skip
+  提示；用启动失败的 exe → 修复后 `failed with exit code -1`、修复前误报 `OK`。
+  另用真实冻结 worker 直跑三种参数形式：绝对路径 `--help` 输出
+  `--min-area/--max-area/--device` 且 EXIT=0；`GPU_Addon\workers\...` EXIT=2；
+  `c952e58` 之前的 `workers\...` EXIT=0。新增回归测试
+  `tests/test_backend_check_script.py`（5 项：绝对路径、禁止相对 addon 脚本参数、
+  out-of-date 分支、精确 0 退出码、与 `analysis_core` 路径一致）。完整测试
+  `326 passed, 15 subtests passed`，唯一失败仍是 `newlight_cpu` 环境缺 `torch` 的既有
+  环境问题（`caiman/utils/utils.py:31 import torch`）。打包副本 `dist\NewLight_Analysis`
+  在验证前后保持 377 个 `_internal` 条目、`GPU_Addon` 仅 `roi_engines.py`、
+  `NewLight_Worker.exe` 71,996,421 bytes，验证沙箱（含 junction/硬链接镜像）已清理。
+  面向其他用户：`check_backends.bat` 是安装目录下的散装文件，不在 exe 的 PYZ 内，
+  用仓库这份覆盖 `{安装目录}\check_backends.bat` 即可生效、无需重装；已发布的
+  `NewLight_Analysis_Core_Setup_v1.0.1.exe` 内仍是坏的那份，是否重建替换待用户决定。
