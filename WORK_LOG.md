@@ -2070,6 +2070,10 @@
   `Accept: application/octet-stream`：302 → 206 且 `Content-Range: bytes 0-0/440185246`，
   证明线上服务的是本次新包；上传通道同样被拖慢，679 秒（14:43:33Z→14:54:52Z）才传完
   440 MB ≈ 0.62 MB/s，而网络正常时同一资产 55 秒（8.01 MB/s）。
-  `git push` 因同一形态仍未成功，`3c79489`、`5f20be0`、`61fa198` 三个提交待 VPN/代理恢复后推
-  `HEAD:codex/unified-gpu-addon`。仍未覆盖的路径照旧：真正提升到 Program Files 的安装
+  `git push` 因同一形态一度未成功；稍后 `github.com` 恢复为 200（本机 7897 代理仍只在
+  部分时段监听），直连 `git push origin HEAD:codex/unified-gpu-addon` 一次成功，
+  `b03f6fa..906b605`（`3c79489`、`5f20be0`、`61fa198` 与本条发布记录 906b605 全部上线；
+  推送前 `git fetch` 确认远程未被网页端提交领先，无需变基）。公开链接的 `Range: bytes=0-0`
+  也在直连恢复后重跑了一次：302 → 206 且 `Content-Range: bytes 0-0/440185246`。
+  仍未覆盖的路径照旧：真正提升到 Program Files 的安装
   （本机没有已安装副本），验证是在 Inno 逐字节复制的那棵 onedir 树上做的。
