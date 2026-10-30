@@ -2228,7 +2228,15 @@ class NewLightApp:
 
     def cancel_current_task(self):
         if self.task_controller.cancel_current_task():
-            self.log("已请求取消当前任务；后续已排队任务会继续保留。")
+            # 取消是协作式的：任务线程可能正阻塞在 worker 子进程里，只置事件不会
+            # 让它退出，GPU 会被继续占用到进程自然结束。这里直接终止已注册的 worker
+            # 进程树（conda/GPU worker 会派生子进程），阻塞的 communicate() 随即返回，
+            # 任务才会以“已取消”结束。
+            terminated = core.terminate_active_workers()
+            if terminated:
+                self.log(f"已请求取消当前任务，并终止 {terminated} 个后台 worker 进程以释放 GPU。")
+            else:
+                self.log("已请求取消当前任务；后续已排队任务会继续保留。")
             self.render_task_flow(force=True)
         else:
             self.log("当前任务不支持立即取消，或没有正在执行的任务。")

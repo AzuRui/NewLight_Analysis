@@ -1814,3 +1814,39 @@
   下限改为检测下限除以 4，上限改为检测上限乘以 16，再按采样率 Nyquist 频率
   裁剪；界面显示与实际滤波使用同一个 `adaptive_trace_band` 结果，避免状态栏
   与真实参数不一致。完整测试通过 `316 passed, 15 subtests passed`。
+- 2026-10-15: 修复冻结版快速 ROI 的 worker 版本错配。冻结版快速 ROI 固定使用
+  GPU 扩展的 `NewLight_GPU_Worker.exe`（携带 GPU_Addon 的 torch 2.10 原生库），
+  但此前传给它运行的是主包 `workers/run_neusuite_roi.py`，会加载主包 torch 2.12.1
+  的 python 文件；2.12.1 的 `_torch_docs.py` 仍引用 `torch.Stream.is_capturing`，
+  而 torch 2.10 已移除该方法，导致 import 阶段 AttributeError、worker_launcher
+  崩溃（PYI-95104）。现冻结版改为运行 GPU 扩展自带的
+  `GPU_Addon/workers/run_neusuite_roi.py`，使 python 与原生库同源；同步修正
+  `check_backends.bat` 的快速 ROI GPU 检查使用同一脚本。完整测试
+  `317 passed, 15 subtests passed`。
+- 2026-10-15: 重建 CPU 安装包并更新发布。工作区 NeuroAlign 源
+  （`2cafe_analysis`）被改名/迁移导致 spec 打包失败，spec 现优先工作区源、缺失时
+  回退到上次良好打包副本 `NewLight_AnalysisZZ/_internal/NeuroAlign`（spec 被
+  .gitignore 忽略，此回退仅本地）。新安装包 439,349,586 bytes，SHA-256
+  `13DB61264C133453976DEE88CA473830A5F3B84468B7C508EB7276589176B72E`，
+  后端检查 `CPU core imports OK` / `CaImAn frozen CNMFParams OK 1.13.1`；
+  已替换 GitHub `v1.0.1` Release 的同名 CPU 安装包资产并回读确认。
+  提交 `0848e61`（修复）与 `c952e58`（check_backends）已推送。
+- 2026-10-30: 取消任务现在会真正释放 GPU。原因：取消只是
+  `TaskController.cancel_current_task()` 置 `cancel_event`，而 CaImAn / 快速 ROI /
+  DeepCAD-RT 都阻塞在 `run_conda_worker()` 的子进程里，该函数原先用阻塞式
+  `subprocess.run(..., timeout=7200/1800)`，不监听取消事件，进程会继续跑完并占着
+  GPU。现改为：`analysis_core.py` 维护活动 worker 注册表
+  （`_ACTIVE_WORKERS` + `_register_worker/_unregister_worker`），`run_conda_worker`
+  用 `Popen` + `communicate(timeout=...)` 并在其中登记，超时也走进程树终止；
+  新增 `terminate_active_workers()` 用 `taskkill /PID x /T /F`（`conda run` 会派生
+  子 python，只 kill 父进程留不下释放）终止整棵树；`NewLight_Analysis.py` 的
+  `cancel_current_task()` 在取消请求成功后调用它并在日志中报告终止数量。
+  实测（`newlight_cpu` 解释器 + `conda run -n base` 长任务）：取消后调用方
+  0.42s/0.56s 返回、子进程 PID 已退出、注册表清空、已捕获的 stdout 保留；
+  超时路径 3.55s 抛 `TimeoutExpired` 而非等满 60s。新增回归测试
+  `tests/test_worker_cancellation.py`（5 项）。完整测试
+  `321 passed, 15 subtests passed`，唯一失败
+  `tests/test_caiman_headless.py::test_caiman_version_uses_bundled_release_without_git_or_package_directory`
+  是 `newlight_cpu` 环境缺 `torch` 的既有环境问题（`git stash` 掉本次改动后单独运行
+  同样失败）。注意：`analysis_core.py` 打包在 `NewLight_Analysis.exe` 内的 PYZ 中，
+  不是可热替换的独立 `.py`，安装版需要重新构建才能带上本改动。

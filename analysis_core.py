@@ -9,6 +9,7 @@ import struct
 import subprocess
 import sys
 import tempfile
+import threading
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -83,6 +84,68 @@ def hidden_subprocess_kwargs() -> dict[str, object]:
         startupinfo.wShowWindow = 0
         kwargs["startupinfo"] = startupinfo
     return kwargs
+
+
+# --- Cancellable worker subprocess registry ---------------------------------
+# Long-running analysis steps run in a separate worker process (CaImAn,
+# NeuSuite fast ROI, DeepCAD-RT).  The UI cancels cooperatively through a
+# threading.Event, but a blocking subprocess would otherwise keep running and
+# hold the GPU until it finishes.  Registering the live Popen lets the UI
+# terminate the whole process tree the moment a cancel is requested.
+_WORKER_LOCK = threading.Lock()
+_ACTIVE_WORKERS: set[subprocess.Popen] = set()
+
+
+def _register_worker(proc: subprocess.Popen) -> None:
+    with _WORKER_LOCK:
+        _ACTIVE_WORKERS.add(proc)
+
+
+def _unregister_worker(proc: subprocess.Popen) -> None:
+    with _WORKER_LOCK:
+        _ACTIVE_WORKERS.discard(proc)
+
+
+def _kill_process_tree(proc: subprocess.Popen) -> bool:
+    """Terminate a worker and any children it spawned (e.g. conda -> python)."""
+    if proc.poll() is not None:
+        return False
+    if os.name == "nt":
+        try:
+            subprocess.run(
+                ["taskkill", "/PID", str(proc.pid), "/T", "/F"],
+                capture_output=True,
+                **hidden_subprocess_kwargs(),
+            )
+        except OSError:
+            pass
+    if proc.poll() is None:
+        try:
+            proc.kill()
+        except OSError:
+            pass
+    return True
+
+
+def terminate_active_workers() -> int:
+    """Kill all registered worker processes; returns how many were terminated.
+
+    Safe to call from the UI thread while a task thread is blocked in
+    ``run_conda_worker``: the kill makes its ``communicate()`` return so the
+    cooperative cancel path can mark the task cancelled and free the GPU.
+
+    Handles that have already exited are dropped from the registry; a handle
+    the OS has not reaped yet stays so a repeated cancel still retries.
+    """
+    with _WORKER_LOCK:
+        procs = list(_ACTIVE_WORKERS)
+    killed = 0
+    for proc in procs:
+        if _kill_process_tree(proc):
+            killed += 1
+        if proc.poll() is not None:
+            _unregister_worker(proc)
+    return killed
 
 
 @dataclass
@@ -3443,17 +3506,44 @@ def run_conda_worker(
         env["CAIMAN_DATA"] = str(CAIMAN_RESOURCE_DIR)
     else:
         env.setdefault("CAIMAN_DATA", str(CAIMAN_RESOURCE_DIR))
-    return subprocess.run(
+    # Popen + communicate() instead of subprocess.run(): the UI can cancel while
+    # this call blocks, and terminate_active_workers() needs the live handle to
+    # kill the worker (and its GPU context) instead of waiting for the timeout.
+    proc = subprocess.Popen(
         cmd,
         cwd=cwd,
-        capture_output=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
         text=True,
         encoding="utf-8",
         errors="replace",
-        timeout=timeout,
         env=env,
         **hidden_subprocess_kwargs(),
     )
+    _register_worker(proc)
+    timed_out = False
+    try:
+        try:
+            stdout, stderr = proc.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            timed_out = True
+            _kill_process_tree(proc)
+            try:
+                # The kill closes the inherited pipe handles, but give the tree a
+                # grace period so a stuck child cannot block us forever.
+                stdout, stderr = proc.communicate(timeout=30)
+            except subprocess.TimeoutExpired:
+                stdout, stderr = "", ""
+    finally:
+        _unregister_worker(proc)
+        try:
+            proc.stdout.close()
+            proc.stderr.close()
+        except OSError:
+            pass
+    if timed_out:
+        raise subprocess.TimeoutExpired(cmd, timeout, output=stdout, stderr=stderr)
+    return subprocess.CompletedProcess(cmd, proc.returncode, stdout, stderr)
 
 
 def caiman_worker_environment() -> str:
