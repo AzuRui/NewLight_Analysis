@@ -1908,3 +1908,28 @@
   面向其他用户：`check_backends.bat` 是安装目录下的散装文件，不在 exe 的 PYZ 内，
   用仓库这份覆盖 `{安装目录}\check_backends.bat` 即可生效、无需重装；已发布的
   `NewLight_Analysis_Core_Setup_v1.0.1.exe` 内仍是坏的那份，是否重建替换待用户决定。
+- 2026-10-30: 用修复后的 `check_backends.bat` 重建 CPU 安装包并替换发布资产。
+  `build_cpu_installer.bat /rebuild` 成功（Inno Setup `Successful compile (151.125 sec)`），
+  构建日志确认压缩的是 `dist\NewLight_Analysis\check_backends.bat`（5,212 bytes，含
+  `GPU_ROI_SCRIPT` 绝对路径分支）。产物 `Output\NewLight_Analysis_Core_Setup_v1.0.3.exe`
+  439,353,345 bytes，SHA-256
+  `E3987F3E1F87CE7EB2F8EDFA740498F7529E6CC85FCCB2B6EB1682CF5BA650D6`。
+  进包校验：在新 `dist\NewLight_Analysis` 直接跑 `check_backends.bat /verify-only`
+  退出码 0，输出 `CPU core imports OK` / `CaImAn frozen CNMFParams OK 1.13.1` /
+  `CaImAn motion and ROI backends OK.`，GPU ROI 与 DeepCAD-RT 两项按 CPU 包设计跳过；
+  包内 `analysis_core` 仍带 `terminate_active_workers`（`_register_worker`、
+  `_kill_process_tree` 同在），且 `GPU_ADDON_DIR` 解析为
+  `…\dist\NewLight_Analysis\_internal\GPU_Addon`，与修复后 bat 的
+  `%RESOURCE_DIR%\GPU_Addon\workers\run_neusuite_roi.py` 同一底路径，即运行期与
+  校验期现在用同一个脚本。
+  发布（避免公开下载链接出现 404 空窗）：先以临时名
+  `NewLight_Analysis_Core_Setup_v1.0.1.exe.pending04bca75` 上传新包（HTTP 201，
+  70.04 秒，asset id 691237865，digest `sha256:e3987f3e…ba650d6`），再删除上一份资产
+  id 690687446（HTTP 204），最后把新资产 `PATCH` 回正式名（HTTP 200）。回读：Release
+  `v1.0.1`（id 364821243）现仅 1 个资产 691237865，name
+  `NewLight_Analysis_Core_Setup_v1.0.1.exe`、size 439,353,345、state uploaded，GitHub
+  侧 digest 与本地 certutil 完全一致；公开链接带 `Range: bytes=0-0` 探测返回 206 且
+  `Content-Range: bytes 0-0/439353345`，确认服务的是新包而非旧包。本次直连
+  `api.github.com` / `uploads.github.com` 均可用，未使用 7897 代理。
+  结果：新装用户不再触发上一条的首次初始化失败；已经装过旧包并加装 GPU 扩展的用户
+  仍按上一条覆盖 `{安装目录}\check_backends.bat`（或重装新包）即可。
