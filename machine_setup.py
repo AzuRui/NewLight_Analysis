@@ -132,7 +132,7 @@ def _emit(progress: ProgressCallback | None, message: str) -> None:
 
 
 def setup_log_path() -> Path:
-    """Log file that records setup stages when nobody is listening to progress."""
+    """Log file that records every setup stage, whether or not a dialog is showing them."""
     return machine_data_dir() / "setup_progress.log"
 
 
@@ -148,6 +148,28 @@ def _file_logging_progress(log_path: Path) -> ProgressCallback:
             pass
 
     return _record
+
+
+def _chain_progress(*callbacks: ProgressCallback | None) -> ProgressCallback:
+    """Send each stage message to every callback, so no sink shadows another.
+
+    A frozen launch needs the machine log even while the splash screen is showing the
+    same lines: the log is what gets sent back when setup fails on a machine nobody can
+    photograph.  A callback that raises (a splash whose window already closed) must not
+    cost the other sinks the line, and must never abort initialization.
+    """
+
+    active = [callback for callback in callbacks if callback is not None]
+
+    def emit(message: str) -> None:
+        for callback in active:
+            try:
+                callback(message)
+            except Exception:
+                # Diagnostics are never a reason for initialization to fail.
+                pass
+
+    return emit
 
 
 def _human_size(num_bytes: float) -> str:
@@ -913,10 +935,11 @@ def ensure_application_setup(
 ) -> bool:
     if not getattr(sys, "frozen", False):
         return True
-    if progress is None:
-        # A frozen launch that passes no callback would otherwise download and install
-        # the GPU addon in complete silence; keep the stages in the machine log instead.
-        progress = _file_logging_progress(setup_log_path())
+    # Every frozen launch writes the stage log, and additionally feeds whatever callback
+    # the caller has (the initialization splash) when there is one.  Replacing the log
+    # with the dialog callback used to hide the startup GPU addon download from
+    # setup_progress.log, which is the file users are asked to send back.
+    progress = _chain_progress(progress, _file_logging_progress(setup_log_path()))
     return ensure_first_run_setup(
         application_dir,
         state_path=state_path,

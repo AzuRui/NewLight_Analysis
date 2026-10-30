@@ -459,6 +459,56 @@ def test_frozen_setup_without_progress_records_to_machine_log(tmp_path, monkeypa
     assert "目标目录" in text
 
 
+def test_frozen_setup_keeps_the_machine_log_while_a_dialog_shows_stages(tmp_path, monkeypatch):
+    """The splash showing a stage must not stop that stage from reaching the log.
+
+    Startup GPU addon downloads are the case this matters for: the user watching the
+    screen can read the stages, and the person diagnosing the same machine later reads
+    ``setup_progress.log``.
+    """
+    program_data = tmp_path / "program-data"
+    monkeypatch.setenv("PROGRAMDATA", str(program_data))
+    monkeypatch.setattr(machine_setup.sys, "frozen", True, raising=False)
+    services = FakeServices(backend_ok=True, cuda_ok=True)
+    shown: list[str] = []
+
+    def dialog(message: str) -> None:
+        # A splash whose window has already closed must not cost the log its line.
+        if message.startswith("正在读取系统启动状态"):
+            raise RuntimeError("splash window is gone")
+        shown.append(message)
+
+    assert machine_setup.ensure_application_setup(
+        tmp_path / "application",
+        state_path=tmp_path / "machine_setup_v1.json",
+        services=services,
+        progress=dialog,
+    )
+
+    text = (program_data / "NewLight_Analysis" / "setup_progress.log").read_text(encoding="utf-8")
+    assert "正在验证分析后端" in text
+    assert "目标目录" in text, "the GPU addon attempt has to stay in the machine log"
+    assert shown, "the caller still receives the stages it asked for"
+    assert any("正在验证分析后端" in line for line in shown)
+
+
+def test_chain_progress_passes_every_message_to_every_sink():
+    messages_a: list[str] = []
+    messages_b: list[str] = []
+
+    emit = machine_setup._chain_progress(
+        messages_a.append,
+        lambda message: (_ for _ in ()).throw(RuntimeError("sink is gone")),
+        messages_b.append,
+    )
+    emit("first")
+    emit("second")
+
+    assert messages_a == ["first", "second"]
+    assert messages_b == ["first", "second"]
+    machine_setup._chain_progress(None)("ignored by no sink")
+
+
 def test_progress_rate_is_withheld_for_unmeasurable_windows():
     assert machine_setup._rate_text(1024, 0.0) == "速率测量中"
     assert machine_setup._rate_text(1024, machine_setup.MEASURABLE_RATE_WINDOW_SECONDS / 2) == "速率测量中"
