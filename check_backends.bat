@@ -39,6 +39,7 @@ call :RESOLVE_PY
 echo Starting first-run setup for: %CD%
 echo Worker used: %WORKER_PY%
 echo Progress lines are printed as each stage runs; the GPU addon download is the slow part.
+echo Progress is also appended to: %PROGRAMDATA%\NewLight_Analysis\setup_progress.log
 "%WORKER_PY%" -c "import sys; from pathlib import Path; from machine_setup import ensure_first_run_setup; getattr(sys.stdout, 'reconfigure', lambda **kwargs: None)(errors='replace'); ok = ensure_first_run_setup(Path(r'%CD%'), progress=lambda message: print('[NewLight] ' + str(message), flush=True)); print('[NewLight] setup result: ' + str(ok), flush=True); raise SystemExit(0 if ok else 1)"
 set "SETUP_RESULT=%ERRORLEVEL%"
 echo First-run setup exit code: %SETUP_RESULT%

@@ -127,6 +127,25 @@ def _emit(progress: ProgressCallback | None, message: str) -> None:
         progress(message)
 
 
+def setup_log_path() -> Path:
+    """Log file that records setup stages when nobody is listening to progress."""
+    return machine_data_dir() / "setup_progress.log"
+
+
+def _file_logging_progress(log_path: Path) -> ProgressCallback:
+    def _record(message: str) -> None:
+        try:
+            Path(log_path).parent.mkdir(parents=True, exist_ok=True)
+            stamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            with Path(log_path).open("a", encoding="utf-8") as handle:
+                handle.write(f"{stamp} {message}\n")
+        except OSError:
+            # Diagnostics must never be the reason initialization fails.
+            pass
+
+    return _record
+
+
 def _human_size(num_bytes: float) -> str:
     """Format a byte count for console output (base 1024, one decimal)."""
     value = max(float(num_bytes), 0.0)
@@ -855,6 +874,10 @@ def ensure_application_setup(
 ) -> bool:
     if not getattr(sys, "frozen", False):
         return True
+    if progress is None:
+        # A frozen launch that passes no callback would otherwise download and install
+        # the GPU addon in complete silence; keep the stages in the machine log instead.
+        progress = _file_logging_progress(setup_log_path())
     return ensure_first_run_setup(
         application_dir,
         state_path=state_path,

@@ -437,3 +437,23 @@ def test_gpu_addon_failure_reason_reaches_setup_progress(tmp_path, monkeypatch):
     joined = "\n".join(messages)
     assert "原因：" in joined
     assert "GPU 扩展" in joined
+
+
+def test_frozen_setup_without_progress_records_to_machine_log(tmp_path, monkeypatch):
+    program_data = tmp_path / "program-data"
+    monkeypatch.setenv("PROGRAMDATA", str(program_data))
+    monkeypatch.setattr(machine_setup.sys, "frozen", True, raising=False)
+    services = FakeServices(backend_ok=True, cuda_ok=True)
+
+    assert machine_setup.ensure_application_setup(
+        tmp_path / "application",
+        state_path=tmp_path / "machine_setup_v1.json",
+        services=services,
+    )
+
+    log = program_data / "NewLight_Analysis" / "setup_progress.log"
+    assert log.is_file()
+    text = log.read_text(encoding="utf-8")
+    assert "正在验证分析后端" in text
+    # The GPU addon attempt is the part that used to vanish without any listener.
+    assert "目标目录" in text
