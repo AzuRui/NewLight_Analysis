@@ -1850,3 +1850,26 @@
   是 `newlight_cpu` 环境缺 `torch` 的既有环境问题（`git stash` 掉本次改动后单独运行
   同样失败）。注意：`analysis_core.py` 打包在 `NewLight_Analysis.exe` 内的 PYZ 中，
   不是可热替换的独立 `.py`，安装版需要重新构建才能带上本改动。
+- 2026-10-30: 重建 CPU 安装包并更新发布，让取消释放 GPU 的改动进入安装包。
+  构建前发现 spec 的 NeuroAlign 资源两个来源都已消失：工作区
+  `E:\WorkSpace\2cafe_analysis\NeuroAlign` 目录不存在，上一次回退用的
+  `E:\WorkSpace\NewLight_AnalysisZZ` 整个文件夹也被删除，而
+  `build_cpu_exe.bat` 第一步就 `rmdir /s /q dist`，会连唯一剩下的打包副本一起清掉。
+  处理：先把 `dist\NewLight_Analysis\_internal\NeuroAlign`（29 MB / 52 文件）复制到
+  仓库外的稳定缓存 `E:\WorkSpace\NewLight_BuildCache\NeuroAlign`（核对 52 = 52 文件、
+  29M），再把 spec 的候选顺序改为 工作区源 → `NewLight_BuildCache` → 旧
+  `NewLight_AnalysisZZ` → 现存 `dist` 副本（spec 被 .gitignore 忽略，属本地构建配置）。
+  构建 `build_cpu_installer.bat /rebuild` 成功（Inno Setup `Successful compile 153.656 sec`）。
+  产物 `Output\NewLight_Analysis_Core_Setup_v1.0.3.exe` 439,345,957 bytes，SHA-256
+  `17CE062C52696C6767885F7276FFBA78E2CF71E25D5CBCA6AEE9B56B3D281739`。
+  改动确认进包：新包 `_internal\NewLight_Worker.exe -c "import analysis_core as c;
+  print(hasattr(c,'terminate_active_workers'))"` 输出 `True`，且 spec 中 GUI 与 worker
+  共用同一 PYZ，故主程序 exe 内是同一份字节码；新包 `check_backends.bat /verify-only`
+  通过 `CPU core imports OK` / `CaImAn frozen CNMFParams OK 1.13.1` /
+  `CaImAn motion and ROI backends OK.`，GPU 与 DeepCAD-RT 两项按 CPU 包设计跳过；
+  新 `dist\NewLight_Analysis\_internal\NeuroAlign` 回到 52 个文件。
+  发布：删除 GitHub `v1.0.1` Release 旧 CPU 资产（id 643855877，HTTP 204），
+  上传新包并保持资产名 `NewLight_Analysis_Core_Setup_v1.0.1.exe`（HTTP 201，
+  uploaded=439345957），回读新资产 id 690687446、size 439,345,957、state uploaded、
+  GitHub 侧 `sha256:17ce062c...281739` 与本地 certutil 完全一致。
+  本次直连 GitHub 可用，未使用 7897 代理。
