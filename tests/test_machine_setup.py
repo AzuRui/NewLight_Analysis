@@ -457,3 +457,24 @@ def test_frozen_setup_without_progress_records_to_machine_log(tmp_path, monkeypa
     assert "正在验证分析后端" in text
     # The GPU addon attempt is the part that used to vanish without any listener.
     assert "目标目录" in text
+
+
+def test_progress_rate_is_withheld_for_unmeasurable_windows():
+    assert machine_setup._rate_text(1024, 0.0) == "速率测量中"
+    assert machine_setup._rate_text(1024, machine_setup.MEASURABLE_RATE_WINDOW_SECONDS / 2) == "速率测量中"
+    assert machine_setup._rate_text(1024, 2.0) == "512 B/s"
+
+
+def test_hashing_a_small_file_reports_one_honest_line(tmp_path):
+    # A cache-hot read used to emit a forced first line after a single chunk and print a
+    # rate invented from a microsecond window ("976.6 GB/s").
+    target = tmp_path / "payload.bin"
+    target.write_bytes(b"x" * (3 * 1024 * 1024))
+    lines: list[str] = []
+
+    digest = machine_setup._hash_file(target, label="包", progress=lines.append)
+
+    assert digest == hashlib.sha256(target.read_bytes()).hexdigest()
+    assert len(lines) == 1
+    assert lines[0].startswith("校验 包：3.0 MB/3.0 MB")
+    assert "GB/s" not in lines[0]

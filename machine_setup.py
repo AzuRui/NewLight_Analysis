@@ -30,6 +30,10 @@ DEEPCAD_ADDON_MANIFEST = GPU_ADDON_MANIFEST
 CREATE_NO_WINDOW = 0x08000000
 ProgressCallback = Callable[[str], None]
 VisibilityCallback = Callable[[bool], None]
+# A long download/install reports one progress line per window, and a rate is only
+# printed once at least this many seconds have been measured.
+PROGRESS_WINDOW_SECONDS = 2.0
+MEASURABLE_RATE_WINDOW_SECONDS = 0.05
 
 
 @dataclass(frozen=True)
@@ -156,6 +160,18 @@ def _human_size(num_bytes: float) -> str:
     return f"{value:.1f} GB"
 
 
+def _rate_text(bytes_done: float, seconds: float) -> str:
+    """Format throughput for a progress line.
+
+    A window shorter than ``MEASURABLE_RATE_WINDOW_SECONDS`` cannot produce an honest
+    number, so the line says so instead of inventing a rate (an instant cache-hot read
+    once displayed "976.6 GB/s", which reads exactly like a broken meter).
+    """
+    if seconds < MEASURABLE_RATE_WINDOW_SECONDS:
+        return "速率测量中"
+    return f"{_human_size(bytes_done / seconds)}/s"
+
+
 def _describe_setup_error(exc: BaseException) -> str:
     """Turn a download/extract/copy failure into text the user can act on."""
     if isinstance(exc, urllib.error.HTTPError):
@@ -195,18 +211,17 @@ def _hash_file(
     total = path.stat().st_size
     done = 0
     started = time.monotonic()
-    last_emit = started - 2.0
+    last_emit = started
     with path.open("rb") as source:
         for block in iter(lambda: source.read(chunk), b""):
             digest.update(block)
             done += len(block)
             now = time.monotonic()
-            if progress is not None and (now - last_emit >= 2.0 or done == total):
-                rate = done / max(now - started, 1e-6)
+            if progress is not None and (now - last_emit >= PROGRESS_WINDOW_SECONDS or done == total):
                 _emit(
                     progress,
                     f"校验 {label}：{_human_size(done)}/{_human_size(total)}"
-                    f"（{_human_size(rate)}/s）",
+                    f"（{_rate_text(done, now - started)}）",
                 )
                 last_emit = now
     return digest.hexdigest().lower()
@@ -232,14 +247,15 @@ def _stream_to_file(
         output.write(block)
         done += len(block)
         now = time.monotonic()
-        if progress is not None and now - last_emit >= 2.0:
-            rate = done / max(now - started, 1e-6)
+        if progress is not None and now - last_emit >= PROGRESS_WINDOW_SECONDS:
+            window = now - started
+            rate = done / window if window >= MEASURABLE_RATE_WINDOW_SECONDS else 0.0
             percent = f"（{done * 100 // total}%）" if total else ""
-            eta = f"，剩余约 {max(total - done, 0) / max(rate, 1):.0f}s" if total else ""
+            eta = f"，剩余约 {max(total - done, 0) / rate:.0f}s" if total and rate > 0 else ""
             _emit(
                 progress,
                 f"下载 {label}：{_human_size(done)}{percent}，"
-                f"{_human_size(rate)}/s{eta}",
+                f"{_rate_text(done, window)}{eta}",
             )
             last_emit = now
     return done
@@ -496,7 +512,7 @@ def ensure_gpu_addon(
                 for index, member in enumerate(members, start=1):
                     archive.extract(member, staging)
                     now = time.monotonic()
-                    if progress is not None and now - last_emit >= 2.0:
+                    if progress is not None and now - last_emit >= PROGRESS_WINDOW_SECONDS:
                         _emit(progress, f"解压：{index}/{len(members)} 项，已用 {now - extract_started:.0f}s")
                         last_emit = now
                 _emit(progress, f"解压完成，耗时 {time.monotonic() - extract_started:.1f}s")
@@ -530,13 +546,13 @@ def ensure_gpu_addon(
                     pass
                 copy_state["files"] += 1
                 now = time.monotonic()
-                if progress is not None and now - copy_state["last"] >= 2.0:
-                    rate = copy_state["bytes"] / max(now - copy_state["started"], 1e-6)
+                if progress is not None and now - copy_state["last"] >= PROGRESS_WINDOW_SECONDS:
                     _emit(
                         progress,
                         f"复制：第 {copy_state['index']}/{len(items)} 项"
                         f"（{copy_state['name']}），{copy_state['files']} 个文件 / "
-                        f"{_human_size(copy_state['bytes'])}（{_human_size(rate)}/s）",
+                        f"{_human_size(copy_state['bytes'])}"
+                        f"（{_rate_text(copy_state['bytes'], now - copy_state['started'])}）",
                     )
                     copy_state["last"] = now
 
