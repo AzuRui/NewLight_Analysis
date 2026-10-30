@@ -2018,3 +2018,58 @@
   而 `release-assets.githubusercontent.com` 经该代理做 TLS 握手失败（curl 35）、直连正常（206）。
   结果：新装/重装用户拿到“全程可见进度 + 命中缓存免重下 + 失败原因可行动”的加装流程；
   只覆盖了 bat 的旧包用户已经能看到进度、原因、路径与耗时，但缓存复用与总耗时统计仍需装新包。
+- 2026-10-30: 按上面那条留下的三个改进点收尾，并第四次重建 CPU 安装包替换发布资产。
+  代码三个提交：`3c79489` 把启动期的 GPU 加装接进初始化画面（新增
+  `machine_setup.startup_will_install_gpu_addon()`，`launch.py` 在 frozen 且“状态已完成但扩展缺失、
+  清单在位”时把 `setup_complete` 置 False，从而走 `run_with_initialization_splash`，之前这条路径
+  只往 `setup_progress.log` 写、屏幕上什么都没有）；`5f20be0` 根治打包手册（`git mv`
+  `dist/NewLight_Analysis/NewLight_Analysis_User_Manual.pdf` → `Release_Assets/`，新增
+  `tests/test_release_assets.py` 三项：手册在位且以 `%PDF-` 开头且 >100 KB、`git ls-files dist`
+  必须为空、本地构建脚本必须显式复制且安装器步骤必须检查）；`61fa198` 修掉自己引入的回归
+  （`ensure_application_setup` 原本用调用方回调**替换**落盘回调，splash 一上线启动期下载阶段就会从
+  `setup_progress.log` 消失；改为 `_chain_progress` 两个 sink 都收，任一 sink 抛错既不影响另一个
+  也不中断初始化）。未发布的本地构建脚本同步改：`build_cpu_exe.bat` 在 PyInstaller 之后从
+  `Release_Assets` 复制手册、缺源即 `goto :BUILD_FAILED`，`build_cpu_installer.bat` 在 ISCC 之前
+  检查 dist 内手册存在（这两条脚本按 .gitignore 约定不进仓库）。
+  构建与进包校验：`build_cpu_installer.bat /rebuild` 一次跑通（PyInstaller → `patch_frozen_cv2.py`
+  → 复制 bat 与手册 → 内建 `/verify-only` 闸门退出 0 → ISCC `Successful compile (146.890 sec)`），
+  本次**没有**再用 `git checkout --` 补手册；包内手册 887,222 bytes、SHA-256
+  `33a2730621f38fdd0987414a373641a10eb834d2f79ddea162404c987d7c710f` 与 `Release_Assets` 逐字节相同，
+  Inno 日志有 `Compressing: ...\NewLight_Analysis_User_Manual.pdf` 这一行；
+  `dist\NewLight_Analysis\check_backends.bat` 7,551 bytes、SHA-256 `96a62709…be7ad` 与仓库一致。
+  冻结产物探测（`_internal\NewLight_Worker.exe` 跑探测脚本，读的是 exe 里的 PYZ 而不是散装副本）：
+  `has_predicate True`、`has_chain_progress True`、`chain_in_ensure_application_setup True`、
+  `windows 2.0 0.05`、`hash_file_has_no_forced_first_emit True`；`launch` 在 PYZ 里是 `__main__`
+  不能 import，所以启动接线只能按下面的真机路径验证。
+  真机启动路径验证（本机 RTX 4080，`machine_setup_v1.json` 状态 `complete_cuda`，重建后的 dist
+  无 `GPU_Addon`，`ProgramData` 里有 2,580,860,592 bytes 完好缓存）：直接 `Popen`
+  `dist\NewLight_Analysis\NewLight_Analysis.exe`，22:36:34 启动后该进程立刻有一个
+  720×480、矩形 (920,480)-(1640,960) 的 Tk 顶层窗口（Win32 `IsWindowVisible=True`，
+  Tk 自身 `winfo_ismapped=1 viewable=1`），到 22:37:03 安装完成才消失；`setup_progress.log`
+  新增 19 行完整阶段：清单 SHA-256 `2b2aec07…3cb2` → 发现缓存并校验
+  `2.4 GB/2.4 GB（1.5 GB/s）` → `缓存校验通过，跳过下载。` → `解压完成，耗时 12.0s` →
+  复制 388 项（`487.8 MB/s` 等诚实速率）→ `统一 GPU 扩展安装完成。 总耗时 27.4s`。
+  这条同时证明了启动接线（窗口在加装全程存在）与 `61fa198`（画面与日志不再互斥）。
+  截图这次不可用：本机当前会话里 `PIL.ImageGrab` 抓不到任何应用窗口——对照实验是一个
+  `title='CONTROL PLAIN'` 的纯红 400×300 普通 Tk 窗口同样不出现在截图里，所以“截图里没有启动画面”
+  是采集限制而非产品缺陷；窗口存在性改由 Win32 枚举与 Tk 状态两条独立路径确认。
+  新包后端校验：`check_backends.bat /verify-only` 退出码 0、墙钟 10 秒，四项全绿
+  （`CPU core imports OK`、`NeuSuite fast ROI GPU worker OK.`、
+  `CaImAn frozen CNMFParams OK 1.13.1` + `CaImAn motion and ROI backends OK.`、
+  `DeepCAD-RT CUDA worker OK.` 打印 `NVIDIA GeForce RTX 4080`）。
+  回归：`tests -q` 为 `347 passed, 15 subtests passed`（新增 3 项启动接线、3 项手册守卫、
+  2 项 `_chain_progress`），唯一失败仍是 `newlight_cpu` 缺 `torch` 的既有环境问题。
+  发布：产物 `Output\NewLight_Analysis_Core_Setup_v1.0.3.exe` 440,185,246 bytes、SHA-256
+  `6c3f44d9e898a1cb94f0aed81a4c67581572c0cc4039545f9d155ed021c17507`；临时名
+  `NewLight_Analysis_Core_Setup_v1.0.1.exe.pendingd9d4eb4` 上传 201（asset 692408095，
+  临时名里的 `d9d4eb4` 是 `61fa198` 提交前的哈希，改名提交后才产生；GitHub digest 与本地
+  certutil 完全一致）→ 删除旧 asset 691455008 返回 204 → `PATCH` 回正式名
+  返回 200 → 回读 Release `v1.0.1`（id 364821243）只剩 1 个资产、size 440,185,246、state uploaded。
+  本次网络形态变了：`github.com` 直连返回 000 且本机 7897 代理根本没监听（探测 8 个常见端口全部
+  不通），所以公开下载链接的 `Range` 探测改走 `api.github.com` 的
+  `Accept: application/octet-stream`：302 → 206 且 `Content-Range: bytes 0-0/440185246`，
+  证明线上服务的是本次新包；上传通道同样被拖慢，679 秒（14:43:33Z→14:54:52Z）才传完
+  440 MB ≈ 0.62 MB/s，而网络正常时同一资产 55 秒（8.01 MB/s）。
+  `git push` 因同一形态仍未成功，`3c79489`、`5f20be0`、`61fa198` 三个提交待 VPN/代理恢复后推
+  `HEAD:codex/unified-gpu-addon`。仍未覆盖的路径照旧：真正提升到 Program Files 的安装
+  （本机没有已安装副本），验证是在 Inno 逐字节复制的那棵 onedir 树上做的。
