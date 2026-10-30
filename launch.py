@@ -33,6 +33,11 @@ def main():
     frozen = bool(getattr(sys, "frozen", False))
     application_dir = Path(sys.executable).resolve().parent if frozen else Path(__file__).resolve().parent
     setup_complete = machine_setup.setup_is_complete(machine_setup.default_state_path())
+    if frozen and setup_complete and machine_setup.startup_will_install_gpu_addon(application_dir):
+        # The GPU extension is missing on a machine that already finished setup, so this
+        # launch is about to download a multi-gigabyte archive.  Show the stages instead
+        # of starting silently.
+        setup_complete = False
     if frozen and not setup_complete:
         try:
             setup_ok = run_with_initialization_splash(

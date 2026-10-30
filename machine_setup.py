@@ -366,6 +366,29 @@ def inspect_gpu_addon(
     return False, message + (f"\n{cuda.diagnostic}" if cuda.diagnostic else "")
 
 
+def startup_will_install_gpu_addon(
+    application_dir: Path,
+    *,
+    state_path: Path | None = None,
+) -> bool:
+    """Whether launching the frozen app is about to download the multi-gigabyte GPU addon.
+
+    ``ensure_first_run_setup`` only installs the extension on the "already complete with
+    CUDA" branch, and that branch used to run without a progress display because
+    ``launch.py`` only shows the initialization splash for an *incomplete* first run.  The
+    launch screen checks this before deciding whether to keep the splash up.
+    """
+    state_path = Path(state_path) if state_path is not None else default_state_path()
+    if not setup_is_complete(state_path):
+        return False
+    if read_setup_state(state_path).get("status") != "complete_cuda":
+        return False
+    root = _resource_dir(Path(application_dir))
+    if _gpu_addon_ready(root / GPU_ADDON_DIR_NAME):
+        return False
+    return (root / GPU_ADDON_MANIFEST).is_file() or (root / LEGACY_GPU_ADDON_MANIFEST).is_file()
+
+
 def ensure_gpu_addon(
     application_dir: Path,
     *,

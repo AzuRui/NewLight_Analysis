@@ -478,3 +478,57 @@ def test_hashing_a_small_file_reports_one_honest_line(tmp_path):
     assert len(lines) == 1
     assert lines[0].startswith("校验 包：3.0 MB/3.0 MB")
     assert "GB/s" not in lines[0]
+
+
+def _ready_addon(root: Path) -> Path:
+    """Create the smallest directory tree that passes _gpu_addon_ready."""
+    addon = root / machine_setup.GPU_ADDON_DIR_NAME
+    (addon / "DeepCAD-RT" / "DeepCAD_RT_pytorch" / "deepcad").mkdir(parents=True)
+    (addon / "DeepCADRT_Model").mkdir()
+    (addon / "DeepCADRT_Model" / "test.pth").write_bytes(b"weights")
+    (addon / "NeuSuite2p").mkdir()
+    (addon / "NeuSuite2p" / "segment_model.pt").write_bytes(b"weights")
+    (addon / "NeuSuite_RuntimeDeps").mkdir()
+    (addon / "NewLight_GPU_Worker.exe").write_bytes(b"worker")
+    return addon
+
+
+def test_startup_install_prediction_follows_the_complete_cuda_branch(tmp_path):
+    # launch.py only keeps the splash up when this says yes, so it has to mirror the
+    # branch in ensure_first_run_setup rather than guess.
+    application = tmp_path / "application"
+    internal = application / "_internal"
+    internal.mkdir(parents=True)
+    state_path = tmp_path / "machine_setup_v1.json"
+    manifest = internal / machine_setup.GPU_ADDON_MANIFEST
+
+    assert machine_setup.startup_will_install_gpu_addon(application, state_path=state_path) is False
+
+    machine_setup.write_setup_state(state_path, "complete_cuda", ["NVIDIA GeForce RTX 4080"])
+    # Nothing to download means the launch stays as fast as it was.
+    assert machine_setup.startup_will_install_gpu_addon(application, state_path=state_path) is False
+
+    manifest.write_text('{"url": "https://example.invalid/a.zip", "sha256": "a" * 64}', encoding="utf-8")
+    assert machine_setup.startup_will_install_gpu_addon(application, state_path=state_path) is True
+
+    _ready_addon(internal)
+    assert machine_setup.startup_will_install_gpu_addon(application, state_path=state_path) is False
+
+
+def test_startup_install_prediction_stays_quiet_for_cpu_only_and_unfinished_states(tmp_path):
+    application = tmp_path / "application"
+    internal = application / "_internal"
+    internal.mkdir(parents=True)
+    (internal / machine_setup.GPU_ADDON_MANIFEST).write_text(
+        '{"url": "https://example.invalid/a.zip", "sha256": "a" * 64}', encoding="utf-8"
+    )
+
+    state_path = tmp_path / "machine_setup_v1.json"
+    machine_setup.write_setup_state(state_path, "complete_cpu_only", [])
+    assert machine_setup.startup_will_install_gpu_addon(application, state_path=state_path) is False
+
+    machine_setup.write_setup_state(state_path, "pending_restart", ["NVIDIA GeForce RTX 4080"])
+    assert machine_setup.startup_will_install_gpu_addon(application, state_path=state_path) is False
+
+    state_path.unlink()
+    assert machine_setup.startup_will_install_gpu_addon(application, state_path=state_path) is False
