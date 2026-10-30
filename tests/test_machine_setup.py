@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import hashlib
+import shutil
 import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -111,13 +112,16 @@ def test_nvidia_setup_reports_ordered_progress_stages(tmp_path):
         progress=events.append,
     )
 
-    assert events == [
+    stages = [event for event in events if not event.startswith("统一 GPU 扩展")]
+    assert stages == [
         "正在验证分析后端...",
         "正在读取系统启动状态...",
         "正在检测图形设备...",
         "正在检查 CUDA 状态...",
         "运行环境检测完成",
     ]
+    # The addon helper now names the directory it looked at instead of staying silent.
+    assert any("未安装，目标目录：" in event for event in events)
 
 
 def test_dialog_visibility_is_restored_after_native_dialog(tmp_path):
@@ -335,3 +339,101 @@ def test_gpu_addon_requires_both_deepcad_and_neusuite_payloads(tmp_path):
     (addon / "NewLight_GPU_Worker.exe").write_bytes(b"worker")
 
     assert not machine_setup._gpu_addon_ready(addon)
+
+
+def _valid_addon_archive(path: Path) -> str:
+    """Write a minimal archive that satisfies _gpu_addon_ready and return its SHA-256."""
+    with zipfile.ZipFile(path, "w") as bundle:
+        bundle.writestr(
+            "GPU_Addon/DeepCAD-RT/DeepCAD_RT_pytorch/deepcad/network.py",
+            "# test addon\n",
+        )
+        bundle.writestr("GPU_Addon/DeepCADRT_Model/test.pth", b"test weights")
+        bundle.writestr("GPU_Addon/NewLight_GPU_Worker.exe", b"test worker")
+        bundle.writestr("GPU_Addon/NeuSuite2p/segment_model.pt", b"test weights")
+        bundle.writestr("GPU_Addon/NeuSuite_RuntimeDeps/runtime.txt", b"runtime")
+        bundle.writestr("GPU_Addon/workers/run_neusuite_roi.py", "# roi worker\n")
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def test_gpu_addon_progress_reports_every_stage(tmp_path, monkeypatch):
+    application_dir = tmp_path / "application"
+    resource_dir = application_dir / "_internal"
+    resource_dir.mkdir(parents=True)
+    archive = tmp_path / "addon.zip"
+    digest = _valid_addon_archive(archive)
+    (resource_dir / machine_setup.GPU_ADDON_MANIFEST).write_text(
+        json.dumps({"url": archive.as_uri(), "sha256": digest}),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("PROGRAMDATA", str(tmp_path / "program-data"))
+    messages: list[str] = []
+
+    ok, message = machine_setup.ensure_gpu_addon(application_dir, progress=messages.append)
+
+    assert ok, message
+    joined = "\n".join(messages)
+    for stage in ("目标目录", "开始下载", "解压完成", "正在复制", "安装完成"):
+        assert stage in joined, stage
+    assert (resource_dir / "GPU_Addon" / "workers" / "run_neusuite_roi.py").is_file()
+
+
+def test_gpu_addon_reuses_verified_cache_without_network(tmp_path, monkeypatch):
+    application_dir = tmp_path / "application"
+    resource_dir = application_dir / "_internal"
+    resource_dir.mkdir(parents=True)
+    archive = tmp_path / "addon.zip"
+    digest = _valid_addon_archive(archive)
+    (resource_dir / machine_setup.GPU_ADDON_MANIFEST).write_text(
+        json.dumps({"url": archive.as_uri(), "sha256": digest}),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("PROGRAMDATA", str(tmp_path / "program-data"))
+
+    ok, message = machine_setup.ensure_gpu_addon(application_dir)
+    assert ok, message
+
+    # Remove the installed copy so the second run has to work from the cache only.
+    shutil.rmtree(resource_dir / machine_setup.GPU_ADDON_DIR_NAME)
+
+    def fail_if_used(*args, **kwargs):
+        raise AssertionError("a verified cache must not trigger a download")
+
+    monkeypatch.setattr(machine_setup.urllib.request, "urlopen", fail_if_used)
+    messages: list[str] = []
+
+    ok, message = machine_setup.ensure_gpu_addon(application_dir, progress=messages.append)
+
+    assert ok, message
+    assert "跳过下载" in "\n".join(messages)
+    assert (resource_dir / machine_setup.GPU_ADDON_DIR_NAME / "NewLight_GPU_Worker.exe").is_file()
+
+
+def test_gpu_addon_failure_reason_reaches_setup_progress(tmp_path, monkeypatch):
+    application_dir = tmp_path / "application"
+    resource_dir = application_dir / "_internal"
+    resource_dir.mkdir(parents=True)
+    missing = tmp_path / "missing.zip"
+    (resource_dir / machine_setup.GPU_ADDON_MANIFEST).write_text(
+        json.dumps({"url": missing.as_uri(), "sha256": "1" * 64}),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("PROGRAMDATA", str(tmp_path / "program-data"))
+    state_path = tmp_path / "machine_setup_v1.json"
+    machine_setup.write_setup_state(
+        state_path, "complete_cuda", ["NVIDIA GeForce RTX Test"], "boot-a"
+    )
+    services = FakeServices()
+    messages: list[str] = []
+
+    # The completed-setup path must stay non-fatal but now has to report why.
+    assert machine_setup.ensure_first_run_setup(
+        application_dir,
+        state_path=state_path,
+        services=services,
+        progress=messages.append,
+    )
+
+    joined = "\n".join(messages)
+    assert "原因：" in joined
+    assert "GPU 扩展" in joined

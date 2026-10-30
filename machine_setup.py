@@ -8,6 +8,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import urllib.error
 import urllib.request
 import zipfile
@@ -126,6 +127,138 @@ def _emit(progress: ProgressCallback | None, message: str) -> None:
         progress(message)
 
 
+def _human_size(num_bytes: float) -> str:
+    """Format a byte count for console output (base 1024, one decimal)."""
+    value = max(float(num_bytes), 0.0)
+    for unit in ("B", "KB", "MB", "GB"):
+        if value < 1024.0 or unit == "GB":
+            return f"{value:.0f} {unit}" if unit == "B" else f"{value:.1f} {unit}"
+        value /= 1024.0
+    return f"{value:.1f} GB"
+
+
+def _describe_setup_error(exc: BaseException) -> str:
+    """Turn a download/extract/copy failure into text the user can act on."""
+    if isinstance(exc, urllib.error.HTTPError):
+        return (
+            f"HTTP {exc.code} {exc.reason}（{exc.url}）；"
+            "下载地址被拒绝，通常是网络代理或未登录导致的"
+        )
+    if isinstance(exc, urllib.error.URLError):
+        return f"网络错误：{exc.reason}；请确认这台机器能访问 GitHub 下载域名（必要时配置代理）"
+    if isinstance(exc, zipfile.BadZipFile):
+        return "缓存的安装包不是有效 ZIP 或已损坏；删除缓存后重新下载"
+    if isinstance(exc, OSError):
+        code = getattr(exc, "errno", None)
+        detail = getattr(exc, "strerror", None) or str(exc)
+        where = getattr(exc, "filename", None)
+        hint = ""
+        if code == 28:
+            hint = "；磁盘空间不足，请清理目标盘或改用空间充足的安装目录"
+        elif code in (36, 206):
+            hint = "；Windows 路径过长，建议把软件安装在靠近盘根的目录"
+        elif code in (13, 5):
+            hint = "；权限不足，请以管理员身份运行"
+        location = f"（{where}）" if where else ""
+        return f"文件操作失败 errno={code}：{detail}{location}{hint}"
+    return f"{type(exc).__name__}：{exc}"
+
+
+def _hash_file(
+    path: Path,
+    *,
+    label: str,
+    progress: ProgressCallback | None,
+    chunk: int = 1024 * 1024,
+) -> str:
+    """SHA-256 a file, reporting throughput every couple of seconds."""
+    digest = hashlib.sha256()
+    total = path.stat().st_size
+    done = 0
+    started = time.monotonic()
+    last_emit = started - 2.0
+    with path.open("rb") as source:
+        for block in iter(lambda: source.read(chunk), b""):
+            digest.update(block)
+            done += len(block)
+            now = time.monotonic()
+            if progress is not None and (now - last_emit >= 2.0 or done == total):
+                rate = done / max(now - started, 1e-6)
+                _emit(
+                    progress,
+                    f"校验 {label}：{_human_size(done)}/{_human_size(total)}"
+                    f"（{_human_size(rate)}/s）",
+                )
+                last_emit = now
+    return digest.hexdigest().lower()
+
+
+def _stream_to_file(
+    source,
+    output,
+    *,
+    label: str,
+    progress: ProgressCallback | None,
+    total: int | None = None,
+    chunk: int = 1024 * 1024,
+) -> int:
+    """Copy a stream to an open file while reporting throughput and ETA."""
+    done = 0
+    started = time.monotonic()
+    last_emit = started
+    while True:
+        block = source.read(chunk)
+        if not block:
+            break
+        output.write(block)
+        done += len(block)
+        now = time.monotonic()
+        if progress is not None and now - last_emit >= 2.0:
+            rate = done / max(now - started, 1e-6)
+            percent = f"（{done * 100 // total}%）" if total else ""
+            eta = f"，剩余约 {max(total - done, 0) / max(rate, 1):.0f}s" if total else ""
+            _emit(
+                progress,
+                f"下载 {label}：{_human_size(done)}{percent}，"
+                f"{_human_size(rate)}/s{eta}",
+            )
+            last_emit = now
+    return done
+
+
+def _response_length(response) -> int | None:
+    value = response.headers.get("Content-Length") if response is not None else None
+    try:
+        parsed = int(str(value).strip())
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed > 0 else None
+
+
+def _download_to(
+    destination: Path,
+    url: str,
+    *,
+    label: str,
+    progress: ProgressCallback | None,
+    cache_dir: Path,
+) -> int:
+    """Download one URL to disk with byte progress and a pre-flight space check."""
+    request = urllib.request.Request(url, headers={"User-Agent": "NewLight_Analysis/1.0"})
+    with urllib.request.urlopen(request, timeout=300) as response:
+        total = _response_length(response)
+        free = shutil.disk_usage(cache_dir).free
+        if total and free < total + 512 * 1024 * 1024:
+            raise RuntimeError(
+                f"下载前磁盘空间不足：{label} 约 {_human_size(total)}，"
+                f"缓存目录所在盘剩余 {_human_size(free)}，请清理空间后重试"
+            )
+        size_text = f"约 {_human_size(total)}" if total else "大小未知"
+        _emit(progress, f"开始下载 {label}：{size_text}，缓存盘剩余 {_human_size(free)}")
+        with destination.open("wb") as output:
+            return _stream_to_file(response, output, label=label, progress=progress, total=total)
+
+
 def _show_dialog(dialog_visibility: VisibilityCallback | None, callback):
     if dialog_visibility is not None:
         dialog_visibility(False)
@@ -208,8 +341,10 @@ def ensure_gpu_addon(
     addon_dir = root / GPU_ADDON_DIR_NAME
     _sync_gpu_shared_modules(root, addon_dir)
     if _gpu_addon_ready(addon_dir):
+        _emit(progress, f"统一 GPU 扩展已安装：{addon_dir}")
         return True, "统一 GPU 扩展已安装。"
 
+    _emit(progress, f"统一 GPU 扩展未安装，目标目录：{addon_dir}")
     manifest_path = root / GPU_ADDON_MANIFEST
     if not manifest_path.is_file():
         legacy_manifest = root / LEGACY_GPU_ADDON_MANIFEST
@@ -236,74 +371,183 @@ def ensure_gpu_addon(
                 or len(str(part.get("sha256", "")).strip()) != 64
             ):
                 return False, "GPU 扩展清单包含无效的分段下载信息。"
+    archive_hash = str(manifest.get("archive_sha256", expected_hash) or "").strip().lower()
+    if len(archive_hash) != 64:
+        return False, "GPU 扩展清单缺少有效的安装包 SHA-256。"
 
     cache_dir = Path(os.environ.get("PROGRAMDATA", tempfile.gettempdir())) / "NewLight_Analysis"
-    cache_dir.mkdir(parents=True, exist_ok=True)
     archive_path = cache_dir / "GPU_Addon_CUDA.zip"
     temporary_archive = archive_path.with_suffix(".zip.part")
     part_paths: list[Path] = []
+    install_started = time.monotonic()
     try:
-        _emit(progress, "正在下载统一 GPU 扩展...")
-        if parts:
-            for index, part in enumerate(parts, start=1):
-                part_path = cache_dir / f"GPU_Addon_CUDA.zip.part{index:02d}"
-                part_url = str(part["url"]).strip()
-                part_hash = str(part["sha256"]).strip().lower()
-                request = urllib.request.Request(part_url, headers={"User-Agent": "NewLight_Analysis/1.0"})
-                with urllib.request.urlopen(request, timeout=300) as response, part_path.open("wb") as output:
-                    shutil.copyfileobj(response, output, length=1024 * 1024)
-                digest = hashlib.sha256()
-                with part_path.open("rb") as source:
-                    for block in iter(lambda: source.read(1024 * 1024), b""):
-                        digest.update(block)
-                if digest.hexdigest().lower() != part_hash:
-                    return False, f"GPU 扩展分段 {index} SHA-256 校验失败，已拒绝安装。"
-                part_paths.append(part_path)
-            with temporary_archive.open("wb") as output:
-                for part_path in part_paths:
-                    with part_path.open("rb") as source:
-                        shutil.copyfileobj(source, output, length=1024 * 1024)
-        else:
-            request = urllib.request.Request(url, headers={"User-Agent": "NewLight_Analysis/1.0"})
-            with urllib.request.urlopen(request, timeout=300) as response, temporary_archive.open("wb") as output:
-                shutil.copyfileobj(response, output, length=1024 * 1024)
-        digest = hashlib.sha256()
-        with temporary_archive.open("rb") as source:
-            for block in iter(lambda: source.read(1024 * 1024), b""):
-                digest.update(block)
-        archive_hash = str(manifest.get("archive_sha256", expected_hash)).strip().lower()
-        if digest.hexdigest().lower() != archive_hash:
-            return False, "GPU 扩展 SHA-256 校验失败，已拒绝安装。"
-        temporary_archive.replace(archive_path)
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        _emit(progress, f"下载缓存目录：{cache_dir}")
+        _emit(progress, f"清单要求的安装包 SHA-256：{archive_hash}")
 
-        _emit(progress, "正在安装统一 GPU 扩展...")
+        archive_ready = False
+        if archive_path.is_file():
+            _emit(
+                progress,
+                f"发现缓存安装包（{_human_size(archive_path.stat().st_size)}），先校验 SHA-256…",
+            )
+            archive_ready = _hash_file(archive_path, label="缓存安装包", progress=progress) == archive_hash
+            _emit(
+                progress,
+                "缓存校验通过，跳过下载。" if archive_ready else "缓存与清单不一致，将重新下载并覆盖。",
+            )
+
+        if not archive_ready:
+            if parts:
+                for index, part in enumerate(parts, start=1):
+                    part_path = cache_dir / f"GPU_Addon_CUDA.zip.part{index:02d}"
+                    part_hash = str(part["sha256"]).strip().lower()
+                    part_paths.append(part_path)
+                    if part_path.is_file() and (
+                        _hash_file(part_path, label=f"分段 {index}", progress=progress) == part_hash
+                    ):
+                        _emit(progress, f"分段 {index} 已有校验通过的缓存，跳过下载。")
+                        continue
+                    _download_to(
+                        part_path,
+                        str(part["url"]).strip(),
+                        label=f"分段 {index}/{len(parts)}",
+                        progress=progress,
+                        cache_dir=cache_dir,
+                    )
+                    if _hash_file(part_path, label=f"分段 {index}", progress=progress) != part_hash:
+                        return False, f"GPU 扩展分段 {index} SHA-256 校验失败，已拒绝安装。"
+                needed = sum(path.stat().st_size for path in part_paths if path.is_file())
+                free = shutil.disk_usage(cache_dir).free
+                if free < needed + 512 * 1024 * 1024:
+                    raise RuntimeError(
+                        f"合并分段需要约 {_human_size(needed)}，缓存盘剩余 {_human_size(free)}，"
+                        "请清理空间后重试"
+                    )
+                _emit(progress, f"正在合并 {len(part_paths)} 个分段为完整安装包（{_human_size(needed)}）…")
+                with temporary_archive.open("wb") as output:
+                    for part_path in part_paths:
+                        _emit(progress, f"合并 {part_path.name}")
+                        with part_path.open("rb") as source:
+                            _stream_to_file(
+                                source,
+                                output,
+                                label=part_path.name,
+                                progress=progress,
+                                total=part_path.stat().st_size,
+                            )
+            else:
+                _download_to(
+                    temporary_archive,
+                    url,
+                    label="安装包",
+                    progress=progress,
+                    cache_dir=cache_dir,
+                )
+            if _hash_file(temporary_archive, label="新下载安装包", progress=progress) != archive_hash:
+                return False, "GPU 扩展 SHA-256 校验失败，已拒绝安装。"
+            temporary_archive.replace(archive_path)
+
         staging = Path(tempfile.mkdtemp(prefix="newlight_gpu_addon_"))
         try:
             with zipfile.ZipFile(archive_path) as archive:
+                members = archive.infolist()
+                payload_bytes = sum(int(member.file_size) for member in members)
                 staging_root = staging.resolve()
-                for member in archive.infolist():
+                for member in members:
                     destination = (staging / member.filename).resolve()
                     if destination != staging_root and staging_root not in destination.parents:
                         raise RuntimeError("GPU 扩展包含非法压缩路径。")
-                archive.extractall(staging)
+                free_staging = shutil.disk_usage(staging).free
+                free_target = shutil.disk_usage(addon_dir.parent).free
+                _emit(
+                    progress,
+                    f"正在安装统一 GPU 扩展：{len(members)} 个条目，解压后约 {_human_size(payload_bytes)}；"
+                    f"临时目录剩余 {_human_size(free_staging)}，安装目录剩余 {_human_size(free_target)}",
+                )
+                if payload_bytes and min(free_staging, free_target) < payload_bytes + 512 * 1024 * 1024:
+                    raise RuntimeError(
+                        f"磁盘空间不足：解压和安装各需约 {_human_size(payload_bytes)}，"
+                        f"临时目录剩余 {_human_size(free_staging)}，"
+                        f"安装目录剩余 {_human_size(free_target)}；请清理空间，"
+                        "或把软件安装到剩余空间充足的磁盘"
+                    )
+                extract_started = time.monotonic()
+                last_emit = extract_started
+                for index, member in enumerate(members, start=1):
+                    archive.extract(member, staging)
+                    now = time.monotonic()
+                    if progress is not None and now - last_emit >= 2.0:
+                        _emit(progress, f"解压：{index}/{len(members)} 项，已用 {now - extract_started:.0f}s")
+                        last_emit = now
+                _emit(progress, f"解压完成，耗时 {time.monotonic() - extract_started:.1f}s")
+
             extracted = staging / GPU_ADDON_DIR_NAME
             if not extracted.is_dir():
                 extracted = staging
             if not _gpu_addon_ready(extracted):
                 return False, "GPU 扩展解压后缺少 Worker、DeepCAD 或 NeuSuite 组件。"
             addon_dir.mkdir(parents=True, exist_ok=True)
-            for item in extracted.iterdir():
+            items = sorted(extracted.iterdir(), key=lambda item: item.name)
+            copy_state = {
+                "files": 0,
+                "bytes": 0,
+                "started": time.monotonic(),
+                "last": time.monotonic(),
+                "index": 0,
+                "name": "",
+            }
+            _emit(
+                progress,
+                f"正在复制 {len(items)} 个顶层条目到 {addon_dir}"
+                f"（约 {_human_size(payload_bytes)}）",
+            )
+
+            def _copy_and_report(source_file, destination_file) -> None:
+                shutil.copy2(source_file, destination_file)
+                try:
+                    copy_state["bytes"] += Path(source_file).stat().st_size
+                except OSError:
+                    pass
+                copy_state["files"] += 1
+                now = time.monotonic()
+                if progress is not None and now - copy_state["last"] >= 2.0:
+                    rate = copy_state["bytes"] / max(now - copy_state["started"], 1e-6)
+                    _emit(
+                        progress,
+                        f"复制：第 {copy_state['index']}/{len(items)} 项"
+                        f"（{copy_state['name']}），{copy_state['files']} 个文件 / "
+                        f"{_human_size(copy_state['bytes'])}（{_human_size(rate)}/s）",
+                    )
+                    copy_state["last"] = now
+
+            for position, item in enumerate(items, start=1):
                 target = addon_dir / item.name
+                copy_state["index"] = position
+                copy_state["name"] = item.name
                 if item.is_dir():
-                    shutil.copytree(item, target, dirs_exist_ok=True)
+                    shutil.copytree(item, target, dirs_exist_ok=True, copy_function=_copy_and_report)
                 else:
-                    shutil.copy2(item, target)
+                    _copy_and_report(item, target)
             _sync_gpu_shared_modules(root, addon_dir)
         finally:
             shutil.rmtree(staging, ignore_errors=True)
-        return True, "统一 GPU 扩展安装完成。"
-    except (OSError, urllib.error.URLError, zipfile.BadZipFile, RuntimeError) as exc:
-        return False, f"GPU 扩展下载或安装失败：{exc}"
+
+        if not _gpu_addon_ready(addon_dir):
+            return False, f"扩展文件已复制，但完整性检查仍未通过：{addon_dir}"
+        message = "统一 GPU 扩展安装完成。"
+        _emit(progress, f"{message} 总耗时 {time.monotonic() - install_started:.1f}s")
+        return True, message
+    except (OSError, urllib.error.URLError, zipfile.BadZipFile, RuntimeError, ValueError) as exc:
+        reason = f"GPU 扩展下载或安装失败：{_describe_setup_error(exc)}"
+        _emit(progress, reason)
+        if isinstance(exc, zipfile.BadZipFile):
+            try:
+                archive_path.unlink(missing_ok=True)
+                _emit(progress, f"已删除损坏的缓存安装包：{archive_path}")
+            except OSError:
+                pass
+        return False, reason
     finally:
         temporary_archive.unlink(missing_ok=True)
         for part_path in part_paths:
@@ -454,7 +698,7 @@ def ensure_first_run_setup(
         elif not addon_ready and state.get("status") == "complete_cuda":
             addon_ok, addon_message = ensure_gpu_addon(application_dir, progress=progress)
             if not addon_ok:
-                _emit(progress, "统一 GPU 扩展未安装，已跳过。")
+                _emit(progress, f"统一 GPU 扩展未安装，已跳过。原因：{addon_message}")
         if state.get("status") == "pending_restart":
             _show_dialog(
                 dialog_visibility,

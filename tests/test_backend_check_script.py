@@ -69,3 +69,43 @@ def test_backend_checks_require_an_exact_zero_exit_code():
 def test_fast_roi_path_matches_frozen_dispatch():
     # The gate must exercise the same script the frozen application dispatches to.
     assert 'GPU_ADDON_DIR / "workers" / "run_neusuite_roi.py"' in core_text()
+
+
+def test_setup_branch_streams_progress_to_the_console():
+    # A silent 2.5 GB download looks like a hang; the setup branch has to forward every
+    # machine_setup progress message to stdout as it happens.
+    text = batch_text()
+
+    assert "from machine_setup import ensure_first_run_setup" in text
+    assert "progress=lambda" in text
+    assert "flush=True" in text
+    # Chinese stage text must not kill the run on a console that cannot encode it.
+    assert "reconfigure" in text
+
+
+def test_update_gpu_branch_reports_the_reason_for_a_failed_install():
+    text = batch_text()
+
+    assert 'if /I "%~1"=="/update-gpu" goto :UPDATE_GPU' in text
+    assert ":UPDATE_GPU" in text
+    assert "from machine_setup import ensure_gpu_addon" in text
+    assert "[GPU] installed" in text
+    assert "[GPU] message" in text
+    assert "addon target directory" in text
+
+
+def test_verify_branch_prints_the_paths_and_timings_it_checks():
+    text = batch_text()
+
+    assert "Paths checked by this script" in text
+    assert "  GPU addon worker     : %GPU_WORKER%" in text
+    assert "  GPU ROI script       : %GPU_ROI_SCRIPT%" in text
+    assert "start !TIME!" in text
+    assert "Verification exit code" in text
+
+
+def test_interpreter_resolution_lives_in_one_subroutine():
+    text = batch_text()
+
+    assert text.count("conda run -n caiman_latest") == 1
+    assert text.count("call :RESOLVE_PY") == 3
