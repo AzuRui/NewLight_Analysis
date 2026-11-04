@@ -6,6 +6,7 @@ import os
 import queue
 import random
 import shutil
+import sys
 import threading
 import time
 import traceback
@@ -1761,6 +1762,8 @@ class NewLightApp:
         self.last_atlas_reference_json = ""
         self.last_neuroalign_output_dir = ""
         self.window_background = None
+        # main() sets this: only the GUI entry point may end the process it owns.
+        self.exits_process_on_close = False
         self._build_ui()
         self.redraw(preserve_view=False)
         self._poll_worker()
@@ -2945,7 +2948,14 @@ class NewLightApp:
 
     def on_close(self):
         self.cleanup_session_temp()
-        self.root.destroy()
+        try:
+            self.root.destroy()
+        except tk.TclError:
+            # Tk can tear the window down before this handler runs; exiting still matters.
+            pass
+        finally:
+            if self.exits_process_on_close:
+                finish_application(self)
 
     def temp_work_dir(self, name):
         path = self.session_temp_dir / name
@@ -8721,11 +8731,37 @@ class NewLightApp:
         )
 
 
+def finish_application(application=None):
+    """End the process this application owns after running its exit cleanup.
+
+    Tk services a posted menu from its own loop, so closing the window while a
+    dropdown is open never returns from ``mainloop()`` and the process survives
+    windowless; exiting here does not depend on library teardown.
+    """
+    if application is not None:
+        try:
+            application.cleanup_session_temp()
+        except Exception:
+            pass
+    try:
+        core.terminate_active_workers()
+    except Exception:
+        pass
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.flush()
+        except Exception:
+            pass
+    os._exit(0)
+
+
 def main():
     root = tk.Tk()
     apply_dark_theme(root)
-    NewLightApp(root)
+    application = NewLightApp(root)
+    application.exits_process_on_close = True
     root.mainloop()
+    finish_application(application)
 
 
 if __name__ == "__main__":
