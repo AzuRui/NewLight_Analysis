@@ -61,6 +61,7 @@ def test_backend_checks_require_an_exact_zero_exit_code():
         "CAIMAN_CHECK_RESULT",
         "CAIMAN_ROI_RESULT",
         "DEEPCAD_CHECK_RESULT",
+        "EXCEL_CHECK_RESULT",
     ):
         assert f'set "{variable}=!ERRORLEVEL!"' in text, variable
         assert f'if not "!{variable}!"=="0"' in text, variable
@@ -130,3 +131,15 @@ def test_setup_branch_keeps_the_console_and_log_claims_separate():
     # This run forwards progress to stdout, so it must not claim the machine log holds it.
     assert "The application logs its own setup stages to" in text
     assert "Progress is also appended to" not in text
+
+
+def test_excel_export_is_checked_with_the_real_roi_statistics_path():
+    # A bundle that lost openpyxl imports pandas happily and only fails when the user
+    # exports, so the gate writes and reads a workbook instead of importing a module.
+    text = batch_text()
+
+    assert "import sys, numpy, scipy, cv2, tifffile, pandas, openpyxl, matplotlib" in text
+    assert "ROI statistics Excel export:" in text
+    assert "from analysis_core import roi_statistics, save_roi_statistics_table" in text
+    assert "sheet_name=None" in text
+    assert "Exporting ROI statistics needs openpyxl inside the application bundle." in text

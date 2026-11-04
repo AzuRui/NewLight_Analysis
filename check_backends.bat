@@ -89,11 +89,27 @@ echo   GPU ROI script       : %GPU_ROI_SCRIPT%
 echo.
 echo Bundled Python:
 echo   start !TIME!
-"%WORKER_PY%" -c "import sys, numpy, scipy, cv2, tifffile, pandas, matplotlib; print(sys.executable); print('CPU core imports OK')"
+"%WORKER_PY%" -c "import sys, numpy, scipy, cv2, tifffile, pandas, openpyxl, matplotlib; print(sys.executable); print('CPU core imports OK')"
 set "CORE_CHECK_RESULT=!ERRORLEVEL!"
 echo   done !TIME! exit code !CORE_CHECK_RESULT!
 if not "!CORE_CHECK_RESULT!"=="0" (
   echo Bundled Python check failed with exit code !CORE_CHECK_RESULT!.
+  set "FAILED=1"
+)
+echo.
+echo ROI statistics Excel export:
+set "EXCEL_VERIFY_DIR=%TEMP%\newlight_excel_verify_%RANDOM%_%RANDOM%"
+mkdir "%EXCEL_VERIFY_DIR%" >nul 2>nul
+pushd "%EXCEL_VERIFY_DIR%"
+echo   start !TIME!
+"%WORKER_PY%" -c "import numpy, pathlib, pandas; from analysis_core import roi_statistics, save_roi_statistics_table; traces = numpy.zeros((12, 2), dtype=numpy.float32); traces[3, 0] = 1.0; traces[8, 1] = 1.0; stats = roi_statistics(traces, ['roi_a', 'roi_b'], 10.0, [], min_peak_percentile=90.0); path = pathlib.Path(r'%EXCEL_VERIFY_DIR%') / 'roi_statistics.xlsx'; save_roi_statistics_table(str(path), stats, movie=numpy.zeros((12, 4, 4), dtype=numpy.uint16), fs=10.0, roi_count=2, trigger_count=0); sheets = pandas.read_excel(path, sheet_name=None); assert sorted(sheets) == ['Experiment Info', 'ROI Statistics'], sorted(sheets); print('ROI statistics Excel export OK:', sorted(sheets))"
+set "EXCEL_CHECK_RESULT=!ERRORLEVEL!"
+popd
+rmdir /s /q "%EXCEL_VERIFY_DIR%" >nul 2>nul
+echo   done !TIME! exit code !EXCEL_CHECK_RESULT!
+if not "!EXCEL_CHECK_RESULT!"=="0" (
+  echo ROI statistics Excel export check failed with exit code !EXCEL_CHECK_RESULT!.
+  echo Exporting ROI statistics needs openpyxl inside the application bundle.
   set "FAILED=1"
 )
 echo.

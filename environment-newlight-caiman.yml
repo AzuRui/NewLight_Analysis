@@ -9,6 +9,7 @@ dependencies:
   - scikit-image>=0.22,<0.26
   - opencv>=4.8
   - tifffile>=2023.7
+  - openpyxl>=3.1
   - keras>=3,<4
   - pytorch=*=cpu*
   - pytest>=8,<9

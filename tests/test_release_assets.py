@@ -10,6 +10,7 @@ both halves of that arrangement honest.
 
 from __future__ import annotations
 
+import re
 import subprocess
 from pathlib import Path
 
@@ -19,6 +20,7 @@ REPOSITORY_ROOT = Path(__file__).resolve().parent.parent
 MANUAL_ASSET = REPOSITORY_ROOT / "Release_Assets" / "NewLight_Analysis_User_Manual.pdf"
 CPU_BUILD_SCRIPT = REPOSITORY_ROOT / "build_cpu_exe.bat"
 CPU_INSTALLER_SCRIPT = REPOSITORY_ROOT / "build_cpu_installer.bat"
+BUILD_ENVIRONMENT_SPEC = REPOSITORY_ROOT / "environment-newlight-caiman.yml"
 
 
 def test_packaged_manual_is_tracked_outside_the_build_output() -> None:
@@ -53,3 +55,28 @@ def test_build_script_copies_the_manual_and_refuses_to_lose_it() -> None:
     assert r"dist\NewLight_Analysis\NewLight_Analysis_User_Manual.pdf" in installer, (
         "the installer step must fail loudly when dist has no manual"
     )
+
+
+def test_excel_dependency_is_declared_for_the_build_environment() -> None:
+    """``openpyxl`` is not a pandas dependency, so nothing else pulls it into the env.
+
+    PyInstaller reports a hidden import it cannot find only in its warning file, so a
+    build environment without it ships an exe whose Excel export fails on the user's
+    machine; the published v1.0.1 package did exactly that.
+    """
+    text = BUILD_ENVIRONMENT_SPEC.read_text(encoding="utf-8")
+
+    assert re.search(r"^\s*-\s*openpyxl\b", text, re.MULTILINE), (
+        "environment-newlight-caiman.yml must install openpyxl for the packaging build"
+    )
+
+
+@pytest.mark.skipif(not CPU_BUILD_SCRIPT.is_file(), reason="local build scripts are not published")
+def test_build_script_preflights_every_required_runtime_module() -> None:
+    import launch
+
+    text = CPU_BUILD_SCRIPT.read_text(encoding="utf-8", errors="ignore")
+
+    for name in launch.REQUIRED:
+        assert f"'{name}'" in text, f"{name} is required at runtime but never preflighted"
+    assert "MISSING build dependencies" in text, "the preflight must name what is absent"
