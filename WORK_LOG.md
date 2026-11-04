@@ -2077,3 +2077,59 @@
   也在直连恢复后重跑了一次：302 → 206 且 `Content-Range: bytes 0-0/440185246`。
   仍未覆盖的路径照旧：真正提升到 Program Files 的安装
   （本机没有已安装副本），验证是在 Inno 逐字节复制的那棵 onedir 树上做的。
+
+- 2026-11-04: 修掉两个用户能直接碰到的缺陷，并第五次重建 CPU 安装包替换发布资产。
+  **导出 ROI 统计报 `No module named 'openpyxl'`**。根因不是代码改动：`pandas.to_excel`
+  写 `.xlsx` 需要 openpyxl 引擎，而构建环境清单 `environment-newlight-caiman.yml` 从来没列它，
+  所以冻结包里没有，失败点在 `analysis_core.save_roi_statistics_table`
+  （traceback 指向 `analysis_core.py:3118`）。修法分三层：清单补 `openpyxl>=3.1`；
+  `build_cpu_exe.bat` 在 PyInstaller 之前逐个 import 探测 `launch.REQUIRED` 里全部依赖名，
+  命中就打印 `build dependencies OK: cv2, matplotlib, numpy, openpyxl, pandas, PIL, scipy,
+  skimage, tifffile, PyInstaller, caiman, igraph, leidenalg, pkg_resources`，缺就
+  `MISSING build dependencies: …` 直接失败，不再让依赖静默消失在包里；
+  `check_backends.bat` 除了把 openpyxl 加进 CPU 核心导入检查，还新增第五项检查——在
+  `%TEMP%` 独立目录里用 12×2 的合成 traces 走 `roi_statistics` + `save_roi_statistics_table`
+  真写一个 `roi_statistics.xlsx`，再用 `pandas.read_excel(sheet_name=None)` 读回并断言
+  sheet 恰为 `['Experiment Info', 'ROI Statistics']`，任何一步非 0 退出码都把 `FAILED` 置 1。
+  **关闭主窗口后进程残留不退出**：判据来自实测而非猜测。修复前的冻结版对照跑
+  （`_internal\NewLight_Worker.exe` 加载真实 GUI，菜单已 post 时由外部 `PostMessageW` 发
+  `WM_CLOSE`）记录到 `RESULT process still alive 30s after WM_CLOSE`，`MARK mainloop_returned`
+  始终没打印，主线程栈停在 `tkinter/__init__.py:3369 tk_popup`，窗口枚举只剩
+  `MenuWindowClass` / `EmbeddedMenuClassWindow` / `TkChild` / `TclNotifier` / `#32768` /
+  `SysShadow`——即 Tk 在菜单自己的事件循环里处理 WM_DELETE，窗口毁了但 `Tk_MainLoop`
+  永不返回，解释器不终结，进程变成无窗口空转，还会占住 exe 挡住重建。
+  修法：`NewLight_Analysis.py` 补 `import sys`；`NewLightApp.__init__` 新增
+  `exits_process_on_close = False`（默认关，宿主内嵌与既有 GUI 测试的 `on_close()` 行为不变），
+  只有 `main()` 把它置 True；`on_close` 把 `root.destroy()` 包进 `try/except tk.TclError`
+  并在 `finally` 里按归属调用新函数 `finish_application(self)`；`finish_application` 依次
+  `cleanup_session_temp()` → `core.terminate_active_workers()` → flush stdout/stderr →
+  `os._exit(0)`，`main()` 在 `root.mainloop()` 正常返回后也调用它。确定性地结束进程，
+  不再指望任何库的收尾代码。
+  进包实测（本次新 dist，四种关法 + 一份同包内的负对照）：菜单 post 时关窗
+  `RESULT exited 0.2s after WM_CLOSE exit=0`；**同一个包**把归属标志关掉（`--no-ownership`，
+  即修复前那条关窗路径）`RESULT LINGERED: still alive 25s after WM_CLOSE`；右键菜单
+  `RESULT exited 0.2s after WM_CLOSE exit=0`；ttk.Combobox 展开态关窗 `RESULT exited 0.2s
+  after WM_CLOSE exit=0`；从窗口内部调用 `on_close()`（菜单同样 post 着）
+  `frozen from-inside close exit=0`；`tasklist /FI "IMAGENAME eq NewLight*"` 收尾为 `none`。
+  守卫：新增 `tests/test_application_exit.py` 8 项（归属两种模式各断言一次清理与销毁、
+  destroy 抛 `TclError` 仍要退出、AST 保证 `main()` 在 mainloop 之后调用收尾、
+  子进程真实注册后不超存父进程、win32 专用的“菜单 post 时 WM_CLOSE 必须退出”集成用例，
+  另有一条负对照证明去掉修复这项会失败）。
+  回归：`python -m pytest tests -q` = `1 failed, 360 passed, 15 subtests passed in 57.94s`，
+  唯一失败仍是 `newlight_cpu` 环境缺 `torch` 的既有问题（`test_caiman_headless`）。
+  构建：`build_cpu_exe.bat && build_cpu_installer.bat` 退出 0，内建 `/verify-only` 闸门五项全绿
+  （`CPU core imports OK`、`ROI statistics Excel export OK: ['Experiment Info', 'ROI Statistics']`、
+  GPU ROI 与 DeepCAD-RT 因未装扩展跳过、`CaImAn frozen CNMFParams OK 1.13.1`、
+  `Verification exit code: 0`），ISCC `Successful compile (200.235 sec)`。
+  构建之后只动过 `finish_application` 的 docstring 措辞，用 AST 去掉 docstring 后逐节点比对
+  证明 `docstring_only_edit = True`，包内行为与源码一致，`tests/test_application_exit.py`
+  + `tests/test_roi_statistics_export.py` 重跑 `10 passed in 29.79s`。
+  发布：产物 `Output\NewLight_Analysis_Core_Setup_v1.0.3.exe` 441,257,706 bytes、SHA-256
+  `e4221ae2e8368a4edcaeeb420bb9404a7fd84528b8e5fdc4cbb0e941833f4637`；临时名
+  `NewLight_Analysis_Core_Setup_v1.0.1.uploading.tmp` 上传 201（新 asset **708086752**，
+  GitHub digest `sha256:e4221ae2…33f4637` 与本地 certutil 逐字符一致，272.66 秒 ≈1.62 MB/s）→
+  删除旧 asset 692408095 返回 204 → `PATCH` 回正式名返回 200 → 回读 Release `v1.0.1`
+  （id 364821243）只剩 1 个资产、size 441,257,706、state uploaded → 公开链接
+  `Range: bytes=0-0` 走 302 后拿到 **206** 且 `Content-Range: bytes 0-0/441257706`。
+  仍未覆盖的路径照旧：真正提升到 Program Files 的安装（本机没有已安装副本），验证是在
+  Inno 逐字节复制的那棵 onedir 树上做的；GUI 里手点“导出 ROI 统计”另存 .xlsx 也留给用户验收。
