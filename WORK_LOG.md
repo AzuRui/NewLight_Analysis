@@ -2133,3 +2133,13 @@
   `Range: bytes=0-0` 走 302 后拿到 **206** 且 `Content-Range: bytes 0-0/441257706`。
   仍未覆盖的路径照旧：真正提升到 Program Files 的安装（本机没有已安装副本），验证是在
   Inno 逐字节复制的那棵 onedir 树上做的；GUI 里手点“导出 ROI 统计”另存 .xlsx 也留给用户验收。
+  推送这次走的代理：`git fetch` 直连成功（`local_ahead=3 remote_ahead=0`，远程没被网页端
+  提交领先），紧接着 `git push origin HEAD:codex/unified-gpu-addon` 直连两次都是
+  `Failed to connect to github.com port 443`，而同一时刻 `curl https://github.com` 返回 200、
+  `api.github.com` 与资产服务照常可用；`git-receive-pack` 与 `git-upload-pack` 两个 info/refs
+  探测都返回 000。本机 `netstat` 显示 7897 正在监听（PID 50820），
+  `curl -x http://127.0.0.1:7897 .../info/refs?service=git-receive-pack` 返回 **401**
+  （= 通道通了、只是未认证），于是按交接文档那条代理形式
+  `git -c http.proxy=http://127.0.0.1:7897 -c https.proxy=http://127.0.0.1:7897 push`
+  一次成功：`8e25140..6fa5c25`（`0cef83f` openpyxl、`8cad588` 关窗退出、`6fa5c25` 本条文档），
+  `ls-remote` 回读远程 `refs/heads/codex/unified-gpu-addon` = `6fa5c255b463cfe2762dffbfabb65d2818041e82`。
