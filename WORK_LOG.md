@@ -2143,3 +2143,76 @@
   `git -c http.proxy=http://127.0.0.1:7897 -c https.proxy=http://127.0.0.1:7897 push`
   一次成功：`8e25140..6fa5c25`（`0cef83f` openpyxl、`8cad588` 关窗退出、`6fa5c25` 本条文档），
   `ls-remote` 回读远程 `refs/heads/codex/unified-gpu-addon` = `6fa5c255b463cfe2762dffbfabb65d2818041e82`。
+
+- 2026-11-06: 快速 ROI 去掉“必须 CUDA”，核心包内置 CPU 推理；检测和 GUI 补一键加装 GPU 扩展。
+  **动因**：用户实测发现两件事——后端检测里没有“下载并安装 GPU 包”的入口，而快速 ROI 在没有
+  CUDA 包时直接不可用，与原本“CPU 能跑、GPU 加速”的设计不符。方案取“内置 + 加速”：CPU 推理
+  所需的权重与 vendored 运行时随核心包分发，装了统一 GPU 扩展且检测到可用 CUDA 设备时自动改走
+  CUDA，装不上或没有 GPU 时仍用内置模型跑 CPU。
+  **选路实现**（`analysis_core.py`）：新增 `fast_roi_backend(device)`，返回
+  `mode/worker_exe/label/reason`——源码运行保持既有 conda 路径并原样转发 device；冻结包
+  `auto` 在“GPU worker 存在 + CUDA 探测为真”时走 GPU worker + 扩展内权重，否则走内置权重 +
+  `NewLight_Worker.exe` + 核心 torch；显式 `cpu` 永不进 GPU worker；显式设备号在无 CUDA 时抛
+  RuntimeError 说明原因，不再静默降级。`fast_roi_cuda_available()` 不用核心 torch 的
+  `cuda.is_available()`（那测的是另一个构建），而是让**真正要跑的那个 worker** 执行
+  `import torch; print(torch.cuda.is_available())`，按行匹配答案（worker 可能先打印 loader
+  噪声，第一行未必是 True——这条是本轮实测后补的），结果按进程缓存。
+  **构建输入**：`NewLight_Analysis.spec`（被 git 忽略，只在构建机上存在）的 `slim_excludes`
+  不再排除 `timm`/`torchvision`，hiddenimports 补 `timm/torchvision/torchvision.ops/requests/tqdm`；
+  权重来源不能依赖 dist（`/rebuild` 会 `rmdir dist`，而 `NeuSuite2p` 原本只随 2.4 GB 扩展分发，
+  本机 `E:\WorkSpace\NeuSuite2p` 根本不存在），改为新增
+  `tools\stage_neusuite_cpu_source.ps1` 从仓库或 `%ProgramData%\NewLight_Analysis\GPU_Addon_CUDA.zip`
+  用 `tar --strip-components 1` 只抽 `GPU_Addon/NeuSuite2p/*` 到不受清理影响的
+  `E:\WorkSpace\NewLight_BuildCache\NeuSuite2p`（实测权重 24.6 MB + 运行时 1.8 MB），
+  `build_cpu_exe.bat` 每次构建前自动跑它；spec 的 `_resolve_neusuite_cpu_source()` /
+  `_resolve_neusuite_runtime_deps()` 找不到就 `SystemExit` 并写出恢复命令。构建环境清单补
+  `torchvision=*=cpu*` 与 `timm==1.0.31`（`--no-deps`，否则 pip 会把 conda 的 CPU torch 换成
+  CUDA 构建），`setup_newlight_caiman.bat` 末尾断言 `not torch.version.cuda`。
+  **本轮抓到的打包级缺陷**：第一次重建 PyInstaller 本身 exit 0，但 CPU 门禁报
+  `ModuleNotFoundError: No module named 'timm.models.layers'`。根因不是 timm 没装——`timm` 有
+  235 个子模块进了包，而是**经 `datas` 分发的代码不会被静态分析读取**：`block.py` 里那句
+  `from timm.models.layers import ...` 发生在运行时，而 `timm/__init__.py` 只导入新位置
+  `timm.layers`，弃用别名包永远进不了图。修法是在 spec 里新增
+  `_vendored_runtime_hiddenimports()`，AST 扫 `_internal/NeuSuite2p/method/ultralytics` 的全部
+  import，落在白名单且构建环境里确实装着的名字一律补进 hiddenimports。实测该函数本轮补 35 个名字，
+  其中对照上一版 `Analysis-00.toc` **真正新增的只有 3 个**（`timm.models.layers`/`helpers`/`registry`），
+  其余 32 个上一版已在图里，即体积几乎不变的兜底。
+  **空场缺陷**（冻结包首次 CPU 端到端跑时暴露）：模型对一张 256×320 空白合成图给出 0 个实例时，
+  `workers/run_neusuite_roi.py` 的 `filter_masks_by_area` 走到 `array.reshape(0, -1)` 抛
+  `ValueError: cannot reshape array of size 0 into shape (0,newaxis)`，整轮报“后台处理失败”——
+  即一片空场会被当成故障而不是 0 个 ROI。补空实例分支返回 `(0,H,W)/[]/[]`，并加 3 条离线用例
+  （空输入、过滤后清空、空掩码缩放）。
+  **安装包陷阱**：`.iss` 的 Files 段是 `dist\*` + `recursesubdirs`，只排除
+  `run*/build*/setup*.bat`、`*.spec`、`*.iss`。实测 `/update-gpu` 会往 dist 里放
+  `_internal\GPU_Addon`，dist 从 1,573,845,104 bytes 涨到 5,440,547,123 bytes（扩展本体
+  3,866,702,019 bytes），照此打包会把 CPU 核心安装包撑成多 GB。`build_cpu_installer.bat` 现在
+  检测到 `dist\NewLight_Analysis\_internal\GPU_Addon` 就 `goto :FAILED`，守卫写进
+  `tests/test_release_assets.py`。
+  **冻结包实测**（同一棵 dist，构建日志 `rebuild_9.log` 末行 `rebuild_exit=0`，产物 mtime
+  14:49:02 晚于 `analysis_core.py` 14:36:25 的改动）：
+  未装扩展时 `check_backends.bat /verify-only` 全部门禁 exit 0，新增的 CPU 快速 ROI 门禁
+  `CPU fast ROI OK: 2 masks from 96 x 112`（9.7 s）；`_internal/NeuSuite2p` 27,721,283 bytes
+  （权重 `segment_model.pt` 25,796,532 bytes）、`_internal/NeuSuite_RuntimeDeps` 2,592,987 bytes、
+  `timm`/`torchvision` 目录在盘。冻结 worker 内探测：`cpu_ready=True`、GPU worker `exists=False`、
+  `cuda_available=False`、`backend[auto]=cpu`、`backend[cpu]=cpu`、`backend[0]` 抛 RuntimeError；
+  `import NewLight_Analysis` 后 `NewLightApp.install_gpu_addon` 与
+  `fast_roi_backend_summary` 均为 True（新 GUI 代码确实进了这次的 PYZ）。
+  真实数据一张 1200×1000 mean 投影、`image_size=960`：CPU 路径 **208 个 ROI、11.9 s**，
+  与构建环境同参数的参考产物**逐像素相同**（208/208、ROI 总像素都是 50,547、差异像素 0、names 一致）。
+  装扩展（复用 `%ProgramData%` 缓存、校验 SHA-256 后不下载，解压 21.8 s + 复制 3.6 GB，
+  总 50.7 s，exit 0）后再跑：`cuda_available=True`、`backend[auto]=gpu`（worker 指向
+  `_internal/GPU_Addon/NewLight_GPU_Worker.exe`）、`backend[cpu]` 仍是 cpu、`backend[0]=gpu device 0`；
+  同一张图 auto 跑出 **208 个 ROI、10.2 s**（含 worker 启动，故与 CPU 的 11.9 s 只差 1.7 s，
+  不能当作推理加速倍数引用）。GPU 与 CPU 产物对照：ROI 总像素 50,557 vs 50,547（+0.02%），
+  203/208 个掩码逐像素相同，5 个低置信度（0.27–0.40）掩码差几像素，16 个索引次序不同
+  （并列分数的排序差异，每个 CPU 掩码都能在 GPU 结果里找到 IoU=1.000 的对应项）。
+  装好后 `/verify-only` 依旧全绿（DeepCAD-RT 也回到 `NVIDIA GeForce RTX 4080` OK）。
+  **回归**：`python -m pytest tests -q` = `1 failed, 400 passed, 15 subtests passed in 22.34s`，
+  唯一失败仍是 `newlight_cpu` 测试解释器缺 `torch` 的既有环境问题（`test_caiman_headless`）。
+  新增/改写的守卫共 10 条：后端选路 14 条已在上一提交，本轮补 spec 扫描 4 条（含“扫描必须真的
+  接进 hiddenimports”）、空实例 3 条、CUDA 探测容忍噪声 1 条、安装包不含扩展 1 条、
+  `machine_setup` 文案不再声称快速 ROI 需要 CUDA 1 条。
+  **体积**：安装包 441,257,706 → 473,093,798 bytes（+31,836,092，+7.2%），即“内置 CPU 推理”
+  这一能力的真实代价。仍未覆盖的路径照旧：提升到 Program Files 的安装（本机没有已安装副本），
+  验证都在 Inno 逐字节复制的那棵 onedir 树上做；GUI 里手点“安装 GPU 扩展”按钮与“快速 ROI”面板
+  的实际点击留给用户验收。
