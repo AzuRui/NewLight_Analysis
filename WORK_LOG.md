@@ -2242,3 +2242,83 @@
   （id 364821243）只剩 1 个资产 716263532、size 473,093,798、state uploaded、
   `updated_at 2026-11-06T07:12:30Z` → 公开链接 `Range: bytes=0-0` 走 302 后拿到 **206** 且
   `Content-Range: bytes 0-0/473093798`，证明线上服务的是本次新包。
+
+- 2026-11-06: GPU 扩展的 cv2 写死了构建机路径，别的机器上快速 ROI 报"recursion detected"；扩展 zip 改成相对定位重发，核心包在起 worker 前自愈。
+  **动因**：用户贴出已安装副本的失败日志——任务流里"快速 ROI 分割（自适应拟合）"后台处理失败，异常前面把一长串
+  `sys.path` 打印了出来，末行是 `ImportError: ERROR: recursion is detected during loading of "cv2" binary
+  extensions. Check OpenCV installation.`，并问这个报错是为什么、运行日志目前输出在哪里。
+  **根因**：统一 GPU 扩展 2026-08-04 从 `D:/anaconda3/envs/caiman_latest` 冻结，`GPU_Addon/cv2/config.py` 的
+  `BINARIES_PATHS` 和 `GPU_Addon/cv2/config-3.11.py` 的 `PYTHON_EXTENSIONS_PATHS` 里留着这台构建机的绝对路径。
+  OpenCV 的 `bootstrap()` 会把 `PYTHON_EXTENSIONS_PATHS` 插进 `sys.path`、`sys.modules.pop("cv2")` 后重新导入包
+  自身，于是第二次进 `cv2/__init__.py` 撞上它自己的递归守卫——那串 `sys.path` 正是 bootstrap 打印的。用户机器上
+  没有 `D:\anaconda3`，所以这条只在别的机器上复现。可重定位的写法是
+  `LOADER_DIR = os.path.dirname(os.path.abspath(os.path.realpath(__file__)))`（173 B / 187 B；泄漏版是 126/163
+  或 116/156 B）。
+  **验证盲区**：扩展在本机"能用"是假象，读 `cv2._native.__file__` 而不是 `cv2.__file__` 才看得出来。出厂 loader
+  探测 0.8 秒 exit 0、`bundled:true`、binary 在 `..._internal\GPU_Addon\cv2\python-3.11\...`；把 loader 换回
+  2026-08-04 发布那份，探测同样 0.3 秒 exit 0，却 `bundled:false`、binary =
+  `D:\anaconda3/envs/caiman_latest/Lib/site-packages/cv2\python-3.11\cv2.cp311-win_amd64.pyd`，即加载的是 anaconda
+  那份 pyd；再把构建目录改名（模拟干净机器），同一探测 0.3 秒 exit 1 并打印用户那条 ImportError。
+  `check_backends.bat /verify-only` 的 GPU ROI 闸门只跑 `run_neusuite_roi.py --help`，而 cv2 是
+  `resize_instance_masks` 里懒导入的，绿灯证明不了 cv2 能加载——这就是上一版带着泄漏发出去的原因。
+  **修复（提交 `9a6ecd0`，两层，按用户选的方案）**：① 重发扩展 zip——`rewrite_zip.py` 只重写 `cv2/config.py` 与
+  `cv2/config-3.11.py` 两个条目，其余条目原样搬运，产出 part01 1,500,000,000 B `e8e361ff…`（未变，没重传）+
+  part02 1,080,860,596 B `7f733c90…`，合并整包 2,580,860,596 B `a5252a41…`；`gpu_addon_manifest.json` 升 2.0.1 并写明
+  "the cv2 loader configs are LOADER_DIR-relative"。② 核心包自愈——新增 `tools/patch_frozen_cv2.py`（7,170 B），
+  `machine_setup.py` 经 `GPU_CV2_PATCH_TOOL` + `runpy` 在 `inspect_gpu_addon` 与 `ensure_gpu_addon` 的"下载后"和
+  "已存在"两处调 `ensure_gpu_addon_cv2_portable()`，`analysis_core.py` 又在 `cuda_status`、`run_conda_worker`、
+  `fast_roi_backend` 之前各补一道，所以旧扩展装在机器上无需重装就能被修好。修复动作写进
+  `%ProgramData%\NewLight_Analysis\setup_progress.log`，实测留下 `2026-11-06 16:59:24` 与 `16:59:32` 两行
+  `已修复 GPU 扩展的 OpenCV 加载配置：2 个文件改为相对路径。`
+  **实测（7 臂，`measure_final.log`；从第 7 次重建的干净 dist 解包新扩展，13.3 秒）**：前三臂用扩展 worker 直跑探测——
+  出厂 loader（exit 0 / `bundled:true`）、"loader 指向不存在的构建目录"（exit 1 / 复现用户 ImportError）、
+  2026-08-04 那份 loader（exit 0 / `bundled:false` / 加载 anaconda pyd），证明报错与修复只由 loader 决定。后三臂走
+  冻结核心的快速 ROI：出厂态无需修复，26 masks、18,188 ROI 像素、7.16 秒；"loader 缺失"臂 126 B→173 B、
+  163 B→187 B 自愈后同 26 masks / 18,188 像素、6.84 秒；2026-08-04 泄漏臂 116 B→173 B、156 B→187 B 自愈后同
+  26 masks / 18,188 像素、6.73 秒——数值逐位一致，说明自愈只动路径不动推理。第七臂用出厂 loader 直跑扩展 ROI 任务
+  5.3 秒，`SUMMARY {"roi_count": 26, "raw_instance_count": 28}`，参数与核心 argv 对齐（`--image-size 960
+  --confidence 0.25 --candidate-confidence 0.05 --iou 0.70 --min-area 20 --max-area 4000 --device 0`）。设备令牌必须
+  是 `0`：`fast_roi_backend()` 原样转发用户令牌，`gpu` 不是 ultralytics/torch 的有效令牌，我第一版脚本写
+  `--device gpu` 是脚本的错、不是包的错。
+  **重建（第 7 次）**：`build_cpu_installer.bat /rebuild` → `rebuild7.log`：
+  `[NewLight] vendored fast ROI runtime -> 35 extra hidden imports`，包内闸门 CPU 导入 / Excel 导出
+  （`['Experiment Info', 'ROI Statistics']`）/ CPU 快速 ROI（`2 masks from 96 x 112`）/ CaImAn 1.13.1 全绿，GPU 两项
+  按"未装扩展→打印提示并跳过"；Inno `Successful compile (155.828 sec)`，产物
+  `Output\NewLight_Analysis_Core_Setup_v1.0.3.exe` 473,099,850 bytes、SHA-256 `8d15b156e0977e99699e45ea397b4304d95ec9232f264568b6186d50293be8bb`。
+  进包校验：`_internal\tools\patch_frozen_cv2.py` 7,170 B `ae0132ed3c0922183bb9270a0d4282407ca4af6b1c7826a3f3628940da8995b0`、
+  `_internal\gpu_addon_manifest.json` 793 B `0e5b13dd52b79369c5827d4ab142646b05ae21202a19b1edd41165f6ed141ede`，
+  与仓库同名文件逐字节一致。坑：在 Git Bash 里跑 `cmd /c build_cpu_installer.bat /rebuild`，MSYS 会把 `/rebuild`
+  转换成 `D:/Git/rebuild`，构建照样"成功"但产物按字节与上一版相同，等于白跑一次；改成批处理 `run_rebuild.bat`
+  前台调用才真的重建。收尾 dist 1,573,863,221 B 且无 `_internal\GPU_Addon`。
+  **装扩展后的实机校验**：`run_verify.bat`（先 `cd /d` 进 dist 再 `call check_backends.bat /verify-only`，同样是为了
+  躲开 Git Bash 把 `/verify-only` 改写成 `D:/Git/verify-only`）17:00:17.50→17:00:37.19 全绿，
+  `Verification exit code: 0`、`WRAPPER_EXIT=0`，GPU 两臂不再是跳过：`NeuSuite fast ROI GPU worker OK.`、
+  `NVIDIA GeForce RTX 4080` + `DeepCAD-RT CUDA worker OK.`。
+  **发布（入口和顺序都有讲究）**：api.github.com 的 `POST /releases/{id}/assets?name=` 现在立刻返回 404——不是权限
+  问题（token 正常，`X-OAuth-Scopes: gist, repo, workflow`，该 release `permissions.push/admin` 为真，对现有资产
+  PATCH 200、DELETE 204），404 只花 0.5 秒且 `size_upload=5`，说明这个上传入口本身已经死了；可用入口是 release
+  载荷里的 `upload_url`（`uploads.github.com`），实测还快 2–10 倍。先用一个 5 字节探针资产验证它返回 201、随即
+  DELETE 拿到 204（无残留），再上真包：安装包资产 **716564552** 201，67.16 秒传 473,099,850 B ≈7.04 MB/s，GitHub
+  digest 与本地 `sha256sum` 逐字符一致 → DELETE 旧资产 716263532（204）→ `PATCH` 回正式名
+  `NewLight_Analysis_Core_Setup_v1.0.1.exe`（200）→ 公开链接 `Range: bytes=0-0` 经 302 拿到 **206** 且
+  `Content-Range: bytes 0-0/473099850`。然后 part02 资产 **716569287** 201，173.55 秒传 1,080,860,596 B
+  ≈6.23 MB/s，digest 一致 → DELETE 旧 501133721（204）→ `PATCH` 回 `GPU_Addon_CUDA.zip.part02`（200）→
+  `Range: bytes=0-0` 经 302 **206**、`Content-Range: bytes 0-0/1080860596`；part01（501132214，`e8e361ff…`）没变所以
+  没碰。顺序必须"先安装包、后 part02"：新核心 2.0.1 清单期望 part02 = `7f733c90…`，而 `%ProgramData%` 里缓存的旧整包
+  是 `2b2aec07…`（2,580,860,592 B），不一致时新核心打印 `缓存与清单不一致，将重新下载并覆盖。` 并重下两段；反过来先换
+  part02、用户还拿着老核心，就会被老核心 `GPU 扩展分段 2 SHA-256 校验失败，已拒绝安装。` 挡在门外。回读：Release
+  `gpu-addon-v1`（id 364711161）2 个资产、Release `v1.0.1`（id 364821243）1 个资产，包内清单的两个分段 digest 与线上
+  资产 digest MATCH，所以全新安装拿到的是"字节可验证的可重定位扩展"。
+  **回归**：离线全套 `1 failed, 420 passed, 2 skipped, 15 subtests passed in 16.42s`。新增
+  `tests/test_gpu_addon_cv2_selfheal.py` 26 项，含 `test_manifest_points_at_a_republishable_portable_archive()`
+  断言清单不再指向泄漏整包 `2b2aec07e6066295f29cb0672de98199331eeed654cc7b019f8bbb30d5823cb2`；
+  `tests/test_fast_roi_build_scripts.py` 里对 `build_full_exe.bat` 的断言改成
+  `pytest.skip("build_full_exe.bat is ignored by git and only exists on build machines")`。唯一失败仍是既有环境问题：
+  `tests/test_caiman_headless.py::test_caiman_version_uses_bundled_release_without_git_or_package_directory` 在
+  `newlight_cpu` 里 `ModuleNotFoundError: No module named 'torch'`（该环境没装 torch，与本轮改动无关）。
+  **推送（本轮没推上去）**：代码提交 `9a6ecd0` + 本条文档提交。直连四次都失败——`ls-remote` 两次 `Recv failure: Connection was reset`、
+  `push` 两次 `Failed to connect to github.com port 443 after 21090 / 21104 ms`，而同一时刻 `https://api.github.com` 返回 200（20.205.243.168）、`https://uploads.github.com` 返回 302，发布链路
+  照常可用，即本机 `github.com` 与 `api.github.com` 分裂。代理这条路也不通：注册表 `ProxyEnable=0x0`、
+  `ProxyServer=127.0.0.1:7897`，而 7897 没有在监听；探测的 13 个常见代理端口（7890/7897/7898/1080/10808/10809/8118/8888 等）`curl -x` 全部返回 000。
+  下一步等用户把 VPN/代理打开后 `git push origin HEAD:codex/unified-gpu-addon`；若远程被网页端提交领先，先
+  `git fetch` + `git rebase --autostash origin/codex/unified-gpu-addon` 保持线性，再用 `ls-remote` 回读确认。
