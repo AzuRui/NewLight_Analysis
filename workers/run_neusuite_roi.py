@@ -77,6 +77,11 @@ def filter_masks_by_area(masks, scores, min_area, max_area):
     score_values = [float(score) for score in scores]
     if array.shape[0] != len(score_values):
         raise ValueError("Mask and score counts do not match")
+    if array.shape[0] == 0:
+        # An empty field is a normal result, not an error: numpy cannot infer the
+        # trailing size of a zero-element array, so "reshape(0, -1)" used to raise
+        # ValueError and the whole run failed instead of reporting zero ROIs.
+        return array.reshape((0,) + tuple(array.shape[1:])), [], []
     areas = array.reshape(array.shape[0], -1).sum(axis=1)
     selected = [
         index

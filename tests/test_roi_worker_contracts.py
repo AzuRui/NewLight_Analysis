@@ -279,6 +279,49 @@ def test_fast_worker_area_filter_keeps_scores_aligned_with_instances():
     assert source_indices == [1]
 
 
+def test_fast_worker_area_filter_accepts_a_field_with_no_instances():
+    # Measured in the frozen CPU package (2026-11-06): an image the model does not
+    # detect anything in reached reshape(0, -1) and died with
+    # "cannot reshape array of size 0 into shape (0,newaxis)", so a blank field was
+    # reported as a backend failure instead of zero ROIs.
+    worker = load_worker("run_neusuite_roi.py")
+
+    filtered, scores, source_indices = worker.filter_masks_by_area(
+        np.zeros((0, 5, 6), dtype=bool),
+        scores=[],
+        min_area=10,
+        max_area=0,
+    )
+
+    assert filtered.shape == (0, 5, 6)
+    assert filtered.dtype == bool
+    assert scores == []
+    assert source_indices == []
+
+
+def test_fast_worker_area_filter_can_empty_a_non_empty_input():
+    worker = load_worker("run_neusuite_roi.py")
+    masks = np.zeros((2, 4, 4), dtype=bool)
+    masks[0, 0, 0] = True
+    masks[1, :2, :2] = True
+
+    filtered, scores, source_indices = worker.filter_masks_by_area(
+        masks, scores=[0.9, 0.9], min_area=100, max_area=0
+    )
+
+    assert filtered.shape == (0, 4, 4)
+    assert scores == [] and source_indices == []
+
+
+def test_fast_worker_mask_resize_handles_zero_instances():
+    worker = load_worker("run_neusuite_roi.py")
+
+    restored = worker.resize_instance_masks(np.zeros((0, 3, 4, 4), dtype=np.float32), (12, 20))
+
+    assert restored.shape == (0, 12, 20)
+    assert restored.dtype == bool
+
+
 def test_fast_worker_imports_custom_runtime_through_method_package(tmp_path):
     worker = load_worker("run_neusuite_roi.py")
     method = tmp_path / "method"
