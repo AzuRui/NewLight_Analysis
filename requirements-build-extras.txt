@@ -1,0 +1,9 @@
+# Build-only Python packages that the conda solver does not bring in, needed by
+# the CPU inference path of fast ROI. Installed with --no-deps on purpose: pip
+# must not replace the conda CPU torch/torchvision pair that the bundle freezes.
+#
+#   python -m pip install --no-deps -r requirements-build-extras.txt
+#
+# timm is imported by the vendored Ultralytics runtime (method/ultralytics/nn/tasks.py)
+# and was measured as part of the CPU inference closure on 2026-11-06.
+timm==1.0.31

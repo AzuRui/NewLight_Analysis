@@ -24,6 +24,17 @@ set "KERAS_BACKEND=torch"
 set "CAIMAN_DATA=%CD%\CaImAn_Resources"
 set "CAIMAN_TEMP=%TEMP%\newlight_caiman_setup"
 
+echo Installing the build-only packages CPU fast ROI needs (without touching torch)...
+call conda run -p "%NEWLIGHT_CAIMAN_PREFIX%" --no-capture-output python -m pip install --no-deps -r requirements-build-extras.txt
+if errorlevel 1 (
+  echo Failed to install requirements-build-extras.txt.
+  exit /b 1
+)
+
+echo Checking that the CPU inference stack imports as one matched set...
+call conda run -p "%NEWLIGHT_CAIMAN_PREFIX%" --no-capture-output python -c "import torch, torchvision, timm; assert not torch.version.cuda, 'a CUDA build of torch landed in the CPU env'; print('torch', torch.__version__); print('torchvision', torchvision.__version__); print('timm', timm.__version__)"
+if errorlevel 1 exit /b 1
+
 if not exist "%CAIMAN_DATA%\model" mkdir "%CAIMAN_DATA%\model"
 if not exist "%CAIMAN_TEMP%" mkdir "%CAIMAN_TEMP%"
 

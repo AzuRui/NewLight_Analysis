@@ -849,7 +849,8 @@ def ensure_first_run_setup(
                 "CPU 模式初始化完成",
                 "当前电脑未检测到 NVIDIA 显卡，已跳过 GPU/CUDA 驱动安装。\n\n"
                 f"检测结果：\n{detected}\n\n"
-                "DeepCAD-RT 降噪等 CUDA 专用功能不可用；支持 CPU 的预处理、分析和快速 ROI 功能仍可使用。",
+                "DeepCAD-RT 降噪等 CUDA 专用功能不可用；预处理、分析和快速 ROI 均由软件内置后端以 CPU 运行，"
+                "安装统一 GPU 扩展后快速 ROI 可自动改用 CUDA 加速。",
             ),
         )
         return True
@@ -885,7 +886,8 @@ def ensure_first_run_setup(
             dialog_visibility,
             lambda: services.show_info(
                 "以 CPU 模式继续",
-                "已取消 NVIDIA 驱动安装。NewLight_Analysis 将继续启动；DeepCAD-RT 和快速 GPU ROI 等 CUDA 功能暂不可用。",
+                "已取消 NVIDIA 驱动安装。NewLight_Analysis 将继续启动；DeepCAD-RT 等 CUDA 专用功能暂不可用，"
+                "快速 ROI 会自动改用 CPU 推理。",
             ),
         )
         return True

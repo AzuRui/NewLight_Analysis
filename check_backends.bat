@@ -113,9 +113,47 @@ if not "!EXCEL_CHECK_RESULT!"=="0" (
   set "FAILED=1"
 )
 echo.
-echo Authorized NeuSuite fast ROI backend:
+echo NeuSuite fast ROI CPU backend (model bundled in the core package):
+set "CORE_ROI_MODEL=%RESOURCE_DIR%\NeuSuite2p\segment_model.pt"
+set "CORE_ROI_RUNTIME=%RESOURCE_DIR%\NeuSuite2p\method\ultralytics"
+if not exist "%CORE_ROI_MODEL%" (
+  echo No bundled CPU model in this package:
+  echo   %CORE_ROI_MODEL%
+  if exist "%GPU_WORKER%" (
+    echo The GPU addon is installed, so fast ROI still runs on CUDA. A core package
+    echo rebuilt with the bundled model is needed for machines without a GPU addon.
+  ) else (
+    echo Without the bundled model and without the GPU addon, fast ROI cannot run.
+    echo Install the GPU addon with: check_backends.bat /update-gpu
+    set "FAILED=1"
+  )
+) else if not exist "%CORE_ROI_RUNTIME%" (
+  echo Bundled NeuSuite runtime is incomplete:
+  echo   %CORE_ROI_RUNTIME%
+  set "FAILED=1"
+) else (
+  rem Every variable below is both set and used inside this parenthesised block,
+  rem so it needs delayed expansion; an early percent expansion would be empty.
+  set "ROI_CPU_DIR=!TEMP!\newlight_roi_cpu_verify_!RANDOM!_!RANDOM!"
+  mkdir "!ROI_CPU_DIR!" >nul 2>nul
+  pushd "!ROI_CPU_DIR!"
+  echo   start !TIME!
+  "%WORKER_PY%" -c "import numpy, pathlib; import analysis_core as core; image = (numpy.random.default_rng(0).random((96, 112)) * 200).astype('float32'); result = core.run_fast_roi_segmentation(image, str(pathlib.Path(r'!ROI_CPU_DIR!')), device='cpu', image_size=320); print('CPU fast ROI backend:', result.log.splitlines()[0]); print('CPU fast ROI OK:', int(result.masks.shape[0]), 'masks from', int(result.masks.shape[1]), 'x', int(result.masks.shape[2]))"
+  set "ROI_CPU_RESULT=!ERRORLEVEL!"
+  popd
+  rmdir /s /q "!ROI_CPU_DIR!" >nul 2>nul
+  echo   done !TIME! exit code !ROI_CPU_RESULT!
+  if not "!ROI_CPU_RESULT!"=="0" (
+    echo Fast ROI CPU check failed with exit code !ROI_CPU_RESULT!.
+    echo The bundled torch/timm/torchvision stack or the shipped NeuSuite model is broken.
+    set "FAILED=1"
+  )
+)
+echo.
+echo Authorized NeuSuite fast ROI GPU backend:
 if not exist "%GPU_WORKER%" (
-  echo Optional GPU ROI addon is not installed; skipping NeuSuite fast ROI check.
+  echo Optional GPU ROI addon is not installed; fast ROI stays on the CPU path above.
+  echo To add CUDA acceleration, run: check_backends.bat /update-gpu
 ) else if not exist "%GPU_ROI_SCRIPT%" (
   echo GPU addon is out of date: the fast ROI worker script is missing.
   echo   %GPU_ROI_SCRIPT%

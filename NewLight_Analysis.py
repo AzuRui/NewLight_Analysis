@@ -1882,6 +1882,7 @@ class NewLightApp:
         ttk.Radiobutton(accel_box, text="CPU", variable=self.acceleration_var, value="cpu").grid(row=0, column=1, sticky="w")
         ttk.Radiobutton(accel_box, text="GPU", variable=self.acceleration_var, value="gpu").grid(row=0, column=2, sticky="w")
         ttk.Button(accel_box, text="检查 CUDA", style="Sidebar.TButton", command=self.check_cuda_status).grid(row=1, column=0, columnspan=3, sticky="ew", pady=(6, 0))
+        ttk.Button(accel_box, text="安装 GPU 扩展", style="Sidebar.TButton", command=self.install_gpu_addon).grid(row=2, column=0, columnspan=3, sticky="ew", pady=(2, 0))
         for action_id, spec in PREPROCESS_PANEL_SPECS.items():
             row = len(pre_box.grid_slaves())
             ttk.Button(
@@ -3465,12 +3466,75 @@ class NewLightApp:
                 f"主 Python torch CUDA：{'可用' if status['torch_cuda_available'] else '不可用'} {status['torch_device']}",
                 f"OpenCV CUDA 设备数：{status['opencv_cuda_devices']}",
                 f"NeuroSeg3 CUDA：{'可用' if status['neuroseg3_cuda_available'] else '不可用'} {status['neuroseg3_device']}",
+                f"快速 ROI：{self.fast_roi_backend_summary()}",
             ]
             message = "\n".join(lines)
             self.log(message.replace("\n", " | "))
             messagebox.showinfo("CUDA 状态", message)
         except Exception as exc:
             messagebox.showerror("CUDA 状态", str(exc))
+
+    def fast_roi_backend_summary(self) -> str:
+        """Describe the backend fast ROI would actually use, without raising."""
+        try:
+            backend = core.fast_roi_backend("auto")
+            return f"{backend['label']}｜{backend['reason']}"
+        except Exception as exc:  # noqa: BLE001 - a status line must never break the dialog
+            return f"当前不可用：{exc}"
+
+    def install_gpu_addon(self):
+        """One-click install of the optional unified GPU extension, with live progress."""
+        if core.GPU_WORKER_EXE.is_file():
+            message = (
+                f"统一 GPU 扩展已安装：\n{core.GPU_ADDON_DIR}\n\n"
+                "快速 ROI 会在检测到可用 CUDA 设备时自动使用它；"
+                "如需更新到新版本，请先删除该目录再重新安装。"
+            )
+            self.log("统一 GPU 扩展已安装。")
+            messagebox.showinfo("GPU 扩展", message)
+            return
+        application_dir = (
+            Path(sys.executable).resolve().parent if core.IS_FROZEN else Path(core.PROJECT_DIR)
+        )
+        started = messagebox.askyesno(
+            "安装 GPU 扩展",
+            "统一 GPU 扩展为 DeepCAD-RT 降噪与快速 ROI 的 CUDA 加速提供 GPU 后端，"
+            "压缩包约 2.5 GB，安装后占用约 3.7 GB 磁盘空间。\n\n"
+            f"目标目录：{core.GPU_ADDON_DIR}\n"
+            "下载地址会缓存在 ProgramData，重复安装不再重新下载。\n\n"
+            "是否现在下载并安装？（不安装也可以，快速 ROI 仍能以 CPU 运行）",
+        )
+        if not started:
+            self.log("已取消 GPU 扩展安装；快速 ROI 继续使用 CPU。")
+            return
+
+        def report(message):
+            self.post_ui_callback(self.log, f"[GPU 扩展] {message}")
+
+        def worker(_cancel_event):
+            import machine_setup
+
+            report(f"开始安装，目标目录：{application_dir}")
+            return machine_setup.ensure_gpu_addon(application_dir, progress=report)
+
+        def finish(result):
+            ok, message = result
+            if ok:
+                self.log(f"GPU 扩展安装完成：{message}")
+                self.log(f"快速 ROI 后端：{self.fast_roi_backend_summary()}")
+                messagebox.showinfo(
+                    "GPU 扩展",
+                    f"{message}\n\nDeepCAD-RT 降噪与快速 ROI 的 CUDA 加速现已可用。",
+                )
+            else:
+                self.log(f"GPU 扩展安装未完成：{message}")
+                messagebox.showerror(
+                    "GPU 扩展",
+                    f"{message}\n\n快速 ROI 仍可使用 CPU 推理；"
+                    "也可在命令行运行 check_backends.bat /update-gpu 查看详细错误输出。",
+                )
+
+        self.enqueue_task("安装 GPU 扩展", worker, finish, cancellable=False)
 
     def require_movie(self):
         if self.state.movie is None:
@@ -7467,7 +7531,10 @@ class NewLightApp:
                 },
             ],
             self._run_fast_roi_from_panel,
-            description="使用已授权的 NeuSuite 神经结构实例模型处理所选科学灰度投影；不使用伪彩或显示对比度。",
+            description=(
+                "使用已授权的 NeuSuite 神经结构实例模型处理所选科学灰度投影；不使用伪彩或显示对比度。"
+                "运行设备选“自动”时：检测到可用 CUDA 设备就用 GPU 扩展加速，否则用软件内置模型以 CPU 运行。"
+            ),
             apply_text="运行快速分割",
             help_text=(
                 "置信度越低召回越高，也会增加假阳性；建议从 0.25 开始。IoU 控制重叠实例的抑制，"

@@ -28,7 +28,7 @@ def test_caiman_wrapper_preserves_movie_dtype_and_forwards_all_controls(tmp_path
     movie = (np.arange(12 * 7 * 9).reshape(12, 7, 9) * 17).astype(np.uint16)
     observed = {}
 
-    def fake_run(environment, script, args, cwd=None, timeout=None):
+    def fake_run(environment, script, args, cwd=None, timeout=None, worker_exe=None):
         observed.update(environment=environment, script=script, args=list(args), cwd=cwd, timeout=timeout)
         worker_input = Path(arg_value(args, "--input"))
         loaded = tifffile.imread(worker_input)
@@ -149,7 +149,7 @@ def test_fast_wrapper_preserves_scientific_projection_and_authorized_paths(tmp_p
     (runtime / "ultralytics").mkdir(parents=True)
     observed = {}
 
-    def fake_run(environment, script, args, cwd=None, timeout=None):
+    def fake_run(environment, script, args, cwd=None, timeout=None, worker_exe=None):
         observed.update(environment=environment, script=script, args=list(args), cwd=cwd, timeout=timeout)
         worker_input = Path(arg_value(args, "--input"))
         loaded = tifffile.imread(worker_input)
@@ -204,7 +204,7 @@ def test_fast_wrapper_preserves_scientific_projection_and_authorized_paths(tmp_p
 
 
 def test_wrapper_rejects_worker_artifact_with_wrong_spatial_shape(tmp_path, monkeypatch):
-    def fake_run(environment, script, args, cwd=None, timeout=None):
+    def fake_run(environment, script, args, cwd=None, timeout=None, worker_exe=None):
         output = Path(arg_value(args, "--output"))
         save_roi_artifact(output, np.ones((1, 3, 4), dtype=bool), image_shape=(3, 4))
         Path(arg_value(args, "--summary")).write_text("{}", encoding="utf-8")
@@ -236,7 +236,7 @@ def test_wrapper_rejects_worker_artifact_with_wrong_spatial_shape(tmp_path, monk
 def test_wrapper_rejects_misaligned_candidate_quality_arrays(
     tmp_path, monkeypatch, backend, array_name, bad_array
 ):
-    def fake_run(environment, script, args, cwd=None, timeout=None):
+    def fake_run(environment, script, args, cwd=None, timeout=None, worker_exe=None):
         output = Path(arg_value(args, "--output"))
         summary = Path(arg_value(args, "--summary"))
         arrays = {array_name: bad_array}
@@ -269,7 +269,7 @@ def test_wrapper_rejects_misaligned_candidate_quality_arrays(
 
 @pytest.mark.parametrize("backend", ["fast", "caiman"])
 def test_candidate_wrapper_rejects_missing_required_quality_arrays(tmp_path, monkeypatch, backend):
-    def fake_run(environment, script, args, cwd=None, timeout=None):
+    def fake_run(environment, script, args, cwd=None, timeout=None, worker_exe=None):
         output = Path(arg_value(args, "--output"))
         summary = Path(arg_value(args, "--summary"))
         save_roi_artifact(
@@ -300,7 +300,7 @@ def test_candidate_wrapper_rejects_missing_required_quality_arrays(tmp_path, mon
 
 
 def test_zero_roi_artifact_is_returned_without_inventing_global_roi(tmp_path, monkeypatch):
-    def fake_run(environment, script, args, cwd=None, timeout=None):
+    def fake_run(environment, script, args, cwd=None, timeout=None, worker_exe=None):
         output = Path(arg_value(args, "--output"))
         save_roi_artifact(output, np.zeros((0, 4, 6), dtype=bool), image_shape=(4, 6))
         Path(arg_value(args, "--summary")).write_text("{}", encoding="utf-8")
@@ -322,7 +322,7 @@ def test_failed_worker_removes_only_its_session_job_directory(tmp_path, monkeypa
     protected = tmp_path / "validation_sample.txt"
     protected.write_text("keep", encoding="utf-8")
 
-    def fake_run(environment, script, args, cwd=None, timeout=None):
+    def fake_run(environment, script, args, cwd=None, timeout=None, worker_exe=None):
         return SimpleNamespace(returncode=2, stdout="", stderr="backend failed")
 
     monkeypatch.setattr(core, "run_conda_worker", fake_run)

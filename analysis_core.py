@@ -3829,6 +3829,144 @@ def merge_caiman_multiscale_roi_results(
     )
 
 
+_FAST_ROI_CUDA_CACHE: dict[str, bool] = {}
+
+
+def fast_roi_cuda_available(*, refresh: bool = False) -> bool:
+    """Ask the worker that would actually run whether CUDA is usable, cached per process.
+
+    The bundled GPU worker carries its own CUDA build of torch, so the core torch's
+    ``cuda.is_available()`` says nothing about it; probing costs a subprocess.
+    """
+    if IS_FROZEN:
+        if not GPU_WORKER_EXE.is_file():
+            return False
+        if not refresh and "frozen" in _FAST_ROI_CUDA_CACHE:
+            return bool(_FAST_ROI_CUDA_CACHE["frozen"])
+        available = False
+        try:
+            proc = subprocess.run(
+                [str(GPU_WORKER_EXE), "-c", "import torch; print(torch.cuda.is_available())"],
+                capture_output=True,
+                text=True,
+                timeout=60,
+                **hidden_subprocess_kwargs(),
+            )
+            lines = [line.strip().lower() for line in (proc.stdout or "").splitlines() if line.strip()]
+            available = bool(lines and lines[0] == "true")
+        except Exception:
+            available = False
+        _FAST_ROI_CUDA_CACHE["frozen"] = available
+        return available
+    try:
+        return bool(__import__("torch").cuda.is_available())
+    except Exception:
+        return False
+
+
+def fast_roi_cpu_ready() -> bool:
+    """True when the core package itself can run the NeuSuite model on CPU."""
+    return NEUSUITE_DEFAULT_WEIGHTS.is_file() and (NEUSUITE_RUNTIME_ROOT / "ultralytics").is_dir()
+
+
+def fast_roi_backend(
+    device: str = "auto",
+    *,
+    gpu_ready: bool | None = None,
+    cpu_ready: bool | None = None,
+    cuda_ready: bool | None = None,
+) -> dict[str, object]:
+    """Choose the worker, weights and device argument for fast ROI.
+
+    CUDA is an accelerator, not a requirement: the core package ships the same
+    vendored Ultralytics runtime and model weights, so the CPU path runs on
+    ``NewLight_Worker.exe`` with the core torch when the GPU addon is absent or has
+    no usable device.  Explicit ``cpu`` must never reach a CUDA worker and explicit
+    device indices must fail loudly instead of silently falling back.
+    """
+    requested = str(device or "auto").strip()
+    lowered = requested.lower()
+    wants_cpu = lowered == "cpu"
+    wants_gpu = lowered not in {"auto", "cpu"}
+    gpu_ready = GPU_WORKER_EXE.is_file() if gpu_ready is None else bool(gpu_ready)
+    cpu_ready = fast_roi_cpu_ready() if cpu_ready is None else bool(cpu_ready)
+    cuda_ready = fast_roi_cuda_available() if cuda_ready is None else bool(cuda_ready)
+
+    if not IS_FROZEN:
+        # Source trees keep the historical conda path; device is forwarded untouched.
+        return {
+            "mode": "conda",
+            "worker_exe": None,
+            "script": WORKER_DIR / "run_neusuite_roi.py",
+            "weights": NEUSUITE_DEFAULT_WEIGHTS,
+            "runtime_root": NEUSUITE_RUNTIME_ROOT,
+            "device": requested,
+            "label": "NeuSuite 快速 ROI（conda neuroseg3）",
+            "reason": f"源码运行，按请求设备 {requested} 交给 conda 环境。",
+        }
+
+    if wants_cpu:
+        if not cpu_ready:
+            raise FileNotFoundError(
+                "核心包缺少快速 ROI 模型（NeuSuite2p 权重与 Ultralytics 运行时），"
+                "无法在 CPU 上运行；请安装 GPU 扩展或更新到自带 CPU 模型的应用版本。"
+            )
+        return {
+            "mode": "cpu",
+            "worker_exe": None,
+            "script": WORKER_DIR / "run_neusuite_roi.py",
+            "weights": NEUSUITE_DEFAULT_WEIGHTS,
+            "runtime_root": NEUSUITE_RUNTIME_ROOT,
+            "device": "cpu",
+            "label": "NeuSuite 快速 ROI（CPU，核心包内置模型）",
+            "reason": "运行设备选择为 CPU。",
+        }
+
+    if gpu_ready and cuda_ready:
+        return {
+            "mode": "gpu",
+            "worker_exe": GPU_WORKER_EXE,
+            "script": GPU_ADDON_DIR / "workers" / "run_neusuite_roi.py",
+            "weights": GPU_NEUSUITE_DEFAULT_WEIGHTS,
+            "runtime_root": GPU_NEUSUITE_RUNTIME_ROOT,
+            "device": requested,
+            "label": "NeuSuite 快速 ROI（GPU）",
+            "reason": f"已检测到可用 CUDA 设备，使用 GPU 扩展 worker（设备 {requested}）。",
+        }
+
+    if not cpu_ready:
+        if wants_gpu:
+            if gpu_ready:
+                raise RuntimeError(
+                    f"运行设备 {requested} 需要 CUDA，但 GPU 扩展里检测不到可用的 CUDA 设备；"
+                    "请把运行设备改为 自动 或 CPU，或确认显卡驱动与显卡状态。"
+                )
+            raise FileNotFoundError("未安装 GPU 扩展，且核心包缺少 CPU 模型，无法运行快速 ROI。")
+        raise FileNotFoundError(
+            "快速 ROI 需要 NeuSuite 模型：核心包未带 CPU 模型，GPU 扩展也未安装。"
+            "请运行 check_backends.bat /update-gpu 安装 GPU 扩展，或更新到自带 CPU 模型的应用版本。"
+        )
+
+    if wants_gpu:
+        raise RuntimeError(
+            f"运行设备 {requested} 需要 CUDA，但当前检测不到可用的 CUDA 设备"
+            + ("（GPU 扩展已安装）。" if gpu_ready else "（未安装 GPU 扩展）。")
+            + "已准备好 CPU 推理，请把运行设备改为 自动 或 CPU。"
+        )
+    return {
+        "mode": "cpu",
+        "worker_exe": None,
+        "script": WORKER_DIR / "run_neusuite_roi.py",
+        "weights": NEUSUITE_DEFAULT_WEIGHTS,
+        "runtime_root": NEUSUITE_RUNTIME_ROOT,
+        "device": "cpu",
+        "label": "NeuSuite 快速 ROI（CPU，核心包内置模型）"
+        if not gpu_ready
+        else "NeuSuite 快速 ROI（CPU，未检测到可用 CUDA 设备）",
+        "reason": "未检测到可用 CUDA 设备，自动改用 CPU 推理；安装 GPU 扩展后可加速。",
+    }
+
+
 def run_fast_roi_segmentation(
     input_image: np.ndarray,
     session_dir: str,
@@ -3855,22 +3993,19 @@ def run_fast_roi_segmentation(
     artifact_path = job_dir / "fast_rois.npz"
     summary_path = job_dir / "fast_summary.json"
     tifffile.imwrite(input_path, image, photometric="minisblack")
-    if IS_FROZEN:
-        if not GPU_WORKER_EXE.is_file():
-            raise FileNotFoundError("未安装 GPU 扩展，快速 ROI 需要 CUDA GPU worker。")
-        # 冻结版必须运行 GPU 扩展自带的 worker 脚本：GPU worker 可执行文件携带的
-        # 是 GPU_Addon 的 torch 原生库，若运行主包 workers 脚本会加载主包 torch 的
-        # python 文件，两者版本错配（主包 2.12.1 引用 Stream.is_capturing，GPU 2.10
-        # 已移除）会在 import 阶段抛 AttributeError 并导致 worker_launcher 崩溃。
-        script = GPU_ADDON_DIR / "workers" / "run_neusuite_roi.py"
-        if not script.is_file():
-            raise FileNotFoundError(f"GPU 扩展缺少快速 ROI worker 脚本：{script}")
-        weights_path = GPU_NEUSUITE_DEFAULT_WEIGHTS.resolve()
-        runtime_path = GPU_NEUSUITE_RUNTIME_ROOT.resolve()
-    else:
-        script = WORKER_DIR / "run_neusuite_roi.py"
-        weights_path = Path(weights).resolve() if weights else NEUSUITE_DEFAULT_WEIGHTS.resolve()
-        runtime_path = Path(runtime_root).resolve() if runtime_root else NEUSUITE_RUNTIME_ROOT.resolve()
+    backend = fast_roi_backend(device)
+    # 冻结版的 GPU 路径必须运行扩展自带的 worker 脚本与权重：GPU worker 可执行文件
+    # 携带的是 GPU_Addon 的 torch 原生库，若运行主包 workers 脚本会加载主包 torch 的
+    # python 文件，两者版本错配（主包 2.12.1 引用 Stream.is_capturing，GPU 2.10
+    # 已移除）会在 import 阶段抛 AttributeError 并导致 worker_launcher 崩溃。CPU 路径
+    # 反过来必须用主包脚本加主包 torch，扩展目录整体不进 sys.path。
+    script = Path(backend["script"])
+    if not script.is_file():
+        raise FileNotFoundError(f"快速 ROI worker 脚本缺失：{script}")
+    weights_path = Path(weights).resolve() if weights else Path(backend["weights"]).resolve()
+    runtime_path = (
+        Path(runtime_root).resolve() if runtime_root else Path(backend["runtime_root"]).resolve()
+    )
     args = [
         "--input", str(input_path),
         "--output", str(artifact_path),
@@ -3883,22 +4018,21 @@ def run_fast_roi_segmentation(
         "--iou", str(float(iou)),
         "--min-area", str(int(min_area)),
         "--max-area", str(int(max_area)),
-        "--device", str(device),
+        "--device", str(backend["device"]),
     ]
     if candidate_mode:
         args.append("--candidate-mode")
     succeeded = False
     try:
-        worker_kwargs = {"worker_exe": GPU_WORKER_EXE} if IS_FROZEN else {}
         proc = run_conda_worker(
             "neuroseg3",
             str(script),
             args,
             cwd=str(PROJECT_DIR),
             timeout=1800,
-            **worker_kwargs,
+            worker_exe=backend["worker_exe"],
         )
-        log = _roi_worker_log(proc)
+        log = f"{backend['label']}｜{backend['reason']}\n{_roi_worker_log(proc)}"
         if proc.returncode != 0:
             raise RuntimeError(log or "Fast ROI extraction failed")
         result = _load_roi_worker_result(
