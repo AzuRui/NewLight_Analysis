@@ -2316,9 +2316,14 @@
   `pytest.skip("build_full_exe.bat is ignored by git and only exists on build machines")`。唯一失败仍是既有环境问题：
   `tests/test_caiman_headless.py::test_caiman_version_uses_bundled_release_without_git_or_package_directory` 在
   `newlight_cpu` 里 `ModuleNotFoundError: No module named 'torch'`（该环境没装 torch，与本轮改动无关）。
-  **推送（本轮没推上去）**：代码提交 `9a6ecd0` + 本条文档提交。直连四次都失败——`ls-remote` 两次 `Recv failure: Connection was reset`、
-  `push` 两次 `Failed to connect to github.com port 443 after 21090 / 21104 ms`，而同一时刻 `https://api.github.com` 返回 200（20.205.243.168）、`https://uploads.github.com` 返回 302，发布链路
-  照常可用，即本机 `github.com` 与 `api.github.com` 分裂。代理这条路也不通：注册表 `ProxyEnable=0x0`、
-  `ProxyServer=127.0.0.1:7897`，而 7897 没有在监听；探测的 13 个常见代理端口（7890/7897/7898/1080/10808/10809/8118/8888 等）`curl -x` 全部返回 000。
-  下一步等用户把 VPN/代理打开后 `git push origin HEAD:codex/unified-gpu-addon`；若远程被网页端提交领先，先
-  `git fetch` + `git rebase --autostash origin/codex/unified-gpu-addon` 保持线性，再用 `ls-remote` 回读确认。
+  **推送**：代码提交 `9a6ecd0`；本条文档先作为 `fcac2c3` 提交并推送，推送结果补在紧随其后的
+  docs 提交里（那个提交号不再自引用，避免循环）。直连前四次都失败——`ls-remote` 两次
+  `Recv failure: Connection was reset`、`push` 两次 `Failed to connect to github.com port 443 after 21090 /
+  21104 ms`，而同一时刻 `https://api.github.com` 返回 200（20.205.243.168）、`https://uploads.github.com` 返回
+  302，发布链路照常可用，即本机 `github.com` 与 `api.github.com` 分裂。代理这条路当时也不通：注册表
+  `ProxyEnable=0x0`、`ProxyServer=127.0.0.1:7897`，而 7897 没有在监听；探测的 13 个常见代理端口
+  （7890/7897/7898/1080/10808/10809/8118/8888 等）`curl -x` 全部返回 000。写完文档提交后**第五次直连重试即成功**：
+  `954b590..fcac2c3 HEAD -> codex/unified-gpu-addon`（`9a6ecd0` cv2 泄漏修复 + `fcac2c3` 本条文档），
+  `ls-remote` 回读远程 `refs/heads/codex/unified-gpu-addon` = `fcac2c34aaa800b23bfd84c67b61c9b6e41cd004`，与本地
+  `git rev-parse HEAD` 一致，`git push` 前没有 `fetch`/`rebase`，说明远程没被网页端提交领先。
+  结论照旧：`github.com` 抖动时先重试，别急着改远程 URL 或找代理端口。
