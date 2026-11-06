@@ -70,6 +70,41 @@ NEWLIGHT_CAIMAN_PREFIX = PROJECT_DIR / ".conda_envs" / "newlight_caiman"
 _CUPY_CACHE = None
 
 
+def ensure_gpu_addon_cv2_portable(worker_exe: Path | None = None) -> None:
+    """Repair the GPU addon's OpenCV loader configs before launching its worker.
+
+    The addon is frozen separately from the core package, so its ``cv2/config.py`` can
+    still name a build-machine directory such as ``D:/anaconda3/envs/caiman_latest``.
+    OpenCV's loader puts that path on ``sys.path``, fails to find the native extension
+    through it, re-imports the on-disk ``cv2`` package, and dies with
+    ``recursion is detected during loading of "cv2" binary extensions`` — the worker
+    never reaches a frame.  ``machine_setup`` already repairs this at startup; this is
+    the second chance right before a worker starts, for an addon that arrived later.
+
+    Best effort by design: a read-only install or a missing patcher must not fail the
+    task, so every problem is recorded in setup_progress.log and swallowed here.
+    """
+    if not IS_FROZEN:
+        return
+    if worker_exe is not None:
+        try:
+            Path(worker_exe).relative_to(GPU_ADDON_DIR)
+        except ValueError:
+            return
+    elif not GPU_ADDON_DIR.is_dir():
+        return
+    try:
+        import machine_setup
+
+        machine_setup.ensure_gpu_addon_cv2_portable(
+            APP_RESOURCE_DIR,
+            GPU_ADDON_DIR,
+            progress=machine_setup.setup_log_progress(),
+        )
+    except Exception:
+        pass
+
+
 def hidden_subprocess_kwargs() -> dict[str, object]:
     if os.name != "nt":
         return {}
@@ -273,6 +308,7 @@ def cuda_status(check_neuroseg3: bool = False) -> dict[str, object]:
         except Exception:
             pass
     elif GPU_WORKER_EXE.is_file():
+        ensure_gpu_addon_cv2_portable(GPU_WORKER_EXE)
         try:
             proc = subprocess.run(
                 [str(GPU_WORKER_EXE), "-c", "import torch; print(torch.cuda.is_available()); print(torch.cuda.get_device_name(0) if torch.cuda.is_available() else '')"],
@@ -3488,6 +3524,7 @@ def run_conda_worker(
             PROJECT_DIR / "NewLight_Worker.exe",
         ])
         worker_exe = next((candidate for candidate in worker_candidates if candidate.exists()), None)
+        ensure_gpu_addon_cv2_portable(worker_exe)
         if worker_exe is not None:
             cmd = [str(worker_exe), script] + args
         else:
@@ -3841,6 +3878,7 @@ def fast_roi_cuda_available(*, refresh: bool = False) -> bool:
     if IS_FROZEN:
         if not GPU_WORKER_EXE.is_file():
             return False
+        ensure_gpu_addon_cv2_portable(GPU_WORKER_EXE)
         if not refresh and "frozen" in _FAST_ROI_CUDA_CACHE:
             return bool(_FAST_ROI_CUDA_CACHE["frozen"])
         available = False

@@ -4,6 +4,7 @@ import ctypes
 import hashlib
 import json
 import os
+import runpy
 import shutil
 import subprocess
 import sys
@@ -358,6 +359,87 @@ def _sync_gpu_shared_modules(root: Path, addon_dir: Path) -> None:
         shutil.copy2(source, target)
 
 
+GPU_CV2_PATCH_TOOL = Path("tools") / "patch_frozen_cv2.py"
+_CV2_PATCHER_CACHE: dict[str, dict] = {}
+
+
+def setup_log_progress() -> ProgressCallback:
+    """A progress callback that appends to setup_progress.log, for callers elsewhere."""
+    return _file_logging_progress(setup_log_path())
+
+
+def _gpu_addon_cv2_present(addon_dir: Path) -> bool:
+    """Whether the addon carries its own frozen cv2 loader package."""
+    for candidate in (addon_dir / "cv2", addon_dir / "_internal" / "cv2"):
+        if (candidate / "__init__.py").is_file() and (candidate / "load_config_py3.py").is_file():
+            return True
+    return False
+
+
+def _load_cv2_patcher(resource_root: Path) -> dict | None:
+    """Load tools/patch_frozen_cv2.py so builds and installs share one implementation.
+
+    The file ships in the core package as data (``_internal/tools/``) rather than as an
+    importable module, because the PyInstaller spec itself runs it at build time.
+    """
+    tool_path = Path(resource_root) / GPU_CV2_PATCH_TOOL
+    if not tool_path.is_file():
+        return None
+    key = str(tool_path)
+    patcher = _CV2_PATCHER_CACHE.get(key)
+    if patcher is None:
+        patcher = runpy.run_path(str(tool_path))
+        _CV2_PATCHER_CACHE[key] = patcher
+    return patcher
+
+
+def ensure_gpu_addon_cv2_portable(
+    resource_root: Path,
+    addon_dir: Path | None = None,
+    *,
+    progress: ProgressCallback | None = None,
+) -> dict:
+    """Strip build-machine absolute paths from the GPU addon's OpenCV loader.
+
+    The addon is frozen separately from the core package, and the published build
+    carries ``cv2/config.py`` entries such as ``D:/anaconda3/envs/...``.  On any other
+    machine OpenCV's loader puts that missing directory on ``sys.path``, fails to find
+    the native extension, re-imports the ``cv2`` package, and raises
+    ``ERROR: recursion is detected during loading of "cv2" binary extensions`` — which
+    kills every GPU worker before it reads a frame.  Repairing the two small config
+    files here means an already installed addon works without re-downloading it.
+
+    Never raises.  A read-only addon directory is reported as ``unwritable``; installing
+    the addon there requires elevation in the first place, so there is nothing else to do.
+    """
+    addon_dir = Path(addon_dir) if addon_dir is not None else Path(resource_root) / GPU_ADDON_DIR_NAME
+    if not _gpu_addon_cv2_present(addon_dir):
+        return {"status": "not_installed", "cv2_dir": "", "patched": [], "reason": ""}
+    patcher = _load_cv2_patcher(Path(resource_root))
+    if patcher is None or not callable(patcher.get("ensure_portable_cv2_config")):
+        message = f"未找到 cv2 配置修复脚本：{Path(resource_root) / GPU_CV2_PATCH_TOOL}"
+        _emit(progress, message)
+        return {"status": "tool_missing", "cv2_dir": str(addon_dir), "patched": [], "reason": message}
+    try:
+        result = patcher["ensure_portable_cv2_config"](addon_dir)
+    except Exception as exc:  # pragma: no cover - the patcher itself swallows OSError
+        result = {
+            "status": "error",
+            "cv2_dir": str(addon_dir),
+            "patched": [],
+            "reason": f"{type(exc).__name__}: {exc}",
+        }
+    status = str(result.get("status", "error"))
+    if status == "repaired":
+        _emit(
+            progress,
+            f"已修复 GPU 扩展的 OpenCV 加载配置：{len(result.get('patched') or [])} 个文件改为相对路径。",
+        )
+    elif status in {"unwritable", "error", "no_extension"}:
+        _emit(progress, f"GPU 扩展的 OpenCV 加载配置未能修复（{status}）：{result.get('reason', '')}")
+    return result
+
+
 # Compatibility for source integrations that imported the old private helper.
 _deepcad_addon_ready = _gpu_addon_ready
 
@@ -372,6 +454,7 @@ def inspect_gpu_addon(
     root = _resource_dir(Path(application_dir))
     addon_dir = root / GPU_ADDON_DIR_NAME
     _sync_gpu_shared_modules(root, addon_dir)
+    ensure_gpu_addon_cv2_portable(root, addon_dir, progress=progress)
     if not _gpu_addon_ready(addon_dir):
         message = "GPU 扩展未配置，当前使用 CPU 模式。"
         _emit(progress, message)
@@ -420,6 +503,7 @@ def ensure_gpu_addon(
     root = _resource_dir(Path(application_dir))
     addon_dir = root / GPU_ADDON_DIR_NAME
     _sync_gpu_shared_modules(root, addon_dir)
+    ensure_gpu_addon_cv2_portable(root, addon_dir, progress=progress)
     if _gpu_addon_ready(addon_dir):
         _emit(progress, f"统一 GPU 扩展已安装：{addon_dir}")
         return True, "统一 GPU 扩展已安装。"
@@ -610,6 +694,7 @@ def ensure_gpu_addon(
                 else:
                     _copy_and_report(item, target)
             _sync_gpu_shared_modules(root, addon_dir)
+            ensure_gpu_addon_cv2_portable(root, addon_dir, progress=progress)
         finally:
             shutil.rmtree(staging, ignore_errors=True)
 
