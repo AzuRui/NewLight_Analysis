@@ -57,6 +57,25 @@ def test_build_script_copies_the_manual_and_refuses_to_lose_it() -> None:
     )
 
 
+@pytest.mark.skipif(not CPU_INSTALLER_SCRIPT.is_file(), reason="local build scripts are not published")
+def test_cpu_installer_refuses_to_pack_the_gpu_addon() -> None:
+    """Inno Setup copies everything under ``dist``, addon included.
+
+    ``check_backends.bat /update-gpu`` puts a ~3.7 GB ``_internal\\GPU_Addon`` into the
+    portable tree while a build is being verified.  Packing it would turn the CPU core
+    setup program from a few hundred megabytes into a multi-gigabyte download, so the
+    installer step has to stop instead of shipping it.
+    """
+    text = CPU_INSTALLER_SCRIPT.read_text(encoding="utf-8", errors="ignore")
+
+    guard = text.index(r'if exist "dist\NewLight_Analysis\_internal\GPU_Addon"')
+    compile_step = text.index("%ISCC%")
+    assert guard < compile_step, "the addon guard must run before Inno Setup is invoked"
+    section = text[guard:compile_step]
+    assert "goto :FAILED" in section, "the addon guard must stop the installer, not just warn"
+    assert "GPU addon" in section, "the failure message must name what has to be removed"
+
+
 def test_excel_dependency_is_declared_for_the_build_environment() -> None:
     """``openpyxl`` is not a pandas dependency, so nothing else pulls it into the env.
 

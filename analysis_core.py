@@ -3852,8 +3852,9 @@ def fast_roi_cuda_available(*, refresh: bool = False) -> bool:
                 timeout=60,
                 **hidden_subprocess_kwargs(),
             )
-            lines = [line.strip().lower() for line in (proc.stdout or "").splitlines() if line.strip()]
-            available = bool(lines and lines[0] == "true")
+            # The probe prints exactly "True"/"False", but a worker may also emit loader
+            # noise first, so look for the answer on its own line instead of index 0.
+            available = bool(re.search(r"(?mi)^\s*true\s*$", proc.stdout or ""))
         except Exception:
             available = False
         _FAST_ROI_CUDA_CACHE["frozen"] = available

@@ -165,13 +165,32 @@ def test_cuda_probe_is_skipped_when_the_addon_is_absent(monkeypatch, tmp_path):
     assert fake.calls == []
 
 
-def test_cuda_probe_caches_one_subprocess_answer(monkeypatch, tmp_path):
-    use_bundle(monkeypatch, tmp_path)
+def probe_subprocess(monkeypatch, core, stdout: str):
     fake = ExplodingSubprocess()
-    fake.run = lambda *a, **k: (fake.calls.append(a), sp.CompletedProcess(list(a[0]), 0, "True\n", ""))[1]
+    fake.run = lambda *a, **k: (fake.calls.append(a), sp.CompletedProcess(list(a[0]), 0, stdout, ""))[1]
     monkeypatch.setattr(core, "subprocess", fake)
     monkeypatch.setattr(core, "hidden_subprocess_kwargs", lambda: {})
     core._FAST_ROI_CUDA_CACHE.clear()
+    return fake
+
+
+def test_cuda_probe_tolerates_loader_noise(monkeypatch, tmp_path):
+    use_bundle(monkeypatch, tmp_path)
+    probe_subprocess(monkeypatch, core, "importing native libs...\nTrue\n")
+    assert core.fast_roi_cuda_available() is True
+
+    core._FAST_ROI_CUDA_CACHE.clear()
+    probe_subprocess(monkeypatch, core, "warning: no driver\nFalse\n")
+    assert core.fast_roi_cuda_available() is False
+
+    core._FAST_ROI_CUDA_CACHE.clear()
+    probe_subprocess(monkeypatch, core, "")
+    assert core.fast_roi_cuda_available() is False
+
+
+def test_cuda_probe_caches_one_subprocess_answer(monkeypatch, tmp_path):
+    use_bundle(monkeypatch, tmp_path)
+    fake = probe_subprocess(monkeypatch, core, "True\n")
 
     assert core.fast_roi_cuda_available() is True
     assert core.fast_roi_cuda_available() is True
