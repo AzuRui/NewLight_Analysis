@@ -2209,10 +2209,36 @@
   装好后 `/verify-only` 依旧全绿（DeepCAD-RT 也回到 `NVIDIA GeForce RTX 4080` OK）。
   **回归**：`python -m pytest tests -q` = `1 failed, 400 passed, 15 subtests passed in 22.34s`，
   唯一失败仍是 `newlight_cpu` 测试解释器缺 `torch` 的既有环境问题（`test_caiman_headless`）。
-  新增/改写的守卫共 10 条：后端选路 14 条已在上一提交，本轮补 spec 扫描 4 条（含“扫描必须真的
-  接进 hiddenimports”）、空实例 3 条、CUDA 探测容忍噪声 1 条、安装包不含扩展 1 条、
-  `machine_setup` 文案不再声称快速 ROI 需要 CUDA 1 条。
+  本轮新增守卫共 10 条（`git diff 3fa52dd..HEAD -- tests/` 逐条数过）：spec 扫描 4 条
+  （含“扫描必须真的接进 hiddenimports”）、快速 ROI 空实例 3 条、CUDA 探测 2 条
+  （容忍 loader 噪声、只起一次子进程并缓存）、安装包不含 GPU 扩展 1 条。
+  `machine_setup` 的两处文案是直接改文字（不再声称快速 ROI 需要 CUDA），没有配测试。
   **体积**：安装包 441,257,706 → 473,093,798 bytes（+31,836,092，+7.2%），即“内置 CPU 推理”
   这一能力的真实代价。仍未覆盖的路径照旧：提升到 Program Files 的安装（本机没有已安装副本），
   验证都在 Inno 逐字节复制的那棵 onedir 树上做；GUI 里手点“安装 GPU 扩展”按钮与“快速 ROI”面板
   的实际点击留给用户验收。
+  推送：`curl https://github.com` 返回 000，但
+  `.../NewLight_Analysis.git/info/refs?service=git-receive-pack` 返回 401（通道通、只是未认证），
+  同时 `api.github.com` 200、`uploads.github.com` 302；`git fetch` 直接成功
+  （`local_ahead=4 remote_ahead=0`，远程没被网页端提交领先），
+  `git push origin HEAD:codex/unified-gpu-addon` 第一次仍
+  `Failed to connect to github.com port 443 after 21097 ms`，**第二次重试即成功**：
+  `aae63a2..3f8044b`（`3fa52dd` 后端选路与内置 CPU 路径、`c0ea7e7` 探测容噪与三项守卫、
+  `7c5b111` 空场修复、`3f8044b` 本条文档），`ls-remote` 回读
+  `refs/heads/codex/unified-gpu-addon` = `3f8044b1e7725abcd2b3ba62c3432b6c8ed2c60f`。
+  发布：产物 `Output\NewLight_Analysis_Core_Setup_v1.0.3.exe` 473,093,798 bytes、SHA-256
+  `462090f12160c7d483b925675a70d94b01a8d07a032016ca5fd4d19ea8848328`（ISCC
+  `Successful compile (207.562 sec)`；打包前 dist 已清掉 `_internal\GPU_Addon`，
+  所以安装包守卫走的是“目录不存在→放行”这一支，拦截那一支靠
+  `tests/test_release_assets.py` 断言顺序与 `goto :FAILED`）。临时名
+  `NewLight_Analysis_Core_Setup_v1.0.1.exe.pending3f8044b` 的上传踩了一次坑：**后台**跑 curl 把
+  473,093,798 bytes 全传了（`_spike/upload_1.log`：`upload_http=404 seconds=133.688565
+  uploaded=473093798`）但最终响应 404，资产 716257479 停在 `state=starter`
+  （07:08:00Z 建好记录，size 已写成 473093798 但内容不可下载）；对该 starter 资产 PUT 补传
+  返回 **404**（0.71 秒、`uploaded_bytes=0`），于是 DELETE 它拿到 204，改**前台**重跑同一条 POST
+  → **201**（07:10:05Z→07:12:11Z，125.47 秒传完 473,093,798 bytes ≈3.77 MB/s，新资产
+  **716263532**，GitHub digest `sha256:462090f1…8848328` 与本地 `sha256sum` 逐字符一致）→
+  删除旧资产 708086752 返回 204 → `PATCH` 回正式名返回 200 → 回读 Release `v1.0.1`
+  （id 364821243）只剩 1 个资产 716263532、size 473,093,798、state uploaded、
+  `updated_at 2026-11-06T07:12:30Z` → 公开链接 `Range: bytes=0-0` 走 302 后拿到 **206** 且
+  `Content-Range: bytes 0-0/473093798`，证明线上服务的是本次新包。
